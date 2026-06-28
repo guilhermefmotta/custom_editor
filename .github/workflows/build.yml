@@ -10,6 +10,9 @@ on:
 env:
   ODIN_VERSION: dev-2026-05
 
+permissions:
+  contents: write
+
 jobs:
   # ── Linux ─────────────────────────────────────────────────────────────────
   build-linux:
