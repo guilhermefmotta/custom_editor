@@ -1,0 +1,100 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  release:
+    types: [published]
+
+env:
+  ODIN_VERSION: dev-2026-05
+
+jobs:
+  # ── Linux ─────────────────────────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        run: |
+          curl -fsSL \
+            "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-ubuntu-amd64-${ODIN_VERSION}.zip" \
+            -o odin.zip
+          mkdir -p "$HOME/odin"
+          unzip -q odin.zip -d "$HOME/odin"
+          # Zip may or may not have a subdirectory; find the binary
+          ODIN_DIR=$(find "$HOME/odin" -maxdepth 2 -name "odin" -type f | xargs -I{} dirname {} | head -1)
+          echo "$ODIN_DIR" >> "$GITHUB_PATH"
+
+      - name: Install Raylib system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libasound2-dev
+
+      - name: Build
+        run: odin build . -out:editor -o:speed
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/editor-linux-amd64.tar.gz editor font/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-linux-amd64
+          path: dist/editor-linux-amd64.tar.gz
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/editor-linux-amd64.tar.gz
+
+  # ── Windows ───────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        shell: pwsh
+        run: |
+          $url = "https://github.com/odin-lang/Odin/releases/download/$env:ODIN_VERSION/odin-windows-amd64-$env:ODIN_VERSION.zip"
+          Invoke-WebRequest -Uri $url -OutFile odin.zip
+          Expand-Archive -Path odin.zip -DestinationPath "$env:USERPROFILE\odin"
+          $odinBin = Get-ChildItem -Path "$env:USERPROFILE\odin" -Recurse -Filter "odin.exe" |
+                     Select-Object -First 1 -ExpandProperty DirectoryName
+          "$odinBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build
+        run: odin build . -out:editor.exe -o:speed
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path editor.exe, font -DestinationPath dist\editor-windows-amd64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-windows-amd64
+          path: dist/editor-windows-amd64.zip
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/editor-windows-amd64.zip
