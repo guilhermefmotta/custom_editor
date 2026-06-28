@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ODIN_VERSION: dev-2026-05
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Linux amd64 ───────────────────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        run: |
+          curl -fsSL \
+            "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-ubuntu-amd64-${ODIN_VERSION}.zip" \
+            -o odin.zip
+          mkdir -p "$HOME/odin"
+          unzip -q odin.zip -d "$HOME/odin"
+          ODIN_DIR=$(find "$HOME/odin" -maxdepth 2 -name "odin" -type f | xargs -I{} dirname {} | head -1)
+          echo "$ODIN_DIR" >> "$GITHUB_PATH"
+
+      - name: Install Raylib system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libasound2-dev
+
+      - name: Build
+        run: odin build . -out:editor -o:speed
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/editor-linux-amd64.tar.gz editor font/
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Editor ${{ github.ref_name }}"
+          body: |
+            ## Downloads
+
+            | Platform | File |
+            |---|---|
+            | Linux (x86_64) | `editor-linux-amd64.tar.gz` |
+            | macOS (Apple Silicon) | `editor-macos-arm64.tar.gz` |
+            | macOS (Intel) | `editor-macos-amd64.tar.gz` |
+            | Windows (x86_64) | `editor-windows-amd64.zip` |
+
+            Extract and run. The `font/` directory must stay next to the binary.
+          draft: false
+          prerelease: false
+          files: dist/editor-linux-amd64.tar.gz
+
+  # ── macOS arm64 (Apple Silicon) ───────────────────────────────────────────
+  build-macos-arm:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        run: |
+          curl -fsSL \
+            "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-macos-arm64-${ODIN_VERSION}.zip" \
+            -o odin.zip
+          mkdir -p "$HOME/odin"
+          unzip -q odin.zip -d "$HOME/odin"
+          ODIN_DIR=$(find "$HOME/odin" -maxdepth 2 -name "odin" -type f | xargs -I{} dirname {} | head -1)
+          echo "$ODIN_DIR" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: odin build . -out:editor -o:speed
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/editor-macos-arm64.tar.gz editor font/
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/editor-macos-arm64.tar.gz
+
+  # ── macOS amd64 (Intel) ───────────────────────────────────────────────────
+  build-macos-intel:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        run: |
+          curl -fsSL \
+            "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-macos-amd64-${ODIN_VERSION}.zip" \
+            -o odin.zip
+          mkdir -p "$HOME/odin"
+          unzip -q odin.zip -d "$HOME/odin"
+          ODIN_DIR=$(find "$HOME/odin" -maxdepth 2 -name "odin" -type f | xargs -I{} dirname {} | head -1)
+          echo "$ODIN_DIR" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: odin build . -out:editor -o:speed
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/editor-macos-amd64.tar.gz editor font/
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/editor-macos-amd64.tar.gz
+
+  # ── Windows amd64 ─────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        shell: pwsh
+        run: |
+          $url = "https://github.com/odin-lang/Odin/releases/download/$env:ODIN_VERSION/odin-windows-amd64-$env:ODIN_VERSION.zip"
+          Invoke-WebRequest -Uri $url -OutFile odin.zip
+          Expand-Archive -Path odin.zip -DestinationPath "$env:USERPROFILE\odin"
+          $odinBin = Get-ChildItem -Path "$env:USERPROFILE\odin" -Recurse -Filter "odin.exe" |
+                     Select-Object -First 1 -ExpandProperty DirectoryName
+          "$odinBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build
+        run: odin build . -out:editor.exe -o:speed
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path editor.exe, font -DestinationPath dist\editor-windows-amd64.zip
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/editor-windows-amd64.zip
