@@ -66,6 +66,7 @@ Editor :: struct {
 	outline:        Outline_Dialog,
 	recents:        Recents_Dialog,
 	workspace_dlg:  Workspace_Dialog,
+	lsp_dialog:     LSP_Dialog,
 	nav_hist:       Nav_History,
 	def_picker:     Goto_Def_Picker,
 	delete_confirm: bool,
@@ -126,6 +127,7 @@ editor_destroy :: proc(e: ^Editor) {
 	outline_destroy(&e.outline)
 	recents_destroy(&e.recents)
 	workspace_dialog_destroy(&e.workspace_dlg)
+	lsp_dialog_destroy(&e.lsp_dialog)
 	nav_history_destroy(&e.nav_hist)
 	goto_def_picker_destroy(&e.def_picker)
 	editor_lsp_destroy(e)

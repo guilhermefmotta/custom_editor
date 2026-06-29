@@ -225,6 +225,18 @@ lsp_on_save :: proc(e: ^Editor, p: ^Pane) {
 	lsp.manager_did_save(&e.lsp_mgr, p.filename, content)
 }
 
+// Re-register all currently open panes with a freshly started server.
+// Called after dialog Start/Restart so the server receives didOpen for every file.
+lsp_reopen_all_panes :: proc(e: ^Editor) {
+	for i in 0..<len(e.panes) {
+		p := &e.panes[i]
+		if p.filename == "" { continue }
+		content := buffer_to_string(&p.buf)
+		defer delete(content)
+		lsp.manager_did_open(&e.lsp_mgr, p.filename, content)
+	}
+}
+
 lsp_trigger_completion_manual :: proc(e: ^Editor, p: ^Pane) {
 	if p.filename == "" { return }
 	prefix := _word_before_cursor(p)

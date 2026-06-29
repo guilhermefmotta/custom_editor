@@ -87,6 +87,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	// Workspace picker — rendered above everything except palette
 	render_workspace_dialog(&e.workspace_dlg, font, sw, sh)
 
+	// LSP control dialog
+	render_lsp_dialog(&e.lsp_dialog, e, font, sw, sh)
+
 	// Go to Definition picker
 	render_def_picker(&e.def_picker, font, sw, sh)
 

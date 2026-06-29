@@ -317,27 +317,32 @@ _start_client :: proc(e: ^Client_Entry, root_path: string) {
 // High-level file events — called from editor integration
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// High-level file events — use find (read-only); server must be started
+// explicitly via lsp_manager_start_for_ext.
+// ---------------------------------------------------------------------------
+
 manager_did_open :: proc(m: ^LSP_Manager, path: string, content: string) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	doc_sync_did_open(c, path, content) // handles Initializing → deferred; Running → immediate
 	if c.state == .Running && c.caps.has_semantic_tokens { sem_tokens_request_full(c, path) }
 }
 
 manager_did_close :: proc(m: ^LSP_Manager, path: string) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	doc_sync_did_close(c, path)
 }
 
 manager_did_change_full :: proc(m: ^LSP_Manager, path: string, content: string) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	doc_sync_did_change_full(c, path, content)
 }
 
 manager_did_save :: proc(m: ^LSP_Manager, path: string, content: string) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	doc_sync_did_save(c, path, content, true)
 	if c.caps.has_semantic_tokens { sem_tokens_request_full(c, path) }
@@ -345,19 +350,19 @@ manager_did_save :: proc(m: ^LSP_Manager, path: string, content: string) {
 
 manager_completion :: proc(m: ^LSP_Manager, path: string, line, char: int,
                            trigger: Trigger_Kind, trigger_char: rune, prefix: string) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	completion_request(c, path, line, char, trigger, trigger_char, prefix)
 }
 
 manager_hover :: proc(m: ^LSP_Manager, path: string, line, char: int) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	hover_request(c, path, line, char)
 }
 
 manager_sig_help :: proc(m: ^LSP_Manager, path: string, line, char: int) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	sig_help_request(c, path, line, char, false)
 }
@@ -384,32 +389,32 @@ manager_get_diags :: proc(m: ^LSP_Manager, path: string) -> []Diagnostic {
 
 // Get completion state for a path's client.
 manager_get_completion :: proc(m: ^LSP_Manager, path: string) -> ^Completion_Manager {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return nil }
 	return &c.completion
 }
 
 manager_get_hover :: proc(m: ^LSP_Manager, path: string) -> ^Hover_Manager {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return nil }
 	return &c.hover
 }
 
 manager_get_sig_help :: proc(m: ^LSP_Manager, path: string) -> ^Sig_Help_Manager {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return nil }
 	return &c.sig_help
 }
 
 manager_get_sem_tokens :: proc(m: ^LSP_Manager, path: string) -> ^Sem_Token_Store {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return nil }
 	return &c.sem_tokens
 }
 
 // Cancel active completion for a path's client.
 manager_completion_cancel :: proc(m: ^LSP_Manager, path: string) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil { return }
 	completion_cancel(c)
 }
@@ -417,14 +422,14 @@ manager_completion_cancel :: proc(m: ^LSP_Manager, path: string) {
 // Go To Definition — returns Location or empty on failure.
 // Callback-based: result delivered on next client_update.
 manager_definition :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil || !c.caps.has_definition { return }
 	params := td_pos_params(path_to_uri(path), {line, char})
 	client_send_request(c, "textDocument/definition", params, cb)
 }
 
 manager_references :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil || !c.caps.has_references { return }
 	params := fmt.tprintf(
 		`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"context":{"includeDeclaration":true}}`,
@@ -434,7 +439,7 @@ manager_references :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: R
 }
 
 manager_rename :: proc(m: ^LSP_Manager, path: string, line, char: int, new_name: string, cb: Response_Callback) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil || !c.caps.has_rename { return }
 	params := fmt.tprintf(
 		`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"newName":%s}`,
@@ -444,11 +449,77 @@ manager_rename :: proc(m: ^LSP_Manager, path: string, line, char: int, new_name:
 }
 
 manager_format :: proc(m: ^LSP_Manager, path: string, tab_size: int, use_spaces: bool, cb: Response_Callback) {
-	c := lsp_manager_get_client_for_path(m, path)
+	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil || !c.caps.has_formatting { return }
 	params := fmt.tprintf(
 		`{"textDocument":{"uri":%s},"options":{"tabSize":%d,"insertSpaces":%v}}`,
 		json_str(path_to_uri(path)), tab_size, use_spaces,
 	)
 	client_send_request(c, "textDocument/formatting", params, cb)
+}
+
+// ---------------------------------------------------------------------------
+// Explicit server control — called from LSP dialog only
+// ---------------------------------------------------------------------------
+
+// Returns the server config name for the given file extension, or "".
+lsp_manager_server_name_for_path :: proc(m: ^LSP_Manager, path: string) -> string {
+	ext := path_ext(path)
+	for &e in m.entries {
+		for ex in e.config.extensions {
+			if ex == ext { return e.config.name }
+		}
+	}
+	return ""
+}
+
+// Start the server for the given file extension.
+// Returns (true, "") on success or if already running.
+// Returns (false, reason) on failure.
+lsp_manager_start_for_ext :: proc(m: ^LSP_Manager, ext: string) -> (ok: bool, err: string) {
+	for &e in m.entries {
+		for ex in e.config.extensions {
+			if ex != ext { continue }
+			if e.client != nil {
+				switch e.client.state {
+				case .Running:
+					return false, "already running — use Restart"
+				case .Initializing, .Starting:
+					return false, "already starting"
+				case .Created, .Shutting_Down, .Stopped:
+					client_destroy(e.client)
+					e.client = nil
+				}
+			}
+			c := client_create(m.root_path)
+			if !client_start(c, e.config.command) {
+				client_destroy(c)
+				return false, fmt.tprintf("failed to spawn '%s' — check it is in PATH", e.config.command[0])
+			}
+			e.client = c
+			return true, ""
+		}
+	}
+	return false, fmt.tprintf("no server registered for '.%s' files", ext)
+}
+
+// Stop the server for the given file extension.
+lsp_manager_stop_for_ext :: proc(m: ^LSP_Manager, ext: string) -> (ok: bool, err: string) {
+	for &e in m.entries {
+		for ex in e.config.extensions {
+			if ex != ext { continue }
+			if e.client == nil { return false, "server not running" }
+			client_destroy(e.client)
+			e.client = nil
+			return true, ""
+		}
+	}
+	return false, fmt.tprintf("no server registered for '.%s' files", ext)
+}
+
+// Restart (stop then start) the server for the given file extension.
+lsp_manager_restart_for_ext :: proc(m: ^LSP_Manager, ext: string) -> (ok: bool, err: string) {
+	// Stop — ignore error if not running (clean start is fine)
+	lsp_manager_stop_for_ext(m, ext)
+	return lsp_manager_start_for_ext(m, ext)
 }

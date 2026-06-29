@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:strings"
+import linux "core:sys/linux"
 
 // ---------------------------------------------------------------------------
 // Client state machine
@@ -18,6 +19,19 @@ Client_State :: enum {
 	Shutting_Down,
 	Stopped,
 }
+
+// ---------------------------------------------------------------------------
+// Log entries — collected from window/logMessage and stderr
+// ---------------------------------------------------------------------------
+
+LSP_Log_Level :: enum { Error = 1, Warning = 2, Info = 3, Log = 4 }
+
+LSP_Log_Entry :: struct {
+	level:   LSP_Log_Level,
+	message: string, // heap-owned
+}
+
+LSP_LOG_MAX :: 500 // rolling cap to avoid unbounded growth
 
 // ---------------------------------------------------------------------------
 // Callback types
@@ -78,19 +92,22 @@ server_caps_destroy :: proc(c: ^Server_Caps) {
 // ---------------------------------------------------------------------------
 
 Language_Client :: struct {
-	state:         Client_State,
-	transport:     Transport,
-	pending:       map[int]Pending_Request,
+	state:          Client_State,
+	transport:      Transport,
+	pending:        map[int]Pending_Request,
 	notif_handlers: map[string]Notification_Handler,
-	caps:          Server_Caps,
-	root_uri:      string, // heap
+	caps:           Server_Caps,
+	root_uri:       string, // heap
 	// Feature modules attached at init
-	docs:          Document_Sync,
-	diags:         Diagnostic_Store,
-	completion:    Completion_Manager,
-	hover:         Hover_Manager,
-	sig_help:      Sig_Help_Manager,
-	sem_tokens:    Sem_Token_Store,
+	docs:           Document_Sync,
+	diags:          Diagnostic_Store,
+	completion:     Completion_Manager,
+	hover:          Hover_Manager,
+	sig_help:       Sig_Help_Manager,
+	sem_tokens:     Sem_Token_Store,
+	// Diagnostics / logging
+	logs:           [dynamic]LSP_Log_Entry, // heap-owned entries
+	error_msg:      string,                 // heap; set on unexpected exit or init failure
 }
 
 // ---------------------------------------------------------------------------
@@ -99,10 +116,11 @@ Language_Client :: struct {
 
 client_create :: proc(root_path: string) -> ^Language_Client {
 	c := new(Language_Client)
-	c.state      = .Created
-	c.root_uri   = strings.clone(path_to_uri(root_path))
-	c.pending    = make(map[int]Pending_Request)
+	c.state          = .Created
+	c.root_uri       = strings.clone(path_to_uri(root_path))
+	c.pending        = make(map[int]Pending_Request)
 	c.notif_handlers = make(map[string]Notification_Handler)
+	c.logs           = make([dynamic]LSP_Log_Entry)
 
 	doc_sync_init(&c.docs)
 	diag_store_init(&c.diags)
@@ -113,6 +131,8 @@ client_create :: proc(root_path: string) -> ^Language_Client {
 
 	// Register built-in notification handlers
 	c.notif_handlers["textDocument/publishDiagnostics"] = _on_publish_diagnostics
+	c.notif_handlers["window/logMessage"]               = _on_window_log_message
+	c.notif_handlers["window/showMessage"]              = _on_window_log_message
 
 	return c
 }
@@ -134,6 +154,10 @@ client_destroy :: proc(c: ^Language_Client) {
 	hover_manager_destroy(&c.hover)
 	sig_help_manager_destroy(&c.sig_help)
 	sem_token_store_destroy(&c.sem_tokens)
+
+	for &e in c.logs { delete(e.message) }
+	delete(c.logs)
+	if c.error_msg != "" { delete(c.error_msg) }
 
 	free(c)
 }
@@ -197,6 +221,21 @@ client_cancel_request :: proc(c: ^Language_Client, id: int) {
 client_update :: proc(c: ^Language_Client) {
 	if c.state == .Created || c.state == .Stopped { return }
 
+	// Detect unexpected process exit (e.g. OLS binary not found → exits immediately).
+	if c.transport.process.running {
+		status: u32
+		wpid, _ := linux.waitpid(c.transport.process.pid, &status, {.WNOHANG}, nil)
+		if wpid > 0 {
+			c.transport.process.running = false
+			exit_code := (status >> 8) & 0xff
+			_client_log(c, .Error, fmt.tprintf("server process exited (code %d)", exit_code))
+			if c.error_msg != "" { delete(c.error_msg) }
+			c.error_msg = strings.clone(fmt.tprintf("server exited (code %d)", exit_code))
+			c.state = .Stopped
+			return
+		}
+	}
+
 	msgs: [dynamic]Inbox_Message
 	msgs = make([dynamic]Inbox_Message, context.temp_allocator)
 	transport_drain(&c.transport, &msgs)
@@ -205,6 +244,15 @@ client_update :: proc(c: ^Language_Client) {
 		_dispatch(c, &msg)
 		delete(msg.body)
 	}
+}
+
+_client_log :: proc(c: ^Language_Client, level: LSP_Log_Level, msg: string) {
+	// Rolling cap — drop oldest when full
+	if len(c.logs) >= LSP_LOG_MAX {
+		delete(c.logs[0].message)
+		ordered_remove(&c.logs, 0)
+	}
+	append(&c.logs, LSP_Log_Entry{level = level, message = strings.clone(msg)})
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +380,13 @@ _cb_initialized :: proc(c: ^Language_Client, result: json.Value, error: json.Val
 	defer json.destroy_value(result)
 	defer json.destroy_value(error)
 
-	if error != nil { return }
+	if error != nil {
+		_client_log(c, .Error, "initialize request returned an error — server not running")
+		if c.error_msg != "" { delete(c.error_msg) }
+		c.error_msg = strings.clone("initialize returned error")
+		c.state = .Stopped
+		return
+	}
 
 	obj, is_obj := result.(json.Object)
 	if !is_obj { return }
@@ -343,6 +397,7 @@ _cb_initialized :: proc(c: ^Language_Client, result: json.Value, error: json.Val
 	}
 
 	c.state = .Running
+	_client_log(c, .Info, "server initialized and ready")
 
 	// Send initialized notification
 	client_send_notification(c, "initialized", "{}")
@@ -432,6 +487,26 @@ _parse_server_caps :: proc(c: ^Language_Client, caps: json.Object) {
 
 _on_publish_diagnostics :: proc(c: ^Language_Client, method: string, body: []u8) {
 	diag_store_on_publish(&c.diags, body)
+}
+
+_on_window_log_message :: proc(c: ^Language_Client, method: string, body: []u8) {
+	val, ok := parse_json(body, context.temp_allocator)
+	if !ok { return }
+	defer json.destroy_value(val, context.temp_allocator)
+
+	outer, is_obj := val.(json.Object)
+	if !is_obj { return }
+	params_v, has_p := outer["params"]
+	if !has_p { return }
+	params, is_pobj := params_v.(json.Object)
+	if !is_pobj { return }
+
+	level := 4
+	if lv, ok2 := json_obj_int(params, "type"); ok2 { level = lv }
+	msg, has_msg := json_obj_str(params, "message")
+	if !has_msg { return }
+
+	_client_log(c, LSP_Log_Level(level), msg)
 }
 
 // ---------------------------------------------------------------------------
