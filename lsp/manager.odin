@@ -49,7 +49,6 @@ LSP_Manager :: struct {
 lsp_manager_init :: proc(m: ^LSP_Manager, root_path: string) {
 	m.entries   = make([dynamic]Client_Entry)
 	m.root_path = strings.clone(root_path)
-	_register_defaults(m)
 }
 
 lsp_manager_destroy :: proc(m: ^LSP_Manager) {

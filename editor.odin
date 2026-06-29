@@ -3,7 +3,8 @@ package editor
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import lsp "./lsp"
+import lsp  "./lsp"
+import conf "./config"
 
 Split_Dir :: enum { None, Vertical, Horizontal }
 
@@ -70,6 +71,8 @@ Editor :: struct {
 	delete_confirm: bool,
 	should_quit:    bool,
 	lsp_mgr:        lsp.LSP_Manager,
+	cfg:            conf.Config,
+	registry:       conf.Registry,
 }
 
 editor_init :: proc() -> Editor {
@@ -92,6 +95,8 @@ editor_init :: proc() -> Editor {
 	e.nav_hist  = nav_history_init()
 	e.def_picker = goto_def_picker_init()
 	append(&e.panes, pane_init())
+	e.cfg      = conf.load_config(conf.default_config_paths())
+	e.registry = conf.registry_build(&e.cfg, "languages", "themes")
 	return e
 }
 
@@ -124,6 +129,8 @@ editor_destroy :: proc(e: ^Editor) {
 	nav_history_destroy(&e.nav_hist)
 	goto_def_picker_destroy(&e.def_picker)
 	editor_lsp_destroy(e)
+	conf.registry_destroy(&e.registry)
+	conf.config_destroy(&e.cfg)
 	e^ = {}
 }
 

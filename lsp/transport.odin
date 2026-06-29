@@ -253,9 +253,12 @@ Transport :: struct {
 	running:      bool,
 }
 
-transport_start :: proc(cmd: []string) -> (t: Transport, ok: bool) {
+// transport_start initialises *t in place so that thread queue pointers
+// (&t.inbox, &t.outbox) are stable addresses that remain valid after the
+// call returns.  Never return Transport by value while threads are live.
+transport_start :: proc(t: ^Transport, cmd: []string) -> bool {
 	p, spawned := spawn_server(cmd)
-	if !spawned { return {}, false }
+	if !spawned { return false }
 
 	t.process = p
 	rq_init(&t.inbox)
@@ -264,7 +267,7 @@ transport_start :: proc(cmd: []string) -> (t: Transport, ok: bool) {
 	// Read thread
 	t.read_data        = new(Read_Thread_Data)
 	t.read_data.fd     = p.stdout_fd
-	t.read_data.queue  = &t.inbox
+	t.read_data.queue  = &t.inbox   // stable: t is the final location
 
 	t.read_thread      = thread.create(_read_thread_proc)
 	t.read_thread.data = t.read_data
@@ -273,14 +276,14 @@ transport_start :: proc(cmd: []string) -> (t: Transport, ok: bool) {
 	// Write thread
 	t.write_data        = new(Write_Thread_Data)
 	t.write_data.fd     = p.stdin_fd
-	t.write_data.queue  = &t.outbox
+	t.write_data.queue  = &t.outbox  // stable: t is the final location
 
 	t.write_thread = thread.create(_write_thread_proc)
 	t.write_thread.data = t.write_data
 	thread.start(t.write_thread)
 
 	t.running = true
-	return t, true
+	return true
 }
 
 // Send a message body (temp string OK — we frame into heap bytes).

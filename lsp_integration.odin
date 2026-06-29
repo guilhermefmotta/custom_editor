@@ -4,7 +4,8 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import lsp "./lsp"
+import lsp  "./lsp"
+import conf "./config"
 
 // ---------------------------------------------------------------------------
 // Per-pane LSP state
@@ -35,6 +36,45 @@ pane_lsp_destroy :: proc(pl: ^Pane_LSP) {
 lsp_init :: proc(e: ^Editor) {
 	root := _lsp_find_root(e)
 	lsp.lsp_manager_init(&e.lsp_mgr, root)
+	_register_lsp_from_config(e)
+}
+
+_register_lsp_from_config :: proc(e: ^Editor) {
+	for &srv in e.cfg.lsp.servers {
+		if !srv.enabled { continue }
+		if srv.command == "" { continue }
+
+		// Map language IDs → file extensions (without leading dot)
+		exts: [dynamic]string
+		for lang_id in srv.languages {
+			lc := conf.registry_lang_by_id(&e.registry, lang_id)
+			if lc != nil {
+				for ext in lc.extensions {
+					bare := ext
+					if len(bare) > 0 && bare[0] == '.' { bare = bare[1:] }
+					append(&exts, strings.clone(bare))
+				}
+			} else {
+				// No language config — treat lang ID itself as extension
+				append(&exts, strings.clone(lang_id))
+			}
+		}
+		if len(exts) == 0 { delete(exts); continue }
+
+		// Build command + args slice (heap-owned)
+		cmd := make([]string, 1 + len(srv.args))
+		cmd[0] = strings.clone(srv.command)
+		for a, i in srv.args { cmd[i+1] = strings.clone(a) }
+
+		// Transfer ownership of cmd and exts backing arrays to lsp manager
+		lsp.lsp_manager_register(&e.lsp_mgr, lsp.Server_Config{
+			name         = strings.clone(srv.name),
+			command      = cmd,
+			extensions   = exts[:],
+			init_options = strings.clone(srv.init_options),
+		})
+		// exts header goes out of scope; backing array now owned by Server_Config
+	}
 }
 
 lsp_destroy :: proc(e: ^Editor) {
@@ -91,9 +131,13 @@ _pane_lsp_update :: proc(e: ^Editor, p: ^Pane, dt: f32) {
 		}
 	}
 
-	// Sync suggest widget every frame
+	// Sync suggest widget and hover state every frame
 	c := _get_client(e, p)
-	if c != nil { _sync_suggest_widget(p, c) }
+	if c != nil {
+		_sync_suggest_widget(p, c)
+		_, hover_ready := lsp.hover_get_result(c)
+		p.lsp.show_hover = hover_ready
+	}
 }
 
 _flush_change :: proc(e: ^Editor, p: ^Pane) {
@@ -127,24 +171,36 @@ lsp_on_text_changed :: proc(e: ^Editor, p: ^Pane) {
 	p.lsp.change_pending = true
 	p.lsp.change_timer   = 0
 
+	c  := _get_client(e, p)
 	ch := _char_before_cursor(p)
+
 	if _is_ident_char(ch) {
+		// Starting a new completion session: flush immediately so server sees current doc.
+		if c != nil && !c.completion.session.active {
+			_flush_change(e, p)
+			p.lsp.change_pending = false
+		}
 		_maybe_trigger_completion(e, p, ch, false)
-	} else if _is_trigger_char(e, p, ch) {
+	} else if c != nil && _is_trigger_char(e, p, ch) {
+		// Trigger char always starts a new session.
+		_flush_change(e, p)
+		p.lsp.change_pending = false
 		_maybe_trigger_completion(e, p, ch, true)
 	} else {
-		c := _get_client(e, p)
 		if c != nil { lsp.completion_cancel(c) }
 		p.suggest.visible = false
 	}
 
 	// Signature help on ( or ,
 	if ch == '(' || ch == ',' {
+		if c != nil {
+			_flush_change(e, p)
+			p.lsp.change_pending = false
+		}
 		line, char := _cursor_lsp_pos(p)
 		lsp.manager_sig_help(&e.lsp_mgr, p.filename, line, char)
 		p.lsp.show_sig_help = true
 	} else if ch == ')' {
-		c := _get_client(e, p)
 		if c != nil { lsp.sig_help_clear(c) }
 		p.lsp.show_sig_help = false
 	}
@@ -152,6 +208,8 @@ lsp_on_text_changed :: proc(e: ^Editor, p: ^Pane) {
 
 lsp_on_cursor_moved :: proc(e: ^Editor, p: ^Pane) {
 	if p.filename == "" { return }
+	c := _get_client(e, p)
+	if c != nil { lsp.hover_clear(c) } // discard stale result for old position
 	line, char := _cursor_lsp_pos(p)
 	p.lsp.last_hover_line = line
 	p.lsp.last_hover_char = char
@@ -190,7 +248,10 @@ lsp_completion_accept :: proc(e: ^Editor, p: ^Pane) -> bool {
 	pane_insert_str(p, insert_text)
 
 	lsp.completion_cancel(c)
-	p.suggest.visible = false
+	p.suggest.visible    = false
+	// Buffer was modified — notify LSP on next debounce tick
+	p.lsp.change_pending = true
+	p.lsp.change_timer   = 0
 	return true
 }
 

@@ -144,9 +144,7 @@ client_destroy :: proc(c: ^Language_Client) {
 
 client_start :: proc(c: ^Language_Client, cmd: []string) -> bool {
 	if c.state != .Created { return false }
-	t, ok := transport_start(cmd)
-	if !ok { return false }
-	c.transport = t
+	if !transport_start(&c.transport, cmd) { return false }
 	c.state = .Initializing
 	_send_initialize(c)
 	return true

@@ -144,8 +144,8 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			if key_rep(.LEFT)  { if mc_has_extras(p) { mc_word_left_all(p,  false) } else { move_word_left(p,  false) }; return }
 		} else if !ctrl() {
 			// Shift+Alt: move lines / word-select
-			if key_rep(.DOWN)  { do_move_lines_down(p);                                   return }
-			if key_rep(.UP)    { do_move_lines_up(p);                                     return }
+			if key_rep(.DOWN)  { do_move_lines_down(p); lsp_on_text_changed(e, p); return }
+			if key_rep(.UP)    { do_move_lines_up(p);   lsp_on_text_changed(e, p); return }
 			if key_rep(.RIGHT) { if mc_has_extras(p) { mc_word_right_all(p, true) } else { move_word_right(p, true) }; return }
 			if key_rep(.LEFT)  { if mc_has_extras(p) { mc_word_left_all(p,  true) } else { move_word_left(p,  true) }; return }
 		}
@@ -156,16 +156,16 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 
 	if ctrl() {
 		if rl.IsKeyPressed(.S) { editor_save(e); lsp_on_save(e, active_pane(e)); return }
-		if rl.IsKeyPressed(.Z) { pane_undo(p);      return }
-		if rl.IsKeyPressed(.D) { do_kill_line(p);   return }
+		if rl.IsKeyPressed(.Z) { pane_undo(p); lsp_on_text_changed(e, p); return }
+		if rl.IsKeyPressed(.D) { do_kill_line(p); lsp_on_text_changed(e, p); return }
 		if rl.IsKeyPressed(.A) { mc_clear(p); sel_all(p); return }
 		if rl.IsKeyPressed(.C) { copy_sel(p);              return }
-		if rl.IsKeyPressed(.X) { cut_sel(p);        return }
-		if rl.IsKeyPressed(.V) { paste(p);          return }
+		if rl.IsKeyPressed(.X) { cut_sel(p); lsp_on_text_changed(e, p); return }
+		if rl.IsKeyPressed(.V) { paste(p); lsp_on_text_changed(e, p); return }
 		if rl.IsKeyPressed(.F) { find_replace_open(e); return }
 		if rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return }
 		if rl.IsKeyPressed(.Q)   { e.should_quit = true; return }
-		if rl.IsKeyPressed(.SLASH) { do_comment_toggle(p); return }
+		if rl.IsKeyPressed(.SLASH) { do_comment_toggle(p); lsp_on_text_changed(e, p); return }
 		if rl.IsKeyPressed(.EQUAL) { FONT_SIZE = clamp(FONT_SIZE + 2, 8, 72); return }
 		if rl.IsKeyPressed(.MINUS) { FONT_SIZE = clamp(FONT_SIZE - 2, 8, 72); return }
 		if key_rep(.LEFT)      { mc_clear(p); move_word_left(p,  shift()); return }
@@ -187,10 +187,17 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	if key_rep(.END)       { mc_clear(p); move_eol(p,   shift()) }
 	if key_rep(.PAGE_UP)   { mc_clear(p); move_page(p, -1, shift()) }
 	if key_rep(.PAGE_DOWN) { mc_clear(p); move_page(p,  1, shift()) }
-	if p.cursor != cursor_before { lsp_on_cursor_moved(e, p) }
 
-	if key_rep(.BACKSPACE) { if mc_has_extras(p) { mc_backspace(p) }  else { do_backspace(p) } }
-	if key_rep(.DELETE)    { if mc_has_extras(p) { mc_delete_fwd(p) } else { do_delete(p) } }
+	text_changed := false
+
+	if key_rep(.BACKSPACE) {
+		if mc_has_extras(p) { mc_backspace(p) } else { do_backspace(p) }
+		text_changed = true
+	}
+	if key_rep(.DELETE) {
+		if mc_has_extras(p) { mc_delete_fwd(p) } else { do_delete(p) }
+		text_changed = true
+	}
 
 	if rl.IsKeyPressed(.ENTER) {
 		if mc_has_extras(p) {
@@ -204,15 +211,19 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			p.sel_anchor  = p.cursor
 			p.dirty       = true
 		}
+		text_changed = true
 	}
 
 	if rl.IsKeyPressed(.TAB) {
 		if mc_has_extras(p) {
 			if shift() { mc_backspace(p) } else { mc_insert_bytes(p, []u8{' ',' ',' ',' '}) }
+			text_changed = true
 		} else if has_selection(p) {
 			if shift() { do_dedent_sel(p) } else { do_indent_sel(p) }
+			text_changed = true
 		} else if shift() {
 			do_dedent_line(p)
+			text_changed = true
 		} else {
 			spaces := []u8{' ', ' ', ' ', ' '}
 			undo_push_insert(p, p.cursor, spaces, false)
@@ -223,11 +234,11 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			}
 			p.sel_anchor = p.cursor
 			p.dirty      = true
+			text_changed = true
 		}
 	}
 
 	// Printable chars — coalesced inserts for single Ctrl+Z to undo a word
-	char_inserted := false
 	for {
 		ch := rl.GetCharPressed()
 		if ch == 0 do break
@@ -244,9 +255,11 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			p.sel_anchor  = p.cursor
 			p.dirty       = true
 		}
-		char_inserted = true
+		text_changed = true
 	}
-	if char_inserted { lsp_on_text_changed(e, p) }
+
+	if p.cursor != cursor_before { lsp_on_cursor_moved(e, p) }
+	if text_changed { lsp_on_text_changed(e, p) }
 }
 
 // --- Delete confirm ---
