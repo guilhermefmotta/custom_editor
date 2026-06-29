@@ -22,6 +22,8 @@ Pane :: struct {
 	undo:        [dynamic]Undo_Op,
 	u_merge:     int,
 	extras:      [dynamic]Extra_Cursor,
+	lsp:         Pane_LSP,
+	suggest:     Suggest_Widget,
 }
 
 MAX_UNDO :: 500
@@ -40,6 +42,7 @@ pane_destroy :: proc(p: ^Pane) {
 	for &op in p.undo { delete(op.data) }
 	delete(p.undo)
 	delete(p.extras)
+	pane_lsp_destroy(&p.lsp)
 	p^ = {}
 }
 

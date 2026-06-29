@@ -1,14 +1,16 @@
 package editor
 
 import "core:fmt"
+import lsp "./lsp"
 import rl "vendor:raylib"
 
 // Catppuccin Mocha
 BG          :: rl.Color{30,  30,  46,  255}
 TEXT        :: rl.Color{205, 214, 244, 255}
 CURSOR_COL  :: rl.Color{137, 180, 250, 255}
-LINENUM     :: rl.Color{88,  91,  112, 255}
-LINENUM_CUR :: rl.Color{205, 214, 244, 255}
+LINENUM       :: rl.Color{88,  91,  112, 255}
+LINENUM_CUR   :: rl.Color{205, 214, 244, 255}
+CUR_LINE_BG   :: rl.Color{40,  40,  58,  255}
 STATUS_BG   :: rl.Color{24,  24,  37,  255}
 SEL_BG      :: rl.Color{69,  71,  90,  255}
 MSG_COL     :: rl.Color{243, 139, 168, 255}
@@ -138,6 +140,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	s_hi              := sel_hi(p) if sel_active else 0
 
 	text_top := oy + PANE_TOP_PAD
+	pane_diags := lsp.manager_get_diags(&e.lsp_mgr, p.filename)
 
 	// Draw one extra line to fill partial-scroll gaps at top and bottom
 	first_li := max(0, int(p.scroll_anim))
@@ -150,6 +153,11 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 
 		line_bytes := buffer_get_line_bytes(&p.buf, li)
 		line_start := buffer_line_start(&p.buf, li)
+
+		// Current-line highlight
+		if is_active && li == cur_line {
+			rl.DrawRectangleV({ox, y}, {ow, ch}, CUR_LINE_BG)
+		}
 
 		// Line number — right-aligned in gutter
 		ln_col  := LINENUM_CUR if li == cur_line else LINENUM
@@ -214,6 +222,32 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		// Text with syntax highlighting
 		draw_highlighted_line(font, line_bytes, text_x, y, p.lang)
 
+		// Diagnostic squiggle + inline message
+		if len(pane_diags) > 0 {
+			line_end_x := text_x + f32(len(line_bytes))*cw
+			for &d in pane_diags {
+				if d.range.start.line != li { continue }
+				sq_col: rl.Color
+				switch d.severity {
+				case .Error:       sq_col = {243, 139, 168, 200}
+				case .Warning:     sq_col = {249, 226, 175, 200}
+				case .Information: sq_col = {137, 220, 235, 200}
+				case .Hint:        sq_col = {166, 227, 161, 160}
+				}
+				// Gutter dot
+				rl.DrawCircleV({ox + 4, y + FONT_SIZE * 0.5}, 3, sq_col)
+				// Squiggle under entire line
+				sq_y := y + FONT_SIZE - 1
+				sq_x := text_x
+				for sq_x + 4 < line_end_x {
+					ny := sq_y - 2 if int(sq_x) % 8 < 4 else sq_y + 0
+					rl.DrawLineV({sq_x, sq_y}, {sq_x + 4, ny}, sq_col)
+					sq_x += 4
+				}
+				break
+			}
+		}
+
 		// Beam cursor — primary (active pane only)
 		if is_active && li == cur_line {
 			rl.DrawRectangleV({text_x + f32(cur_col)*cw, y}, {2, ch}, CURSOR_COL)
@@ -250,9 +284,56 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			{ox + ow - pos_w - mc_w, sy + 3}, FONT_SIZE, CHAR_SPACING, ACCENT_COL)
 	}
 
+	// LSP status badge (right side, before pos)
+	{
+		lsp_str: string
+		lsp_col: rl.Color
+		lc := lsp.lsp_manager_find_client_for_path(&e.lsp_mgr, p.filename)
+		if lc == nil {
+			lsp_str = " LSP:off "
+			lsp_col = rl.Color{88, 91, 112, 255}
+		} else {
+			switch lc.state {
+			case .Created, .Starting, .Initializing:
+				lsp_str = " LSP:... "
+				lsp_col = rl.Color{249, 226, 175, 255}
+			case .Running:
+				lsp_str = " LSP:on "
+				lsp_col = rl.Color{166, 227, 161, 255}
+			case .Shutting_Down, .Stopped:
+				lsp_str = " LSP:err "
+				lsp_col = rl.Color{243, 139, 168, 255}
+			}
+		}
+		lsp_w := rl.MeasureTextEx(font, to_cstring(lsp_str), FONT_SIZE - 2, CHAR_SPACING).x
+		lsp_x := ox + ow - pos_w - lsp_w
+		rl.DrawTextEx(font, to_cstring(lsp_str), {lsp_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, lsp_col)
+	}
+
 	// Active pane indicator: accent left border on status bar
 	if is_active {
 		rl.DrawRectangleV({ox, sy}, {3, STATUS_H}, ACCENT_COL)
+	}
+
+	// LSP overlays — only for active pane
+	if is_active {
+		cursor_x := text_x + f32(cur_col)*cw
+		cursor_y  := oy + PANE_TOP_PAD + (f32(cur_line) - p.scroll_anim) * ch
+
+		c := _get_client(e, p)
+
+		// Signature help bar
+		if p.lsp.show_sig_help {
+			render_sig_help(c, font, ox, oy + PANE_TOP_PAD, ow, cursor_y)
+		}
+
+		// Suggest / completion widget
+		render_suggest_widget(p, font, ox, oy, ow, oh, cursor_x, cursor_y)
+
+		// Hover popup (only when suggest not visible)
+		if !p.suggest.visible && p.lsp.show_hover {
+			render_hover_popup(c, font, ox, oy, ow, oh, cursor_x, cursor_y)
+		}
 	}
 }
 

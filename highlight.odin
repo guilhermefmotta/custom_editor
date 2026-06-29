@@ -338,7 +338,7 @@ classify_word :: proc(word: string, lang: Lang) -> Token_Kind {
 // Tracks x with MeasureTextEx so UTF-8 stays aligned.
 draw_highlighted_line :: proc(font: rl.Font, line: []u8, x, y: f32, lang: Lang) {
 	if len(line) == 0 do return
-
+ 
 	if lang == .None {
 		rl.DrawTextEx(font, to_cstring(string(line)), {x, y}, FONT_SIZE, CHAR_SPACING, TEXT)
 		return

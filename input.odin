@@ -60,8 +60,19 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		return
 	}
 
+	// LSP manual completion
+	if ctrl() && rl.IsKeyPressed(.SPACE) {
+		lsp_trigger_completion_manual(e, active_pane(e))
+		return
+	}
+
+	// Suggest widget intercepts keys when visible
+	if active_pane(e).suggest.visible {
+		if suggest_handle_input(e, active_pane(e)) { return }
+	}
+
 	// Go to Definition / Find References / Navigation history
-	if rl.IsKeyPressed(.F12)                     { goto_def_do(e); return }
+	if rl.IsKeyPressed(.F12)                     { lsp_goto_definition(e, active_pane(e)); return }
 	if ctrl() && rl.IsKeyPressed(.I)             { goto_refs_do(e); return }
 	if ctrl() && rl.IsKeyPressed(.LEFT_BRACKET)  { nav_go_back(&e.nav_hist, e); return }
 	if ctrl() && rl.IsKeyPressed(.RIGHT_BRACKET) { nav_go_forward(&e.nav_hist, e); return }
@@ -144,7 +155,7 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	if rl.IsKeyPressed(.ESCAPE) && mc_has_extras(p) { mc_clear(p); return }
 
 	if ctrl() {
-		if rl.IsKeyPressed(.S) { editor_save(e);    return }
+		if rl.IsKeyPressed(.S) { editor_save(e); lsp_on_save(e, active_pane(e)); return }
 		if rl.IsKeyPressed(.Z) { pane_undo(p);      return }
 		if rl.IsKeyPressed(.D) { do_kill_line(p);   return }
 		if rl.IsKeyPressed(.A) { mc_clear(p); sel_all(p); return }
@@ -163,14 +174,20 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		if rl.IsKeyPressed(.END)  { mc_clear(p); move_doc_end(p,   shift()); return }
 	}
 
+	cursor_before := p.cursor
 	if key_rep(.LEFT)      { if mc_has_extras(p) { mc_move_all_left(p,  shift()) } else { move_left(p,  shift()) } }
 	if key_rep(.RIGHT)     { if mc_has_extras(p) { mc_move_all_right(p, shift()) } else { move_right(p, shift()) } }
-	if key_rep(.UP)        { if mc_has_extras(p) { mc_move_all_up(p,    shift()) } else { move_up(p,    shift()) } }
-	if key_rep(.DOWN)      { if mc_has_extras(p) { mc_move_all_down(p,  shift()) } else { move_down(p,  shift()) } }
+	if key_rep(.UP) {
+		if ctrl() { for _ in 0..<10 { move_up(p, shift()) } } else if mc_has_extras(p) { mc_move_all_up(p, shift()) } else { move_up(p, shift()) }
+	}
+	if key_rep(.DOWN) {
+		if ctrl() { for _ in 0..<10 { move_down(p, shift()) } } else if mc_has_extras(p) { mc_move_all_down(p, shift()) } else { move_down(p, shift()) }
+	}
 	if key_rep(.HOME)      { mc_clear(p); move_bol(p,   shift()) }
 	if key_rep(.END)       { mc_clear(p); move_eol(p,   shift()) }
 	if key_rep(.PAGE_UP)   { mc_clear(p); move_page(p, -1, shift()) }
 	if key_rep(.PAGE_DOWN) { mc_clear(p); move_page(p,  1, shift()) }
+	if p.cursor != cursor_before { lsp_on_cursor_moved(e, p) }
 
 	if key_rep(.BACKSPACE) { if mc_has_extras(p) { mc_backspace(p) }  else { do_backspace(p) } }
 	if key_rep(.DELETE)    { if mc_has_extras(p) { mc_delete_fwd(p) } else { do_delete(p) } }
@@ -210,6 +227,7 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	}
 
 	// Printable chars — coalesced inserts for single Ctrl+Z to undo a word
+	char_inserted := false
 	for {
 		ch := rl.GetCharPressed()
 		if ch == 0 do break
@@ -226,7 +244,9 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			p.sel_anchor  = p.cursor
 			p.dirty       = true
 		}
+		char_inserted = true
 	}
+	if char_inserted { lsp_on_text_changed(e, p) }
 }
 
 // --- Delete confirm ---

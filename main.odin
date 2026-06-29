@@ -30,10 +30,19 @@ main :: proc() {
 
 	if len(os.args) > 1 {
 		editor_open(&e, os.args[1])
+		// Notify LSP about the initial file after LSP is running
+	}
+
+	editor_lsp_init(&e)
+	if len(os.args) > 1 {
+		lsp_on_open(&e, active_pane(&e))
 	}
 
 	for !rl.WindowShouldClose() && !e.should_quit {
+		dt := rl.GetFrameTime()
+
 		handle_input(&e, font)
+		lsp_update(&e, dt)
 
 		rl.BeginDrawing()
 		render(&e, font)

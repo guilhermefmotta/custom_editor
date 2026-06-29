@@ -3,6 +3,7 @@ package editor
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import lsp "./lsp"
 
 Split_Dir :: enum { None, Vertical, Horizontal }
 
@@ -68,6 +69,7 @@ Editor :: struct {
 	def_picker:     Goto_Def_Picker,
 	delete_confirm: bool,
 	should_quit:    bool,
+	lsp_mgr:        lsp.LSP_Manager,
 }
 
 editor_init :: proc() -> Editor {
@@ -93,6 +95,15 @@ editor_init :: proc() -> Editor {
 	return e
 }
 
+// Called after editor_init + arg parsing so root path is known.
+editor_lsp_init :: proc(e: ^Editor) {
+	lsp_init(e)
+}
+
+editor_lsp_destroy :: proc(e: ^Editor) {
+	lsp_destroy(e)
+}
+
 editor_destroy :: proc(e: ^Editor) {
 	for &p in e.panes { pane_destroy(&p) }
 	delete(e.panes)
@@ -112,6 +123,7 @@ editor_destroy :: proc(e: ^Editor) {
 	workspace_dialog_destroy(&e.workspace_dlg)
 	nav_history_destroy(&e.nav_hist)
 	goto_def_picker_destroy(&e.def_picker)
+	editor_lsp_destroy(e)
 	e^ = {}
 }
 
@@ -122,6 +134,7 @@ active_pane :: proc(e: ^Editor) -> ^Pane {
 editor_open :: proc(e: ^Editor, path: string) -> bool {
 	if !pane_open(active_pane(e), path) { return false }
 	recents_push(&e.recents, path)
+	lsp_on_open(e, active_pane(e))
 	return true
 }
 
