@@ -8,7 +8,7 @@ on:
     types: [published]
 
 env:
-  ODIN_VERSION: dev-2026-05
+  ODIN_VERSION: dev-2026-06
 
 permissions:
   contents: write
@@ -24,11 +24,10 @@ jobs:
       - name: Install Odin
         run: |
           curl -fsSL \
-            "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-ubuntu-amd64-${ODIN_VERSION}.zip" \
-            -o odin.zip
+            "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-linux-amd64-${ODIN_VERSION}.tar.gz" \
+            -o odin.tar.gz
           mkdir -p "$HOME/odin"
-          unzip -q odin.zip -d "$HOME/odin"
-          # Zip may or may not have a subdirectory; find the binary
+          tar -xzf odin.tar.gz -C "$HOME/odin"
           ODIN_DIR=$(find "$HOME/odin" -maxdepth 2 -name "odin" -type f | xargs -I{} dirname {} | head -1)
           echo "$ODIN_DIR" >> "$GITHUB_PATH"
 
@@ -74,7 +73,7 @@ jobs:
       - name: Install Odin
         shell: pwsh
         run: |
-          $url = "https://github.com/odin-lang/Odin/releases/download/$env:ODIN_VERSION/odin-windows-amd64-$env:ODIN_VERSION.zip"
+          $url = "https://github.com/odin-lang/Odin/releases/download/$env:ODIN_VERSION/odin-windows-$env:ODIN_VERSION.zip"
           Invoke-WebRequest -Uri $url -OutFile odin.zip
           Expand-Archive -Path odin.zip -DestinationPath "$env:USERPROFILE\odin"
           $odinBin = Get-ChildItem -Path "$env:USERPROFILE\odin" -Recurse -Filter "odin.exe" |
