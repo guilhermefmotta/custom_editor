@@ -1,0 +1,277 @@
+# Editor configuration — loaded at startup, hot-reloadable where noted.
+# Priority: built-in defaults < system < user < workspace (this file).
+
+version = 1
+theme = "dark"
+
+# ---------------------------------------------------------------------------
+[editor]
+# ---------------------------------------------------------------------------
+
+tab_size          = 4
+use_spaces        = false
+line_numbers      = true
+relative_numbers  = false
+word_wrap         = false
+auto_save         = false
+auto_save_delay   = 1.0     # seconds after last keystroke
+format_on_save    = false
+trim_trailing_ws  = false
+insert_final_nl   = true
+bracket_matching  = true
+show_status_bar   = true
+show_minimap      = false
+
+# ---------------------------------------------------------------------------
+[window]
+# ---------------------------------------------------------------------------
+
+width      = 1280
+height     = 720
+fps_target = 60
+title      = "Editor"
+
+# ---------------------------------------------------------------------------
+[font]
+# ---------------------------------------------------------------------------
+
+family       = "font/ttf/FiraCode-Regular.ttf"
+size         = 14
+line_height  = 1.0
+char_spacing = 0.0
+
+# Fallback fonts tried in order if the primary is not found.
+fallbacks = [
+  "JetBrainsMono.ttf",
+  "JetBrainsMonoNL-Regular.ttf",
+  "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+  "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+]
+
+# ---------------------------------------------------------------------------
+[cursor]
+# ---------------------------------------------------------------------------
+
+style      = "block"    # block | line | underline
+blink      = false
+blink_rate = 1.0        # Hz
+
+# ---------------------------------------------------------------------------
+[scrolling]
+# ---------------------------------------------------------------------------
+
+smooth        = true
+speed         = 5.0
+sensitivity   = 1.0
+padding_lines = 5
+
+# ---------------------------------------------------------------------------
+[completion]
+# ---------------------------------------------------------------------------
+
+enable        = true
+trigger_delay = 0.05    # seconds after typing
+max_results   = 50
+fuzzy         = true
+snippets      = true
+auto_import   = false
+doc_delay     = 0.5
+
+# ---------------------------------------------------------------------------
+[diagnostics]
+# ---------------------------------------------------------------------------
+
+enable          = true
+inline_messages = false
+gutter_icons    = true
+update_on_type  = true
+update_delay    = 0.3       # seconds after typing stops
+underline       = "squiggly" # none | underline | squiggly | dotted
+min_severity    = 4          # 1=error 2=warn 3=info 4=hint
+
+# ---------------------------------------------------------------------------
+[workspace]
+# ---------------------------------------------------------------------------
+
+trusted = true
+
+file_exclude = [
+  "**/.git/**",
+  "**/node_modules/**",
+  "**/.DS_Store",
+  "**/target/**",
+  "**/build/**",
+]
+
+search_exclude = [
+  "**/.git/**",
+  "**/node_modules/**",
+]
+
+# ---------------------------------------------------------------------------
+[logging]
+# ---------------------------------------------------------------------------
+
+level = "warn"    # off | error | warn | info | debug | trace
+lsp   = false     # log LSP messages
+
+# ---------------------------------------------------------------------------
+[performance]
+# ---------------------------------------------------------------------------
+
+lazy_highlight      = true
+max_highlight_lines = 5000
+max_file_size_kb    = 5120   # files larger than this skip highlighting
+
+# ---------------------------------------------------------------------------
+# Language Server Protocol  — add entries for any language you need.
+# No editor source changes required.  [[lsp.servers]] is an array of tables.
+# ---------------------------------------------------------------------------
+
+[[lsp.servers]]
+id        = "ols"
+name      = "Odin Language Server"
+command   = "ols"
+args      = []
+languages = ["odin"]
+enabled   = true
+priority  = 10
+
+[[lsp.servers]]
+id        = "clangd"
+name      = "clangd"
+command   = "clangd"
+args      = ["--background-index", "--clang-tidy", "--header-insertion=iwyu"]
+languages = ["c", "cpp", "h", "hpp"]
+enabled   = true
+priority  = 10
+
+[[lsp.servers]]
+id        = "rust-analyzer"
+name      = "rust-analyzer"
+command   = "rust-analyzer"
+args      = []
+languages = ["rust"]
+enabled   = true
+priority  = 10
+
+[[lsp.servers]]
+id        = "gopls"
+name      = "gopls"
+command   = "gopls"
+args      = ["serve"]
+languages = ["go"]
+enabled   = true
+priority  = 10
+
+[[lsp.servers]]
+id        = "pylsp"
+name      = "Python LSP"
+command   = "pylsp"
+args      = []
+languages = ["python"]
+enabled   = true
+priority  = 5
+
+[[lsp.servers]]
+id        = "pyright"
+name      = "Pyright"
+command   = "pyright-langserver"
+args      = ["--stdio"]
+languages = ["python"]
+enabled   = false   # set true to prefer pyright
+priority  = 10
+
+[[lsp.servers]]
+id        = "typescript-language-server"
+name      = "TypeScript Language Server"
+command   = "typescript-language-server"
+args      = ["--stdio"]
+languages = ["javascript", "typescript", "javascriptreact", "typescriptreact"]
+enabled   = true
+priority  = 10
+
+[[lsp.servers]]
+id        = "zls"
+name      = "Zig Language Server"
+command   = "zls"
+args      = []
+languages = ["zig"]
+enabled   = true
+priority  = 10
+
+[[lsp.servers]]
+id        = "jdtls"
+name      = "Eclipse JDT Language Server"
+command   = "jdtls"
+args      = []
+languages = ["java"]
+enabled   = true
+priority  = 10
+
+[[lsp.servers]]
+id        = "lua-language-server"
+name      = "Lua Language Server"
+command   = "lua-language-server"
+args      = []
+languages = ["lua"]
+enabled   = true
+priority  = 10
+
+# ---------------------------------------------------------------------------
+# Build profiles
+# ---------------------------------------------------------------------------
+
+[[build]]
+name    = "Debug"
+command = "odin"
+args    = ["build", ".", "-debug"]
+
+[[build]]
+name    = "Release"
+command = "odin"
+args    = ["build", "."]
+
+# ---------------------------------------------------------------------------
+# Keybindings  (append here to override or extend defaults)
+# ---------------------------------------------------------------------------
+
+[[keybindings]]
+command = "editor.save"
+keys    = "Ctrl+S"
+when    = "editorFocus"
+
+[[keybindings]]
+command = "editor.open_file"
+keys    = "Ctrl+P"
+when    = "editorFocus"
+
+[[keybindings]]
+command = "editor.goto_definition"
+keys    = "F12"
+when    = "editorFocus"
+
+[[keybindings]]
+command = "editor.completion.trigger"
+keys    = "Ctrl+Space"
+when    = "editorFocus"
+
+[[keybindings]]
+command = "editor.completion.next"
+keys    = "Tab"
+when    = "completionVisible"
+
+[[keybindings]]
+command = "editor.completion.prev"
+keys    = "Shift+Tab"
+when    = "completionVisible"
+
+[[keybindings]]
+command = "editor.jump_down"
+keys    = "Ctrl+Down"
+when    = "editorFocus"
+
+[[keybindings]]
+command = "editor.jump_up"
+keys    = "Ctrl+Up"
+when    = "editorFocus"

@@ -332,8 +332,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	panel_y := sh * 0.05
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, panel_h}, PANEL_BG)
-	rl.DrawRectangleLinesEx({panel_x, panel_y, PANEL_W, panel_h}, 1, PANEL_BOR)
+	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// Header
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, HEADER_H}, INPUT_BG)
@@ -349,7 +348,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 			title = fmt.tprintf("Delete %s? [Y/N]", ft.nodes[ft.selected].name)
 		} else { title = "Delete? [Y/N]" }
 	}
-	rl.DrawTextEx(font, to_cstring(title), {panel_x + 10, panel_y + 9}, FONT_SIZE, CHAR_SPACING, ACCENT)
+	dlg_text(font, title, panel_x + 10, panel_y + 9, FONT_SIZE, CHAR_SPACING, ACCENT, panel_x + PANEL_W, 10)
 
 	if ft.mode == .Rename || ft.mode == .Make_Dir {
 		tx := panel_x + 10 + rl.MeasureTextEx(font, to_cstring(title), FONT_SIZE, CHAR_SPACING).x
@@ -384,12 +383,12 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 			// +/- expand indicator
 			arr := "-" if nd.expanded else "+"
 			rl.DrawTextEx(font, to_cstring(arr), {ix + icon_h + 2, iy + 3}, FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
-			rl.DrawTextEx(font, to_cstring(nd.name), {ix + icon_h + 12, iy + 3}, FONT_SIZE - 2, CHAR_SPACING, DIR_COL)
+			dlg_text(font, nd.name, ix + icon_h + 12, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
 		} else {
 			// File icon: rect with folded top-right corner
 			rl.DrawRectangleV({ix,            iy_mid},          {icon_h - 3, icon_h},     LINENUM)
 			rl.DrawRectangleV({ix + icon_h - 3, iy_mid + 3},   {3,          icon_h - 3}, LINENUM)
-			rl.DrawTextEx(font, to_cstring(nd.name), {ix + icon_h + 5, iy + 3}, FONT_SIZE - 2, CHAR_SPACING, TEXT)
+			dlg_text(font, nd.name, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
 		}
 	}
 
@@ -411,4 +410,5 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	}
 	_ = ch
 	rl.DrawTextEx(font, to_cstring(footer), {panel_x + 10, fy + 7}, FONT_SIZE - 3, CHAR_SPACING, col)
+	dlg_end()
 }

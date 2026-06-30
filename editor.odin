@@ -5,6 +5,7 @@ import "core:os"
 import "core:strings"
 import lsp  "./lsp"
 import conf "./config"
+import git  "./git"
 
 Split_Dir :: enum { None, Vertical, Horizontal }
 
@@ -67,6 +68,8 @@ Editor :: struct {
 	recents:        Recents_Dialog,
 	workspace_dlg:  Workspace_Dialog,
 	lsp_dialog:     LSP_Dialog,
+	git_mgr:        git.Git_Manager,
+	git_dialog:     Git_Dialog,
 	nav_hist:       Nav_History,
 	def_picker:     Goto_Def_Picker,
 	delete_confirm: bool,
@@ -93,6 +96,7 @@ editor_init :: proc() -> Editor {
 	e.outline         = outline_init()
 	e.recents         = recents_init()
 	workspace_dialog_init(&e.workspace_dlg)
+	git_dialog_init(&e.git_dialog)
 	e.nav_hist  = nav_history_init()
 	e.def_picker = goto_def_picker_init()
 	append(&e.panes, pane_init())
@@ -128,6 +132,8 @@ editor_destroy :: proc(e: ^Editor) {
 	recents_destroy(&e.recents)
 	workspace_dialog_destroy(&e.workspace_dlg)
 	lsp_dialog_destroy(&e.lsp_dialog)
+	git_dialog_destroy(&e.git_dialog)
+	git.git_manager_destroy(&e.git_mgr)
 	nav_history_destroy(&e.nav_hist)
 	goto_def_picker_destroy(&e.def_picker)
 	editor_lsp_destroy(e)
@@ -203,13 +209,13 @@ save_dialog_confirm :: proc(e: ^Editor) {
 		if err != nil { e.msg = "Rename failed"; save_dialog_close(e); return }
 		recents_remove(&e.recents, old)
 		delete(p.filename)
-		p.filename = strings.clone(name)
+		p.filename = _pane_abs(name)
 		p.lang     = detect_lang(name)
-		recents_push(&e.recents, name)
+		recents_push(&e.recents, p.filename)
 		e.msg = fmt.tprintf("Renamed to %s", path_basename(name))
 	} else {
 		if p.filename != "" { delete(p.filename) }
-		p.filename = strings.clone(name)
+		p.filename = _pane_abs(name)
 		p.lang     = detect_lang(name)
 		ok, msg   := pane_save(p)
 		e.msg      = msg

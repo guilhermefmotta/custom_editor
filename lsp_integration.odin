@@ -83,19 +83,28 @@ lsp_destroy :: proc(e: ^Editor) {
 }
 
 _lsp_find_root :: proc(e: ^Editor) -> string {
+	// Always start from the CWD so we have an absolute reference.
+	cwd, cwd_err := os.get_working_directory(context.temp_allocator)
+	if cwd_err != nil || len(cwd) == 0 { cwd = "." }
+
 	p := active_pane(e)
+	search := cwd // directory to start searching from
 	if p.filename != "" {
-		dir := _path_dirname(p.filename)
-		markers := [?]string{"ols.json","Cargo.toml","go.mod","pom.xml","build.gradle",".git","package.json"}
-		for dir != "" && dir != "/" {
-			for marker in markers {
-				if _file_exists(fmt.tprintf("%s/%s", dir, marker)) { return dir }
-			}
-			dir = _path_dirname(dir)
-		}
-		return _path_dirname(p.filename)
+		// p.filename is absolute (guaranteed by pane_open → _pane_abs).
+		search = _path_dirname(p.filename)
 	}
-	return "."
+
+	markers := [?]string{"ols.json","Cargo.toml","go.mod","pom.xml","build.gradle",".git","package.json"}
+	dir := search
+	for dir != "" && dir != "/" {
+		for marker in markers {
+			if _file_exists(fmt.tprintf("%s/%s", dir, marker)) { return dir }
+		}
+		parent := _path_dirname(dir)
+		if parent == dir || parent == "" { break } // guard against infinite loop
+		dir = parent
+	}
+	return search // file's dir (or CWD) if no marker found
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,8 @@
+id           = "cpp"
+name         = "C++"
+extensions   = [".cpp", ".cc", ".cxx", ".hpp", ".hxx"]
+comment_line = "//"
+comment_block = ["/*", "*/"]
+tab_size     = 4
+use_spaces   = false
+lsp          = "clangd"

@@ -103,18 +103,19 @@ json_str :: proc(s: string) -> string {
 
 // Build a JSON-RPC 2.0 request string (temp-allocated).
 build_request :: proc(id: int, method: string, params: string) -> string {
+	id_s := fmt.tprintf("%d", id)
 	if params == "" {
-		return fmt.tprintf(`{"jsonrpc":"2.0","id":%d,"method":"%s"}`, id, method)
+		return strings.concatenate({`{"jsonrpc":"2.0","id":`, id_s, `,"method":"`, method, `"}`}, context.temp_allocator)
 	}
-	return fmt.tprintf(`{"jsonrpc":"2.0","id":%d,"method":"%s","params":%s}`, id, method, params)
+	return strings.concatenate({`{"jsonrpc":"2.0","id":`, id_s, `,"method":"`, method, `","params":`, params, `}`}, context.temp_allocator)
 }
 
 // Build a JSON-RPC 2.0 notification string (temp-allocated).
 build_notification :: proc(method: string, params: string) -> string {
 	if params == "" {
-		return fmt.tprintf(`{"jsonrpc":"2.0","method":"%s"}`, method)
+		return strings.concatenate({`{"jsonrpc":"2.0","method":"`, method, `"}`}, context.temp_allocator)
 	}
-	return fmt.tprintf(`{"jsonrpc":"2.0","method":"%s","params":%s}`, method, params)
+	return strings.concatenate({`{"jsonrpc":"2.0","method":"`, method, `","params":`, params, `}`}, context.temp_allocator)
 }
 
 // ---------------------------------------------------------------------------

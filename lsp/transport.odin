@@ -88,15 +88,21 @@ Server_Process :: struct {
 // Spawn a language server. Returns false on failure.
 // On success, caller must eventually call process_kill.
 spawn_server :: proc(cmd: []string) -> (proc_: Server_Process, ok: bool) {
-	if len(cmd) == 0 { return {}, false }
+	if len(cmd) == 0 { log_writef("ERR", "spawn_server: empty command"); return {}, false }
 
 	// stdin_pipe[0] = server reads, stdin_pipe[1] = parent writes
 	// stdout_pipe[0] = parent reads, stdout_pipe[1] = server writes
 	stdin_pipe:  [2]linux.Fd
 	stdout_pipe: [2]linux.Fd
 
-	if e := linux.pipe2(&stdin_pipe,  {}); e != .NONE { return {}, false }
-	if e := linux.pipe2(&stdout_pipe, {}); e != .NONE {
+	// CLOEXEC prevents child from inheriting these fds on execvp;
+	// dup2 to fd 0/1 creates the child's actual stdin/stdout without CLOEXEC.
+	if e := linux.pipe2(&stdin_pipe,  {.CLOEXEC}); e != .NONE {
+		log_writef("ERR", fmt.tprintf("pipe2(stdin) failed: %v", e))
+		return {}, false
+	}
+	if e := linux.pipe2(&stdout_pipe, {.CLOEXEC}); e != .NONE {
+		log_writef("ERR", fmt.tprintf("pipe2(stdout) failed: %v", e))
 		linux.close(stdin_pipe[0]); linux.close(stdin_pipe[1])
 		return {}, false
 	}
@@ -106,8 +112,10 @@ spawn_server :: proc(cmd: []string) -> (proc_: Server_Process, ok: bool) {
 	for a, i in cmd { argv[i] = strings.clone_to_cstring(a, context.temp_allocator) }
 	argv[len(cmd)] = nil
 
+	log_writef("INF", fmt.tprintf("fork+exec: %s", cmd[0]))
 	pid, fork_err := linux.fork()
 	if fork_err != .NONE {
+		log_writef("ERR", fmt.tprintf("fork failed: %v", fork_err))
 		linux.close(stdin_pipe[0]);  linux.close(stdin_pipe[1])
 		linux.close(stdout_pipe[0]); linux.close(stdout_pipe[1])
 		return {}, false
@@ -225,16 +233,20 @@ _write_thread_proc :: proc(t: ^thread.Thread) {
 		clear(&d.queue.items)
 		sync.mutex_unlock(&d.queue.mu)
 
+		pipe_ok := true
 		for item in pending {
-			written := 0
-			for written < len(item) {
-				n, err := linux.write(d.fd, item[written:])
-				if err != .NONE || n <= 0 { break }
-				written += n
+			if pipe_ok {
+				written := 0
+				for written < len(item) {
+					n, err := linux.write(d.fd, item[written:])
+					if err != .NONE || n <= 0 { pipe_ok = false; break }
+					written += n
+				}
 			}
 			delete(item)
 		}
 		delete(pending)
+		if !pipe_ok { break }
 	}
 }
 

@@ -26,7 +26,8 @@ Workspace_Dialog :: struct {
 	workspace:   string,            // owned; currently active workspace root
 }
 
-WS_MAX_VIS :: 18
+WS_MAX_VIS     :: 18
+WS_MAX_ENTRIES :: 3000 // cap to prevent OOM / freeze on huge directories
 WS_ITEM_H  :: f32(22)
 WS_PANEL_W :: f32(640)
 WS_INPUT_H :: f32(44)
@@ -61,6 +62,7 @@ workspace_dialog_open :: proc(d: ^Workspace_Dialog) {
 	// Pre-fill with cwd + trailing slash so listing starts immediately
 	cwd, err := os.get_working_directory(context.temp_allocator)
 	if err == nil {
+		cwd = _ws_norm_seps(cwd)
 		append(&d.input, cwd)
 		if len(cwd) == 0 || cwd[len(cwd)-1] != '/' { append(&d.input, u8('/')) }
 	} else {
@@ -83,17 +85,15 @@ workspace_dialog_close :: proc(d: ^Workspace_Dialog) {
 //      covers the case where the user navigated via Enter keys.
 workspace_dialog_confirm :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 	// Candidate 1: what the user typed (strip trailing slash for stat)
-	typed := string(d.input[:])
-	typed_clean := strings.trim_right(typed, "/")
-	if len(typed_clean) == 0 { typed_clean = "/" }
+	typed := _ws_norm_seps(string(d.input[:]))
+	typed_clean := _ws_clean_for_stat(typed)
 
 	target := ""
 	if os.is_dir(typed_clean) {
 		target = typed_clean
 	} else if len(d.current_dir) > 0 {
 		// Candidate 2: the directory we are currently listing
-		cur := strings.trim_right(d.current_dir, "/")
-		if len(cur) == 0 { cur = "/" }
+		cur := _ws_clean_for_stat(d.current_dir)
 		if os.is_dir(cur) {
 			target = cur
 		}
@@ -197,9 +197,9 @@ workspace_dialog_handle_input :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 		if n == 0 { return }
 		// Skip trailing separator
 		end := n
-		if end > 0 && d.input[end-1] == '/' { end -= 1 }
+		if end > 0 && _ws_is_sep(d.input[end-1]) { end -= 1 }
 		// Walk back to previous separator
-		for end > 0 && d.input[end-1] != '/' { end -= 1 }
+		for end > 0 && !_ws_is_sep(d.input[end-1]) { end -= 1 }
 		resize(&d.input, end)
 		d.selected  = 0
 		d.scroll    = 0
@@ -214,6 +214,7 @@ workspace_dialog_handle_input :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 		ch := rl.GetCharPressed()
 		if ch == 0 { break }
 		if ch < 32 { continue }
+		if ch == '\\' { ch = '/' } // normalize Windows backslash
 		enc_buf: [4]u8
 		n := rune_encode(ch, &enc_buf)
 		for i in 0..<n { append(&d.input, enc_buf[i]) }
@@ -249,20 +250,41 @@ _ws_enter_selected :: proc(d: ^Workspace_Dialog) {
 	// Resolve ".." → go to parent of current_dir
 	new_path: string
 	if base == ".." {
-		// parent of current_dir (strip trailing slash, then trim to last slash)
+		// Strip trailing separators, then walk back to previous separator
 		dir := d.current_dir
-		for len(dir) > 1 && dir[len(dir)-1] == '/' { dir = dir[:len(dir)-1] }
-		idx := len(dir) - 1
-		for idx > 0 && dir[idx] != '/' { idx -= 1 }
+		end := len(dir)
+		for end > 0 && _ws_is_sep(dir[end-1]) { end -= 1 }
+		dir = dir[:end]
+		idx := end - 1
+		for idx > 0 && !_ws_is_sep(dir[idx]) { idx -= 1 }
 		if idx <= 0 {
-			new_path = "/"
+			// Unix root or Windows drive root with no leading slash (e.g. "C:")
+			when ODIN_OS == .Windows {
+				if len(dir) == 2 && dir[1] == ':' {
+					new_path = strings.concatenate({dir, "/"}, context.temp_allocator)
+				} else {
+					new_path = "/"
+				}
+			} else {
+				new_path = "/"
+			}
 		} else {
-			new_path = strings.concatenate({dir[:idx+1]}, context.temp_allocator)
+			// Check if parent is a Windows drive root ("C:" after stripping)
+			parent := dir[:idx]
+			when ODIN_OS == .Windows {
+				if len(parent) == 2 && parent[1] == ':' {
+					new_path = strings.concatenate({parent, "/"}, context.temp_allocator)
+				} else {
+					new_path = strings.concatenate({dir[:idx+1]}, context.temp_allocator)
+				}
+			} else {
+				new_path = strings.concatenate({dir[:idx+1]}, context.temp_allocator)
+			}
 		}
 	} else {
 		// Compose: current_dir + entry.name + "/"
 		dir := d.current_dir
-		if len(dir) == 0 || dir[len(dir)-1] != '/' {
+		if len(dir) == 0 || !_ws_is_sep(dir[len(dir)-1]) {
 			new_path = strings.concatenate({dir, "/", base, "/"}, context.temp_allocator)
 		} else {
 			new_path = strings.concatenate({dir, base, "/"}, context.temp_allocator)
@@ -292,7 +314,7 @@ _ws_autocomplete :: proc(d: ^Workspace_Dialog) {
 	if base == ".." { _ws_enter_selected(d); return }
 
 	dir := d.current_dir
-	sep := "/" if len(dir) > 0 && dir[len(dir)-1] != '/' else ""
+	sep := "/" if len(dir) > 0 && !_ws_is_sep(dir[len(dir)-1]) else ""
 	trail := "/" if entry.is_dir else ""
 	new_path := strings.concatenate({dir, sep, base, trail}, context.temp_allocator)
 
@@ -310,7 +332,7 @@ _ws_autocomplete :: proc(d: ^Workspace_Dialog) {
 // ---------------------------------------------------------------
 
 _ws_refresh :: proc(d: ^Workspace_Dialog) {
-	path := string(d.input[:])
+	path := _ws_norm_seps(string(d.input[:]))
 	dir, prefix := _ws_split_path(path)
 
 	// Free old entries
@@ -336,9 +358,11 @@ _ws_refresh :: proc(d: ^Workspace_Dialog) {
 	dirs  := make([dynamic]WS_Entry, context.temp_allocator)
 	files := make([dynamic]WS_Entry, context.temp_allocator)
 
+	capped := false
 	for {
 		fi, _, ok := os.read_directory_iterator(&it)
 		if !ok { break }
+		if len(dirs) + len(files) >= WS_MAX_ENTRIES { capped = true; break }
 
 		name   := fi.name
 		is_dir := fi.type == .Directory
@@ -365,11 +389,13 @@ _ws_refresh :: proc(d: ^Workspace_Dialog) {
 	_ws_sort(&files)
 
 	// ".." entry at the top — only when not at filesystem root
-	if dir != "/" {
+	if !_ws_is_root(dir) {
 		append(&d.entries, WS_Entry{ name = strings.clone(".."), is_dir = true })
 	}
 	for e in dirs  { append(&d.entries, e) }
 	for e in files { append(&d.entries, e) }
+
+	if capped { d.error_msg = "Directory too large (showing first 3000 entries)" }
 
 	// Clamp selection after list changed
 	if len(d.entries) == 0 {
@@ -387,11 +413,11 @@ _ws_split_path :: proc(path: string) -> (dir: string, prefix: string) {
 	if len(path) == 0 { return "/", "" }
 
 	// Ends with separator → dir IS the path, no filter
-	if path[len(path)-1] == '/' { return path, "" }
+	if _ws_is_sep(path[len(path)-1]) { return path, "" }
 
 	// Find last separator
 	for i := len(path)-1; i >= 0; i -= 1 {
-		if path[i] == '/' {
+		if _ws_is_sep(path[i]) {
 			return path[:i+1], path[i+1:]
 		}
 	}
@@ -403,6 +429,40 @@ _ws_split_path :: proc(path: string) -> (dir: string, prefix: string) {
 _ws_free_entries :: proc(d: ^Workspace_Dialog) {
 	for e in d.entries { delete(e.name) }
 	clear(&d.entries)
+}
+
+// Accept both '/' and '\\' as path separators (Windows compat).
+_ws_is_sep :: #force_inline proc(c: u8) -> bool { return c == '/' || c == '\\' }
+
+// Replace '\\' with '/' throughout. Uses temp_allocator by default.
+_ws_norm_seps :: proc(s: string, allocator := context.temp_allocator) -> string {
+	out := make([]u8, len(s), allocator)
+	copy(out, transmute([]u8)s)
+	for i in 0..<len(out) { if out[i] == '\\' { out[i] = '/' } }
+	return string(out)
+}
+
+// True when dir is a filesystem root ("/", or Windows "C:/", "D:/", etc.)
+_ws_is_root :: proc(dir: string) -> bool {
+	if dir == "/" { return true }
+	when ODIN_OS == .Windows {
+		d := strings.trim_right(dir, "/\\")
+		if len(d) == 2 && d[1] == ':' { return true }
+	}
+	return false
+}
+
+// Strip trailing separators for use with os.is_dir / os.change_directory,
+// but preserve Windows drive roots ("C:/" stays "C:/").
+_ws_clean_for_stat :: proc(path: string, allocator := context.temp_allocator) -> string {
+	result := strings.trim_right(path, "/\\")
+	when ODIN_OS == .Windows {
+		if len(result) == 2 && result[1] == ':' {
+			return strings.concatenate({result, "/"}, allocator)
+		}
+	}
+	if len(result) == 0 { return "/" }
+	return result
 }
 
 // ---------------------------------------------------------------
@@ -443,12 +503,8 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	// ── Overlay ──────────────────────────────────────────────────────
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
 
-	// ── Shadow ───────────────────────────────────────────────────────
-	rl.DrawRectangleV({panel_x + 4, panel_y + 4}, {WS_PANEL_W, panel_h}, SHADOW)
-
-	// ── Panel body ───────────────────────────────────────────────────
-	rl.DrawRectangleV({panel_x, panel_y}, {WS_PANEL_W, panel_h}, PANEL_BG)
-	rl.DrawRectangleLinesEx({panel_x, panel_y, WS_PANEL_W, panel_h}, 1, PANEL_BOR)
+	// ── Panel (shadow + body + border) ───────────────────────────────
+	dlg_begin(panel_x, panel_y, WS_PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// ── Header row: title + workspace tag ────────────────────────────
 	rl.DrawRectangleV({panel_x, panel_y}, {WS_PANEL_W, WS_HEADER_H}, HEADER_BG)
@@ -505,6 +561,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	rl.BeginScissorMode(i32(inp_x), i32(input_y), i32(inp_w), i32(WS_INPUT_H))
 	rl.DrawTextEx(font, to_cstring(display_s), {inp_x, label_y}, FONT_SIZE, CHAR_SPACING, FILE_COL)
 	rl.EndScissorMode()
+	dlg_restore()
 
 	// Beam cursor at end of text
 	vis_text_w := rl.MeasureTextEx(font, to_cstring(display_s), FONT_SIZE, CHAR_SPACING).x
@@ -561,11 +618,10 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 				{ix + icon_sz + 6, text_y}, FONT_SIZE - 1, CHAR_SPACING, SUBDUED)
 		}
 
-		// Selected entry full path hint on the right
+		// Selected entry full path hint on the right (right-aligned, clipped on left via scissor)
 		if ni == d.selected && entry.name != ".." {
-			sep := "/" if len(d.current_dir) > 0 && d.current_dir[len(d.current_dir)-1] != '/' else ""
+			sep := "/" if len(d.current_dir) > 0 && !_ws_is_sep(d.current_dir[len(d.current_dir)-1]) else ""
 			full := fmt.tprintf("%s%s%s", d.current_dir, sep, entry.name)
-			if len(full) > 60 { full = full[len(full)-60:] }
 			hint_w := rl.MeasureTextEx(font, to_cstring(full), FONT_SIZE - 3, CHAR_SPACING).x
 			rl.DrawTextEx(font, to_cstring(full),
 				{panel_x + WS_PANEL_W - hint_w - 10, text_y + 2},
@@ -605,4 +661,5 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	rl.DrawTextEx(font, to_cstring(count_str),
 		{panel_x + WS_PANEL_W - count_w - 10, footer_y + (WS_FOOTER_H - ref.y + 2)*0.5},
 		FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }

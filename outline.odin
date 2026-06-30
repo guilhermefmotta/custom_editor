@@ -440,8 +440,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	panel_y := sh * 0.05
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, panel_h}, PANEL_BG)
-	rl.DrawRectangleLinesEx({panel_x, panel_y, PANEL_W, panel_h}, 1, BORDER)
+	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, BORDER)
 
 	// Header: filename
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, HEADER_H}, INPUT_BG)
@@ -464,7 +463,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 		rl.DrawRectangleV({panel_x + 10 + fw, iy + 7}, {2, ref.y}, ACCENT)
 	}
 
-	// Symbol list
+	// Symbol list — panel scissor (from dlg_begin) clips all content
 	list_y := iy + INPUT_H
 	if n == 0 {
 		rl.DrawTextEx(font, "  no symbols", {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
@@ -494,9 +493,11 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 			rl.DrawRectangleRounded({badge_x - 2, row_y + 4, bw + 6, ITEM_H - 8}, 0.4, 4, rl.Color{kind_col.r, kind_col.g, kind_col.b, 40})
 			rl.DrawTextEx(font, to_cstring(badge), {badge_x, row_y + 4}, FONT_SIZE - 3, CHAR_SPACING, kind_col)
 
-			// Name
-			name_x := badge_x + bw + 12
-			rl.DrawTextEx(font, to_cstring(sym.name), {name_x, row_y + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
+			// Name — clipped to leave room for the line-number column
+			name_x    := badge_x + bw + 12
+			lnum_rsrv := f32(40) // reserved for line number on right
+			dlg_text(font, sym.name, name_x, row_y + 3, FONT_SIZE, CHAR_SPACING, TEXT,
+			         panel_x + PANEL_W - lnum_rsrv, 4)
 
 			// Line number right-aligned
 			lnum := fmt.tprintf("%d", sym.line + 1)
@@ -514,6 +515,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	hint := "↑↓ navigate · Enter jump · Esc close"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE - 3, CHAR_SPACING).x
 	rl.DrawTextEx(font, to_cstring(hint), {panel_x + PANEL_W - hw - 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }
 
 _outline_kind_color :: proc(kind: string) -> rl.Color {

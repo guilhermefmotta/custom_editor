@@ -598,15 +598,14 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 	py := sh * 0.15
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	rl.DrawRectangleV({px, py}, {PANEL_W, panel_h}, PANEL_BG)
-	rl.DrawRectangleLinesEx({px, py, PANEL_W, panel_h}, 1, BORDER)
+	dlg_begin(px, py, PANEL_W, panel_h, PANEL_BG, BORDER)
 
 	// Header
 	rl.DrawRectangleV({px, py}, {PANEL_W, HDR_H}, HDR_BG)
 	rl.DrawLineV({px, py + HDR_H - 1}, {px + PANEL_W, py + HDR_H - 1}, BORDER)
 	label := "Go to Definition" if dp.mode == .Def else "Find References"
 	title := fmt.tprintf("%s  —  '%s'  (%d results)", label, dp.word, n)
-	rl.DrawTextEx(font, to_cstring(title), {px + 10, py + 9}, FONT_SIZE, CHAR_SPACING, ACCENT)
+	dlg_text(font, title, px + 10, py + 9, FONT_SIZE, CHAR_SPACING, ACCENT, px + PANEL_W, 10)
 
 	// Items
 	item_y := py + HDR_H
@@ -626,11 +625,8 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 
 		bname := path_basename(r.file) if r.file != "" else "current file"
 		loc   := fmt.tprintf("%s  :  line %d", bname, r.line + 1)
-		rl.DrawTextEx(font, to_cstring(loc), {px + 14, row_y + 5}, FONT_SIZE, CHAR_SPACING, ACCENT)
-
-		prev := r.preview
-		if len(prev) > 72 { prev = prev[:72] }
-		rl.DrawTextEx(font, to_cstring(prev), {px + 14, row_y + 5 + ch}, FONT_SIZE - 2, CHAR_SPACING, PREV_COL)
+		dlg_text(font, loc,        px + 14, row_y + 5,      FONT_SIZE,     CHAR_SPACING, ACCENT,   px + PANEL_W, 10)
+		dlg_text(font, r.preview,  px + 14, row_y + 5 + ch, FONT_SIZE - 2, CHAR_SPACING, PREV_COL, px + PANEL_W, 10)
 	}
 
 	// Footer
@@ -640,4 +636,5 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 	hint := "↑↓ navigate  ·  Enter / F12 jump  ·  Esc close  ·  Ctrl+[ back"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE - 3, CHAR_SPACING).x
 	rl.DrawTextEx(font, to_cstring(hint), {px + PANEL_W - hw - 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }

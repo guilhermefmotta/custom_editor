@@ -60,6 +60,8 @@ palette_init :: proc() -> Palette {
 		Command{"Split Horizontal",         "Split editor into two stacked panes",              cmd_split_horizontal},
 		Command{"Close Split",              "Close active pane, return to single pane",         cmd_close_split},
 		Command{"Exit",                     "Quit the editor",                                  cmd_exit},
+		Command{"LSP Control",              "Open LSP server control panel",                    cmd_lsp_control},
+		Command{"Git",                      "Open Git panel (stage, commit, diff)",             cmd_git_panel},
 	)
 
 	cwd, err := os.get_working_directory(context.allocator)
@@ -392,9 +394,7 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 	if n_items > 0 && p.selected >= n_items { p.selected = n_items - 1 }
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	rl.DrawRectangleV({panel_x + 4, panel_y + 4}, {PANEL_W, panel_h}, SHADOW)
-	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, panel_h}, PANEL_BG)
-	rl.DrawRectangleLinesEx({panel_x, panel_y, PANEL_W, panel_h}, 1, PANEL_BOR)
+	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// Search box
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, QUERY_H}, INPUT_BG)
@@ -426,10 +426,11 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 	}
 	rl.DrawTextEx(font, to_cstring("Esc"), {panel_x + PANEL_W - 36, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 
-	// Items
-	item_y := panel_y + QUERY_H
-	draw_i := 0
-	data_i := 0
+	// Items — panel scissor (set by dlg_begin) clips all text to panel bounds
+	item_y  := panel_y + QUERY_H
+	draw_i  := 0
+	data_i  := 0
+	txt_max := panel_x + PANEL_W - 32 // right edge minus ">" icon + padding
 
 	switch p.mode {
 	case .Commands:
@@ -442,9 +443,9 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
 				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
 			}
-			rl.DrawTextEx(font, to_cstring(cmd.name), {panel_x + 16, iy + 7},      FONT_SIZE,     CHAR_SPACING, TEXT)
-			rl.DrawTextEx(font, to_cstring(cmd.desc), {panel_x + 16, iy + 7 + ch}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
-			rl.DrawTextEx(font, to_cstring(">"),       {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			dlg_text(font, cmd.name, panel_x + 16, iy + 7,      FONT_SIZE,     CHAR_SPACING, TEXT,    txt_max, 0)
+			dlg_text(font, cmd.desc, panel_x + 16, iy + 7 + ch, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
+			rl.DrawTextEx(font, to_cstring(">"), {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 			draw_i += 1; data_i += 1
 		}
 
@@ -460,9 +461,9 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
 				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
 			}
-			rl.DrawTextEx(font, to_cstring(bname), {panel_x + 16, iy + 7},      FONT_SIZE,     CHAR_SPACING, TEXT)
-			rl.DrawTextEx(font, to_cstring(rel),   {panel_x + 16, iy + 7 + ch}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
-			rl.DrawTextEx(font, to_cstring(">"),   {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			dlg_text(font, bname, panel_x + 16, iy + 7,      FONT_SIZE,     CHAR_SPACING, TEXT,    txt_max, 0)
+			dlg_text(font, rel,   panel_x + 16, iy + 7 + ch, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
+			rl.DrawTextEx(font, to_cstring(">"), {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 			draw_i += 1; data_i += 1
 		}
 
@@ -485,12 +486,10 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 			rel     := path_rel(r.file, p.cwd)
 			loc_str := fmt.tprintf(":%d:%d", r.line, r.col)
 			top_str := fmt.tprintf("%s  %s%s", bname, rel, loc_str)
-			rl.DrawTextEx(font, to_cstring(top_str), {panel_x + 16, iy + 5}, FONT_SIZE - 2, CHAR_SPACING, MATCH_COL)
+			dlg_text(font, top_str, panel_x + 16, iy + 5, FONT_SIZE - 2, CHAR_SPACING, MATCH_COL, txt_max, 0)
 
 			// Bottom row: context
-			ctx := r.ctx
-			if len(ctx) > 72 { ctx = ctx[:72] }
-			rl.DrawTextEx(font, to_cstring(ctx), {panel_x + 16, iy + 5 + ch - 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+			dlg_text(font, r.ctx, panel_x + 16, iy + 5 + ch - 2, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
 
 			draw_i += 1; data_i += 1
 		}
@@ -512,9 +511,8 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 
 				bname   := path_basename(m.filename) if m.filename != "" else "untitled"
 				loc_str := fmt.tprintf("%s:%d", bname, m.line)
-				rl.DrawTextEx(font, to_cstring(loc_str), {panel_x + 16, iy + 7},      FONT_SIZE,     CHAR_SPACING, MATCH_COL)
-				desc := m.desc if len(m.desc) <= 68 else m.desc[:68]
-				rl.DrawTextEx(font, to_cstring(desc),    {panel_x + 16, iy + 7 + ch}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+				dlg_text(font, loc_str, panel_x + 16, iy + 7,      FONT_SIZE,     CHAR_SPACING, MATCH_COL, txt_max, 0)
+				dlg_text(font, m.desc,  panel_x + 16, iy + 7 + ch, FONT_SIZE - 2, CHAR_SPACING, SUBDUED,   txt_max, 0)
 
 				draw_i += 1; data_i += 1
 			}
@@ -548,6 +546,7 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 		footer_text = fmt.tprintf("%d marks  |  Enter jump  |  Del remove  |  Esc close", n_m)
 	}
 	rl.DrawTextEx(font, to_cstring(footer_text), {panel_x + 12, fy + 8}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }
 
 // ---- Command implementations ----
@@ -686,6 +685,11 @@ cmd_close_split :: proc(e: ^Editor, p: ^Palette) {
 cmd_exit :: proc(e: ^Editor, p: ^Palette) {
 	e.should_quit = true
 	palette_close(p)
+}
+
+cmd_lsp_control :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_dialog_open(&e.lsp_dialog)
 }
 
 // ---- Helpers ----

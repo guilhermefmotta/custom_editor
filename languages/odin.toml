@@ -1,0 +1,9 @@
+id          = "odin"
+name        = "Odin"
+extensions  = [".odin"]
+comment_line = "//"
+comment_block = ["/*", "*/"]
+tab_size    = 4
+use_spaces  = false
+lsp         = "ols"
+word_separators = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?"

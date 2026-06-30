@@ -1,0 +1,8 @@
+id           = "rust"
+name         = "Rust"
+extensions   = [".rs"]
+comment_line = "//"
+comment_block = ["/*", "*/"]
+tab_size     = 4
+use_spaces   = true
+lsp          = "rust-analyzer"

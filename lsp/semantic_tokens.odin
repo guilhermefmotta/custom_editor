@@ -55,7 +55,7 @@ sem_tokens_request_full :: proc(c: ^Language_Client, path: string) {
 
 	if s.pending_id >= 0 { client_cancel_request(c, s.pending_id) }
 
-	params := fmt.tprintf(`{"textDocument":{"uri":%s}}`, json_str(path_to_uri(path)))
+	params := strings.concatenate({`{"textDocument":{"uri":`, json_str(path_to_uri(path)), `}}`}, context.temp_allocator)
 	s.pending_id = client_send_request(c, "textDocument/semanticTokens/full", params, Response_Callback{
 		proc_ = _on_sem_tokens_full,
 	})

@@ -98,10 +98,9 @@ doc_sync_did_open :: proc(c: ^Language_Client, path: string, content: string) {
 	if c.state == .Running {
 		state.did_open_sent = true
 		c.docs.open_docs[uri_h] = state
-		params := fmt.tprintf(
-			`{"textDocument":{"uri":%s,"languageId":"%s","version":1,"text":%s}}`,
-			json_str(uri), lang, json_str(content),
-		)
+		params := strings.concatenate({
+			`{"textDocument":{"uri":`, json_str(uri), `,"languageId":"`, lang, `","version":1,"text":`, json_str(content), `}}`,
+		}, context.temp_allocator)
 		client_send_notification(c, "textDocument/didOpen", params)
 	} else {
 		// Record for deferred send once server is Running
@@ -116,10 +115,9 @@ doc_sync_flush_pending :: proc(c: ^Language_Client) {
 		data, err := os.read_entire_file_from_path(state.path, context.temp_allocator)
 		if err != nil { continue }
 		content := string(data)
-		params := fmt.tprintf(
-			`{"textDocument":{"uri":%s,"languageId":"%s","version":1,"text":%s}}`,
-			json_str(uri_h), state.lang_id, json_str(content),
-		)
+		params := strings.concatenate({
+			`{"textDocument":{"uri":`, json_str(uri_h), `,"languageId":"`, state.lang_id, `","version":1,"text":`, json_str(content), `}}`,
+		}, context.temp_allocator)
 		client_send_notification(c, "textDocument/didOpen", params)
 		state.did_open_sent = true
 	}
@@ -139,7 +137,7 @@ doc_sync_did_close :: proc(c: ^Language_Client, path: string) {
 		delete_key(&c.docs.open_docs, uri)
 	}
 
-	params := fmt.tprintf(`{"textDocument":{"uri":%s}}`, json_str(uri))
+	params := strings.concatenate({`{"textDocument":{"uri":`, json_str(uri), `}}`}, context.temp_allocator)
 	client_send_notification(c, "textDocument/didClose", params)
 }
 
@@ -155,10 +153,10 @@ doc_sync_did_change_full :: proc(c: ^Language_Client, path: string, content: str
 	if !ok { doc_sync_did_open(c, path, content); return }
 	state.version += 1
 
-	params := fmt.tprintf(
-		`{"textDocument":{"uri":%s,"version":%d},"contentChanges":[{"text":%s}]}`,
-		json_str(uri), state.version, json_str(content),
-	)
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(uri), `,"version":`, fmt.tprintf("%d", state.version),
+		`},"contentChanges":[{"text":`, json_str(content), `}]}`,
+	}, context.temp_allocator)
 	client_send_notification(c, "textDocument/didChange", params)
 }
 
@@ -177,12 +175,14 @@ doc_sync_did_change_range :: proc(
 	if !ok { return }
 	state.version += 1
 
-	params := fmt.tprintf(
-		`{"textDocument":{"uri":%s,"version":%d},"contentChanges":[{"range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}},"text":%s}]}`,
-		json_str(uri), state.version,
-		start_line, start_char, end_line, end_char,
-		json_str(new_text),
-	)
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(uri), `,"version":`, fmt.tprintf("%d", state.version),
+		`},"contentChanges":[{"range":{"start":{"line":`, fmt.tprintf("%d", start_line),
+		`,"character":`, fmt.tprintf("%d", start_char),
+		`},"end":{"line":`, fmt.tprintf("%d", end_line),
+		`,"character":`, fmt.tprintf("%d", end_char),
+		`}},"text":`, json_str(new_text), `}]}`,
+	}, context.temp_allocator)
 	client_send_notification(c, "textDocument/didChange", params)
 }
 
@@ -195,13 +195,12 @@ doc_sync_did_save :: proc(c: ^Language_Client, path: string, content: string, in
 
 	uri := path_to_uri(path)
 	if include_text {
-		params := fmt.tprintf(
-			`{"textDocument":{"uri":%s},"text":%s}`,
-			json_str(uri), json_str(content),
-		)
+		params := strings.concatenate({
+			`{"textDocument":{"uri":`, json_str(uri), `},"text":`, json_str(content), `}`,
+		}, context.temp_allocator)
 		client_send_notification(c, "textDocument/didSave", params)
 	} else {
-		params := fmt.tprintf(`{"textDocument":{"uri":%s}}`, json_str(uri))
+		params := strings.concatenate({`{"textDocument":{"uri":`, json_str(uri), `}}`}, context.temp_allocator)
 		client_send_notification(c, "textDocument/didSave", params)
 	}
 }

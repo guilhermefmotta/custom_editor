@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:strings"
+import "core:time"
 import linux "core:sys/linux"
 
 // ---------------------------------------------------------------------------
@@ -108,6 +109,10 @@ Language_Client :: struct {
 	// Diagnostics / logging
 	logs:           [dynamic]LSP_Log_Entry, // heap-owned entries
 	error_msg:      string,                 // heap; set on unexpected exit or init failure
+	// Deferred didOpen flush: OLS drops messages that arrive simultaneously with initialized.
+	// Set true after _cb_initialized; flushed 200ms later in client_update.
+	flush_pending:      bool,
+	flush_pending_tick: time.Tick,
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +173,13 @@ client_destroy :: proc(c: ^Language_Client) {
 
 client_start :: proc(c: ^Language_Client, cmd: []string) -> bool {
 	if c.state != .Created { return false }
-	if !transport_start(&c.transport, cmd) { return false }
+	cmd_str := strings.join(cmd, " ", context.temp_allocator)
+	_client_log(c, .Info, fmt.tprintf("spawning: %s", cmd_str))
+	if !transport_start(&c.transport, cmd) {
+		_client_log(c, .Error, fmt.tprintf("transport_start failed for: %s", cmd_str))
+		return false
+	}
+	_client_log(c, .Info, fmt.tprintf("process pid=%d root=%s", int(c.transport.process.pid), c.root_uri))
 	c.state = .Initializing
 	_send_initialize(c)
 	return true
@@ -206,7 +217,7 @@ client_send_notification :: proc(c: ^Language_Client, method: string, params: st
 // Cancel a pending request by sending $/cancelRequest notification.
 client_cancel_request :: proc(c: ^Language_Client, id: int) {
 	if id < 0 { return }
-	params := fmt.tprintf(`{"id":%d}`, id)
+	params := strings.concatenate({`{"id":`, fmt.tprintf("%d", id), `}`}, context.temp_allocator)
 	client_send_notification(c, "$/cancelRequest", params)
 	if p, ok := &c.pending[id]; ok {
 		delete(p.method)
@@ -228,7 +239,7 @@ client_update :: proc(c: ^Language_Client) {
 		if wpid > 0 {
 			c.transport.process.running = false
 			exit_code := (status >> 8) & 0xff
-			_client_log(c, .Error, fmt.tprintf("server process exited (code %d)", exit_code))
+			_client_log(c, .Error, fmt.tprintf("server process exited unexpectedly (exit code %d) — check binary is in PATH and executable", exit_code))
 			if c.error_msg != "" { delete(c.error_msg) }
 			c.error_msg = strings.clone(fmt.tprintf("server exited (code %d)", exit_code))
 			c.state = .Stopped
@@ -244,6 +255,11 @@ client_update :: proc(c: ^Language_Client) {
 		_dispatch(c, &msg)
 		delete(msg.body)
 	}
+
+	if c.flush_pending && time.tick_since(c.flush_pending_tick) >= 200 * time.Millisecond {
+		c.flush_pending = false
+		doc_sync_flush_pending(c)
+	}
 }
 
 _client_log :: proc(c: ^Language_Client, level: LSP_Log_Level, msg: string) {
@@ -253,6 +269,15 @@ _client_log :: proc(c: ^Language_Client, level: LSP_Log_Level, msg: string) {
 		ordered_remove(&c.logs, 0)
 	}
 	append(&c.logs, LSP_Log_Entry{level = level, message = strings.clone(msg)})
+
+	level_str := "LOG"
+	switch level {
+	case .Error:   level_str = "ERR"
+	case .Warning: level_str = "WRN"
+	case .Info:    level_str = "INF"
+	case .Log:     level_str = "LOG"
+	}
+	log_writef(level_str, msg)
 }
 
 // ---------------------------------------------------------------------------
@@ -261,9 +286,14 @@ _client_log :: proc(c: ^Language_Client, level: LSP_Log_Level, msg: string) {
 
 _dispatch :: proc(c: ^Language_Client, msg: ^Inbox_Message) {
 	routed, ok := route_message(msg.body)
-	if !ok { return }
+	if !ok {
+		preview := string(msg.body[:min(120, len(msg.body))])
+		_client_log(c, .Error, fmt.tprintf("route_message failed (json parse error), body prefix: %s", preview))
+		return
+	}
 
 	if routed.is_response {
+		_client_log(c, .Log, fmt.tprintf("← response id=%d", routed.id))
 		_handle_response(c, routed.id, msg.body)
 	} else {
 		_handle_notification_or_request(c, routed.method, msg.body)
@@ -337,39 +367,24 @@ _handle_notification_or_request :: proc(c: ^Language_Client, method: string, bod
 // ---------------------------------------------------------------------------
 
 _send_initialize :: proc(c: ^Language_Client) {
-	pid := int(os.get_pid())
-	params := fmt.tprintf(`{
-"processId":%d,
-"rootUri":%s,
-"capabilities":{
-  "textDocument":{
-    "synchronization":{"dynamicRegistration":true,"willSave":false,"didSave":true,"willSaveWaitUntil":false},
-    "completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":false,"documentationFormat":["plaintext","markdown"],"deprecatedSupport":true,"preselectSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]}},
-    "hover":{"dynamicRegistration":true,"contentFormat":["plaintext","markdown"]},
-    "signatureHelp":{"dynamicRegistration":true,"signatureInformation":{"documentationFormat":["plaintext","markdown"],"parameterInformation":{"labelOffsetSupport":true}}},
-    "definition":{"dynamicRegistration":true},
-    "references":{"dynamicRegistration":true},
-    "documentHighlight":{"dynamicRegistration":true},
-    "documentSymbol":{"dynamicRegistration":true},
-    "codeAction":{"dynamicRegistration":true},
-    "codeLens":{"dynamicRegistration":true},
-    "formatting":{"dynamicRegistration":true},
-    "rename":{"dynamicRegistration":true},
-    "publishDiagnostics":{"relatedInformation":true,"tagSupport":{"valueSet":[1,2]},"versionSupport":true},
-    "semanticTokens":{"dynamicRegistration":true,"requests":{"full":true,"range":false},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false},
-    "inlayHint":{"dynamicRegistration":true},
-    "diagnostics":{"dynamicRegistration":true}
-  },
-  "workspace":{
-    "applyEdit":true,
-    "symbol":{"dynamicRegistration":true},
-    "workspaceFolders":true,
-    "fileOperations":{"didCreate":false,"willCreate":false,"didRename":false,"willRename":false,"didDelete":false,"willDelete":false}
-  }
-},
-"initializationOptions":{},
-"workspaceFolders":[{"uri":%s,"name":"workspace"}]
-}`, pid, json_str(c.root_uri), json_str(c.root_uri))
+	pid     := int(os.get_pid())
+	pid_str := fmt.tprintf("%d", pid)
+	root    := json_str(c.root_uri)
+	_client_log(c, .Info, fmt.tprintf("sending initialize pid=%d root=%s", pid, c.root_uri))
+
+	// Build params by concatenation — avoids fmt treating { as a format directive.
+	static_caps := `{"textDocument":{"synchronization":{"dynamicRegistration":true,"willSave":false,"didSave":true,"willSaveWaitUntil":false},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":false,"documentationFormat":["plaintext","markdown"],"deprecatedSupport":true,"preselectSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]}},"hover":{"dynamicRegistration":true,"contentFormat":["plaintext","markdown"]},"signatureHelp":{"dynamicRegistration":true,"signatureInformation":{"documentationFormat":["plaintext","markdown"],"parameterInformation":{"labelOffsetSupport":true}}},"definition":{"dynamicRegistration":true},"references":{"dynamicRegistration":true},"documentHighlight":{"dynamicRegistration":true},"documentSymbol":{"dynamicRegistration":true},"codeAction":{"dynamicRegistration":true},"codeLens":{"dynamicRegistration":true},"formatting":{"dynamicRegistration":true},"rename":{"dynamicRegistration":true},"publishDiagnostics":{"relatedInformation":true,"tagSupport":{"valueSet":[1,2]},"versionSupport":true},"semanticTokens":{"dynamicRegistration":true,"requests":{"full":true,"range":false},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false},"inlayHint":{"dynamicRegistration":true},"diagnostics":{"dynamicRegistration":true}},"workspace":{"applyEdit":true,"symbol":{"dynamicRegistration":true},"workspaceFolders":true,"fileOperations":{"didCreate":false,"willCreate":false,"didRename":false,"willRename":false,"didDelete":false,"willDelete":false}}}`
+
+	params := strings.concatenate({
+		`{"processId":`, pid_str,
+		`,"rootUri":`, root,
+		`,"capabilities":`, static_caps,
+		`,"initializationOptions":{}`,
+		`,"workspaceFolders":[{"uri":`, root, `,"name":"workspace"}]}`,
+	}, context.temp_allocator)
+
+	preview_len := min(200, len(params))
+	_client_log(c, .Log, fmt.tprintf("params[0:%d]: %s", preview_len, params[:preview_len]))
 
 	client_send_request(c, "initialize", params, Response_Callback{
 		proc_ = _cb_initialized,
@@ -389,7 +404,11 @@ _cb_initialized :: proc(c: ^Language_Client, result: json.Value, error: json.Val
 	}
 
 	obj, is_obj := result.(json.Object)
-	if !is_obj { return }
+	if !is_obj {
+		_client_log(c, .Error, fmt.tprintf("initialize response: result is not an object (type=%T) — server did not respond correctly", result))
+		c.state = .Stopped
+		return
+	}
 
 	// Parse server capabilities
 	if caps_obj, ok := json_obj_obj(obj, "capabilities"); ok {
@@ -397,13 +416,19 @@ _cb_initialized :: proc(c: ^Language_Client, result: json.Value, error: json.Val
 	}
 
 	c.state = .Running
-	_client_log(c, .Info, "server initialized and ready")
+	_client_log(c, .Info, fmt.tprintf(
+		"initialized: completion=%v hover=%v sighelp=%v def=%v semtok=%v sync=%d",
+		c.caps.has_completion, c.caps.has_hover, c.caps.has_signature_help,
+		c.caps.has_definition, c.caps.has_semantic_tokens, c.caps.text_sync_kind,
+	))
 
 	// Send initialized notification
 	client_send_notification(c, "initialized", "{}")
 
-	// Send didOpen for any files opened before server finished initializing
-	doc_sync_flush_pending(c)
+	// Defer didOpen until next update cycle. OLS drops messages that arrive in the
+	// same pipe read as initialized — schedule the flush 200ms later.
+	c.flush_pending      = true
+	c.flush_pending_tick = time.tick_now()
 }
 
 _on_initialize_response :: proc(c: ^Language_Client, result: json.Value) {

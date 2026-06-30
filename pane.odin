@@ -3,6 +3,15 @@ package editor
 import "core:os"
 import "core:strings"
 
+// Return heap-allocated absolute version of path.
+_pane_abs :: proc(path: string) -> string {
+	if len(path) > 0 && path[0] == '/' { return strings.clone(path) }
+	cwd, err := os.get_working_directory(context.temp_allocator)
+	if err != nil || len(cwd) == 0 { return strings.clone(path) }
+	if path == "." { return strings.clone(cwd) }
+	return strings.concatenate({cwd, "/", path})
+}
+
 Undo_Op :: struct {
 	insert:   bool,    // true = was insert; false = was delete
 	compound: bool,    // true = this op is part of the same compound group as the previous op
@@ -59,7 +68,7 @@ pane_open :: proc(p: ^Pane, path: string) -> bool {
 	p.scroll_anim = 0
 	clear(&p.extras)
 	if p.filename != "" do delete(p.filename)
-	p.filename = strings.clone(path)
+	p.filename = _pane_abs(path) // always store absolute path so LSP URIs are correct
 	p.lang     = detect_lang(path)
 	p.dirty    = false
 	// Clear undo history on file open

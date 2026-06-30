@@ -120,17 +120,21 @@ completion_request :: proc(
 	}
 
 	params: string
+	uri_s := json_str(path_to_uri(path))
+	l_s   := fmt.tprintf("%d", line)
+	c_s   := fmt.tprintf("%d", char)
+	tk_s  := fmt.tprintf("%d", trigger_kind_num)
 	if trigger == .Trigger_Char && trigger_char != 0 {
 		char_str := fmt.tprintf("%r", trigger_char)
-		params = fmt.tprintf(
-			`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"context":{"triggerKind":%d,"triggerCharacter":%s}}`,
-			json_str(path_to_uri(path)), line, char, trigger_kind_num, json_str(char_str),
-		)
+		params = strings.concatenate({
+			`{"textDocument":{"uri":`, uri_s, `},"position":{"line":`, l_s, `,"character":`, c_s,
+			`},"context":{"triggerKind":`, tk_s, `,"triggerCharacter":`, json_str(char_str), `}}`,
+		}, context.temp_allocator)
 	} else {
-		params = fmt.tprintf(
-			`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"context":{"triggerKind":%d}}`,
-			json_str(path_to_uri(path)), line, char, trigger_kind_num,
-		)
+		params = strings.concatenate({
+			`{"textDocument":{"uri":`, uri_s, `},"position":{"line":`, l_s, `,"character":`, c_s,
+			`},"context":{"triggerKind":`, tk_s, `}}`,
+		}, context.temp_allocator)
 	}
 
 	m.session.request_id = client_send_request(c, "textDocument/completion", params, Response_Callback{
@@ -352,12 +356,9 @@ completion_resolve :: proc(c: ^Language_Client, item_index: int, cb: Response_Ca
 	if c.state != .Running { return }
 
 	item := &s.items[item_index]
-	// Build minimal resolve request using item's data field
-	params := fmt.tprintf(
-		`{"label":%s,"kind":%d,"data":%s}`,
-		json_str(item.label),
-		int(item.kind),
-		item.data == "" ? "null" : item.data,
-	)
+	data_s := item.data == "" ? "null" : item.data
+	params := strings.concatenate({
+		`{"label":`, json_str(item.label), `,"kind":`, fmt.tprintf("%d", int(item.kind)), `,"data":`, data_s, `}`,
+	}, context.temp_allocator)
 	client_send_request(c, "completionItem/resolve", params, cb)
 }

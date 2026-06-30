@@ -49,6 +49,8 @@ LSP_Manager :: struct {
 lsp_manager_init :: proc(m: ^LSP_Manager, root_path: string) {
 	m.entries   = make([dynamic]Client_Entry)
 	m.root_path = strings.clone(root_path)
+	lsp_log_open("lsp.log")
+	log_writef("INF", fmt.tprintf("lsp_manager_init root=%s", root_path))
 }
 
 lsp_manager_destroy :: proc(m: ^LSP_Manager) {
@@ -58,6 +60,7 @@ lsp_manager_destroy :: proc(m: ^LSP_Manager) {
 	}
 	delete(m.entries)
 	delete(m.root_path)
+	lsp_log_close()
 }
 
 // ---------------------------------------------------------------------------
@@ -431,30 +434,36 @@ manager_definition :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: R
 manager_references :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
 	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil || !c.caps.has_references { return }
-	params := fmt.tprintf(
-		`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"context":{"includeDeclaration":true}}`,
-		json_str(path_to_uri(path)), line, char,
-	)
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(path_to_uri(path)),
+		`},"position":{"line":`, fmt.tprintf("%d", line),
+		`,"character":`, fmt.tprintf("%d", char),
+		`},"context":{"includeDeclaration":true}}`,
+	}, context.temp_allocator)
 	client_send_request(c, "textDocument/references", params, cb)
 }
 
 manager_rename :: proc(m: ^LSP_Manager, path: string, line, char: int, new_name: string, cb: Response_Callback) {
 	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil || !c.caps.has_rename { return }
-	params := fmt.tprintf(
-		`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"newName":%s}`,
-		json_str(path_to_uri(path)), line, char, json_str(new_name),
-	)
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(path_to_uri(path)),
+		`},"position":{"line":`, fmt.tprintf("%d", line),
+		`,"character":`, fmt.tprintf("%d", char),
+		`},"newName":`, json_str(new_name), `}`,
+	}, context.temp_allocator)
 	client_send_request(c, "textDocument/rename", params, cb)
 }
 
 manager_format :: proc(m: ^LSP_Manager, path: string, tab_size: int, use_spaces: bool, cb: Response_Callback) {
 	c := lsp_manager_find_client_for_path(m, path)
 	if c == nil || !c.caps.has_formatting { return }
-	params := fmt.tprintf(
-		`{"textDocument":{"uri":%s},"options":{"tabSize":%d,"insertSpaces":%v}}`,
-		json_str(path_to_uri(path)), tab_size, use_spaces,
-	)
+	spaces_s := use_spaces ? "true" : "false"
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(path_to_uri(path)),
+		`},"options":{"tabSize":`, fmt.tprintf("%d", tab_size),
+		`,"insertSpaces":`, spaces_s, `}}`,
+	}, context.temp_allocator)
 	client_send_request(c, "textDocument/formatting", params, cb)
 }
 

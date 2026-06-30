@@ -122,8 +122,7 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 	panel_y := sh * 0.10
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, panel_h}, PANEL_BG)
-	rl.DrawRectangleLinesEx({panel_x, panel_y, PANEL_W, panel_h}, 1, BORDER)
+	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, BORDER)
 
 	// Header
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, HEADER_H}, INPUT_BG)
@@ -131,8 +130,9 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 	rl.DrawTextEx(font, "Recent Files", {panel_x + 10, panel_y + 8}, FONT_SIZE, CHAR_SPACING, ACCENT)
 
 	// Items
+	items_top := panel_y + HEADER_H
 	for i in 0..<n {
-		iy := panel_y + HEADER_H + f32(i)*ITEM_H
+		iy := items_top + f32(i)*ITEM_H
 		if i == rd.sel {
 			rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_C)
 			rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
@@ -140,8 +140,9 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 		base    := path_basename(rd.paths[i])
 		txt_col := ACCENT if i == rd.sel else TEXT
 		ty_base := iy + (ITEM_H - ref.y*2 - 3) * 0.5
-		rl.DrawTextEx(font, to_cstring(base),        {panel_x + 12, ty_base},            FONT_SIZE,     CHAR_SPACING, txt_col)
-		rl.DrawTextEx(font, to_cstring(rd.paths[i]), {panel_x + 12, ty_base + ref.y + 3}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+		right   := panel_x + PANEL_W
+		dlg_text(font, base,          panel_x + 12, ty_base,            FONT_SIZE,     CHAR_SPACING, txt_col, right, 8)
+		dlg_text(font, rd.paths[i],   panel_x + 12, ty_base + ref.y + 3, FONT_SIZE - 3, CHAR_SPACING, SUBDUED, right, 8)
 	}
 
 	// Footer
@@ -150,4 +151,5 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 	rl.DrawRectangleLinesEx({panel_x, fy, PANEL_W, FOOTER_H}, 1, BORDER)
 	hint := "Tab next  *  Shift+Tab prev  *  release Ctrl jump  *  Esc cancel"
 	rl.DrawTextEx(font, to_cstring(hint), {panel_x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }

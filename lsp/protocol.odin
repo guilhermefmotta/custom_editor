@@ -134,7 +134,7 @@ Hover_Result :: struct {
 }
 
 hover_result_destroy :: proc(h: ^Hover_Result) {
-	delete(h.contents)
+	if h.contents != "" { delete(h.contents); h.contents = "" }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +170,7 @@ signature_help_destroy :: proc(sh: ^Signature_Help) {
 		delete(sig.parameters)
 	}
 	delete(sh.signatures)
+	sh^ = {}
 }
 
 // ---------------------------------------------------------------------------
@@ -255,24 +256,31 @@ uri_to_path :: proc(uri: string) -> string {
 // ---------------------------------------------------------------------------
 
 position_json :: proc(pos: Position) -> string {
-	return fmt.tprintf(`{"line":%d,"character":%d}`, pos.line, pos.character)
+	return strings.concatenate({
+		`{"line":`, fmt.tprintf("%d", pos.line), `,"character":`, fmt.tprintf("%d", pos.character), `}`,
+	}, context.temp_allocator)
 }
 
 range_json :: proc(r: Range) -> string {
-	return fmt.tprintf(`{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}`,
-		r.start.line, r.start.character, r.end.line, r.end.character)
+	return strings.concatenate({
+		`{"start":{"line":`, fmt.tprintf("%d", r.start.line),
+		`,"character":`, fmt.tprintf("%d", r.start.character),
+		`},"end":{"line":`, fmt.tprintf("%d", r.end.line),
+		`,"character":`, fmt.tprintf("%d", r.end.character), `}}`,
+	}, context.temp_allocator)
 }
 
 text_document_json :: proc(uri: string) -> string {
-	return fmt.tprintf(`{"uri":%s}`, json_str(uri))
+	return strings.concatenate({`{"uri":`, json_str(uri), `}`}, context.temp_allocator)
 }
 
 // Build textDocumentPositionParams JSON (temp-allocated).
 td_pos_params :: proc(uri: string, pos: Position) -> string {
-	return fmt.tprintf(
-		`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d}}`,
-		json_str(uri), pos.line, pos.character,
-	)
+	return strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(uri),
+		`},"position":{"line":`, fmt.tprintf("%d", pos.line),
+		`,"character":`, fmt.tprintf("%d", pos.character), `}}`,
+	}, context.temp_allocator)
 }
 
 // ---------------------------------------------------------------------------

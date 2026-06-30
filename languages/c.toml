@@ -1,0 +1,8 @@
+id           = "c"
+name         = "C"
+extensions   = [".c", ".h"]
+comment_line = "//"
+comment_block = ["/*", "*/"]
+tab_size     = 4
+use_spaces   = false
+lsp          = "clangd"

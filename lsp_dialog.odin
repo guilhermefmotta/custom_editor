@@ -10,17 +10,19 @@ import rl "vendor:raylib"
 // ---------------------------------------------------------------------------
 
 LSP_Dialog :: struct {
-	visible:    bool,
-	scroll:     int,    // log scroll (lines from bottom)
-	action_msg: string, // result of last Start/Stop/Restart (heap-owned)
-	action_ok:  bool,
+	visible:        bool,
+	scroll:         int,    // log scroll index (0 = oldest visible at top)
+	auto_scroll:    bool,   // track newest; reset when user manually scrolls up
+	prev_log_count: int,    // detect new entries for auto-scroll
+	action_msg:     string, // result of last Start/Stop/Restart (heap-owned)
+	action_ok:      bool,
 }
 
-LSPD_W        :: f32(600)
+LSPD_W        :: f32(620)
 LSPD_HEADER_H :: f32(32)
-LSPD_INFO_H   :: f32(88)  // server name, state, root, buttons
-LSPD_LOG_H_LN :: f32(20)  // height per log line
-LSPD_LOG_MAX  :: 14        // max visible log lines
+LSPD_INFO_H   :: f32(122)  // server name, state, root, buttons row, msg row
+LSPD_LOG_H_LN :: f32(20)   // height per log line
+LSPD_LOG_MAX  :: 14         // max visible log lines
 LSPD_FOOTER_H :: f32(26)
 
 // ---------------------------------------------------------------------------
@@ -28,8 +30,10 @@ LSPD_FOOTER_H :: f32(26)
 // ---------------------------------------------------------------------------
 
 lsp_dialog_open :: proc(d: ^LSP_Dialog) {
-	d.visible = true
-	d.scroll  = 0
+	d.visible     = true
+	d.scroll      = 999999 // clamped to max_scroll in render → shows newest
+	d.auto_scroll = true
+	_rep_key      = .KEY_NULL // clear any held key from editor so UP/DOWN work immediately
 }
 
 lsp_dialog_close :: proc(d: ^LSP_Dialog) {
@@ -64,13 +68,20 @@ lsp_dialog_handle_input :: proc(d: ^LSP_Dialog, e: ^Editor) -> (consumed: bool) 
 		return true
 	}
 
-	// Scroll log
-	if key_rep(.UP)   { if d.scroll > 0 { d.scroll -= 1 }; return true }
-	if key_rep(.DOWN) { d.scroll += 1;                      return true }
+	// Scroll log — keyboard + mouse wheel; UP = older, DOWN = newer
+	if key_rep(.UP)   { if d.scroll > 0 { d.scroll -= 1; d.auto_scroll = false }; return true }
+	if key_rep(.DOWN) { d.scroll += 1; return true }
+	wheel := rl.GetMouseWheelMove()
+	if wheel != 0 {
+		d.scroll -= int(wheel) * 3
+		if wheel > 0 { d.auto_scroll = false }
+		return true
+	}
 
 	// Actions
 	p := active_pane(e)
 	ext := lsp.path_ext(p.filename) if p.filename != "" else ""
+	c   := lsp.lsp_manager_find_client_for_path(&e.lsp_mgr, p.filename)
 
 	if rl.IsKeyPressed(.S) {
 		_lspd_do_start(d, e, ext)
@@ -82,6 +93,10 @@ lsp_dialog_handle_input :: proc(d: ^LSP_Dialog, e: ^Editor) -> (consumed: bool) 
 	}
 	if rl.IsKeyPressed(.R) {
 		_lspd_do_restart(d, e, ext)
+		return true
+	}
+	if rl.IsKeyPressed(.C) {
+		_lspd_copy_log(d, c)
 		return true
 	}
 
@@ -97,8 +112,9 @@ _lspd_do_start :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
 	ok, err := lsp.lsp_manager_start_for_ext(&e.lsp_mgr, ext)
 	if !ok { _lspd_set_msg(d, false, err); return }
 	lsp_reopen_all_panes(e)
-	_lspd_set_msg(d, true, "starting…")
-	d.scroll = 0
+	_lspd_set_msg(d, true, "starting...")
+	d.scroll      = 999999
+	d.auto_scroll = true
 }
 
 _lspd_do_stop :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
@@ -106,7 +122,7 @@ _lspd_do_stop :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
 	ok, err := lsp.lsp_manager_stop_for_ext(&e.lsp_mgr, ext)
 	if !ok { _lspd_set_msg(d, false, err); return }
 	_lspd_set_msg(d, true, "stopped")
-	d.scroll = 0
+	d.auto_scroll = true
 }
 
 _lspd_do_restart :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
@@ -114,8 +130,31 @@ _lspd_do_restart :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
 	ok, err := lsp.lsp_manager_restart_for_ext(&e.lsp_mgr, ext)
 	if !ok { _lspd_set_msg(d, false, err); return }
 	lsp_reopen_all_panes(e)
-	_lspd_set_msg(d, true, "restarting…")
-	d.scroll = 0
+	_lspd_set_msg(d, true, "restarting...")
+	d.scroll      = 999999
+	d.auto_scroll = true
+}
+
+_lspd_copy_log :: proc(d: ^LSP_Dialog, c: ^lsp.Language_Client) {
+	if c == nil || len(c.logs) == 0 { _lspd_set_msg(d, false, "no log to copy"); return }
+	sb: strings.Builder
+	strings.builder_init(&sb, context.temp_allocator)
+	for entry in c.logs {
+		level_str := "[LOG]"
+		switch entry.level {
+		case .Error:   level_str = "[ERR]"
+		case .Warning: level_str = "[WRN]"
+		case .Info:    level_str = "[INF]"
+		case .Log:     level_str = "[LOG]"
+		}
+		strings.write_string(&sb, level_str)
+		strings.write_byte(&sb, ' ')
+		strings.write_string(&sb, entry.message)
+		strings.write_byte(&sb, '\n')
+	}
+	text := strings.to_string(sb)
+	rl.SetClipboardText(strings.clone_to_cstring(text, context.temp_allocator))
+	_lspd_set_msg(d, true, "log copied!")
 }
 
 // ---------------------------------------------------------------------------
@@ -159,19 +198,21 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	panel_x := (sw - LSPD_W) * 0.5
 	panel_y := (sh - panel_h) * 0.5
 
-	// Clamp scroll
+	// Auto-scroll: jump to newest when entries arrive (or when re-enabled)
 	max_scroll := max(0, log_count - LSPD_LOG_MAX)
+	if log_count != d.prev_log_count {
+		d.prev_log_count = log_count
+		if d.auto_scroll { d.scroll = max_scroll }
+	}
+	// Resume auto-scroll if user scrolled to the bottom
+	if d.scroll >= max_scroll { d.auto_scroll = true }
 	d.scroll = clamp(d.scroll, 0, max_scroll)
 
 	// Overlay
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
 
-	// Shadow
-	rl.DrawRectangleV({panel_x + 4, panel_y + 4}, {LSPD_W, panel_h}, SHADOW)
-
-	// Panel
-	rl.DrawRectangleV({panel_x, panel_y}, {LSPD_W, panel_h}, PANEL_BG)
-	rl.DrawRectangleLinesEx({panel_x, panel_y, LSPD_W, panel_h}, 1, PANEL_BOR)
+	// Panel (shadow + body + border)
+	dlg_begin(panel_x, panel_y, LSPD_W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// ── Header ─────────────────────────────────────────────────────────
 	rl.DrawRectangleV({panel_x, panel_y}, {LSPD_W, LSPD_HEADER_H}, HEADER_BG)
@@ -247,50 +288,46 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 		ty += ref.y + 8
 	}
 
-	// Action buttons
+	// Action buttons row — drawn as pill buttons
 	{
-		btn_start   := "[S] Start"
-		btn_stop    := "[T] Stop"
-		btn_restart := "[R] Restart"
-		gap         := f32(20)
-
-		bw_s := rl.MeasureTextEx(font, to_cstring(btn_start),   FONT_SIZE-1, CHAR_SPACING).x
-		bw_t := rl.MeasureTextEx(font, to_cstring(btn_stop),    FONT_SIZE-1, CHAR_SPACING).x
-		bw_r := rl.MeasureTextEx(font, to_cstring(btn_restart), FONT_SIZE-1, CHAR_SPACING).x
+		BTN_PAD_X :: f32(10)
+		BTN_PAD_Y :: f32(4)
+		BTN_GAP   :: f32(8)
+		BTN_H     :: f32(22)
 
 		// Color buttons based on applicability
 		start_col   := GREEN
 		stop_col    := RED
 		restart_col := YELLOW
-		if ext == ""    { start_col = SUBDUED; stop_col = SUBDUED; restart_col = SUBDUED }
-		if c == nil     { stop_col = SUBDUED; restart_col = SUBDUED }
+		copy_col    := ACCENT
+		if ext == "" { start_col = SUBDUED; stop_col = SUBDUED; restart_col = SUBDUED; copy_col = SUBDUED }
+		if c == nil  { stop_col = SUBDUED; restart_col = SUBDUED }
 
-		bx := tx
-		rl.DrawTextEx(font, to_cstring(btn_start),   {bx, ty}, FONT_SIZE-1, CHAR_SPACING, start_col)
-		bx += bw_s + gap
-		rl.DrawTextEx(font, to_cstring(btn_stop),    {bx, ty}, FONT_SIZE-1, CHAR_SPACING, stop_col)
-		bx += bw_t + gap
-		rl.DrawTextEx(font, to_cstring(btn_restart), {bx, ty}, FONT_SIZE-1, CHAR_SPACING, restart_col)
-
-		// Action message on the right
-		if d.action_msg != "" {
-			msg_col := GREEN if d.action_ok else RED
-			mw := rl.MeasureTextEx(font, to_cstring(d.action_msg), FONT_SIZE-2, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(d.action_msg),
-				{panel_x + LSPD_W - mw - 12, ty},
-				FONT_SIZE-2, CHAR_SPACING, msg_col)
+		_draw_btn :: proc(font: rl.Font, label: string, bx, by, bh, pad_x, pad_y: f32,
+		                  gap: f32, text_col: rl.Color, border_col: rl.Color) -> f32 {
+			tw := rl.MeasureTextEx(font, to_cstring(label), FONT_SIZE-1, CHAR_SPACING).x
+			bw := tw + pad_x * 2
+			rl.DrawRectangleLinesEx({bx, by, bw, bh}, 1, border_col)
+			rl.DrawTextEx(font, to_cstring(label), {bx + pad_x, by + pad_y}, FONT_SIZE-1, CHAR_SPACING, text_col)
+			return bw + gap
 		}
 
-		// Client error_msg if set
-		if c != nil && c.error_msg != "" {
+		btn_y := ty
+		bx := tx
+		bx += _draw_btn(font, "S Start",   bx, btn_y, BTN_H, BTN_PAD_X, BTN_PAD_Y, BTN_GAP, start_col,   start_col)
+		bx += _draw_btn(font, "T Stop",    bx, btn_y, BTN_H, BTN_PAD_X, BTN_PAD_Y, BTN_GAP, stop_col,    stop_col)
+		bx += _draw_btn(font, "R Restart", bx, btn_y, BTN_H, BTN_PAD_X, BTN_PAD_Y, BTN_GAP, restart_col, restart_col)
+		_draw_btn(font, "C Copy Log", bx, btn_y, BTN_H, BTN_PAD_X, BTN_PAD_Y, BTN_GAP, copy_col, copy_col)
+
+		ty += BTN_H + BTN_GAP
+
+		// Action / error message below buttons
+		if d.action_msg != "" {
+			msg_col := GREEN if d.action_ok else RED
+			rl.DrawTextEx(font, to_cstring(d.action_msg), {tx, ty}, FONT_SIZE-2, CHAR_SPACING, msg_col)
+		} else if c != nil && c.error_msg != "" {
 			em := fmt.tprintf("! %s", c.error_msg)
-			em_col := RED
-			em_w   := rl.MeasureTextEx(font, to_cstring(em), FONT_SIZE-2, CHAR_SPACING).x
-			if d.action_msg == "" { // don't overlap
-				rl.DrawTextEx(font, to_cstring(em),
-					{panel_x + LSPD_W - em_w - 12, ty},
-					FONT_SIZE-2, CHAR_SPACING, em_col)
-			}
+			rl.DrawTextEx(font, to_cstring(em), {tx, ty}, FONT_SIZE-2, CHAR_SPACING, RED)
 		}
 	}
 
@@ -312,7 +349,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 			if li >= log_count { break }
 			entry := c.logs[li]
 
-			lx   := tx
+			lx     := tx
 			line_y := ly + f32(vi)*LSPD_LOG_H_LN
 
 			// Level tag
@@ -321,19 +358,19 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 			rl.DrawTextEx(font, to_cstring(level_str), {lx, line_y + 3}, FONT_SIZE-3, CHAR_SPACING, level_col)
 			lx += lsw + 6
 
-			// Message — clip to panel width
-			max_mw   := LSPD_W - lsw - 30
-			msg_disp := _lspd_clip_str(entry.message, font, max_mw)
-			rl.DrawTextEx(font, to_cstring(msg_disp), {lx, line_y + 2}, FONT_SIZE-2, CHAR_SPACING, TEXT)
+			// Message — ellipsized to fit panel width
+			max_mw := panel_x + LSPD_W - lx - 12
+			rl.DrawTextEx(font, to_cstring(text_clip(font, entry.message, max_mw, FONT_SIZE-2, CHAR_SPACING)),
+			              {lx, line_y + 2}, FONT_SIZE-2, CHAR_SPACING, TEXT)
 		}
+	}
 
-		// Scrollbar when log overflows
-		if log_count > LSPD_LOG_MAX {
-			total_h := f32(vis_log) * LSPD_LOG_H_LN
-			bar_h   := total_h * f32(LSPD_LOG_MAX) / f32(log_count)
-			bar_y   := ly + total_h * f32(d.scroll) / f32(log_count)
-			rl.DrawRectangleV({panel_x + LSPD_W - 3, bar_y}, {3, bar_h}, PANEL_BOR)
-		}
+	// Scrollbar when log overflows
+	if log_count > LSPD_LOG_MAX {
+		total_h := f32(vis_log) * LSPD_LOG_H_LN
+		bar_h   := total_h * f32(LSPD_LOG_MAX) / f32(log_count)
+		bar_y   := ly + total_h * f32(d.scroll) / f32(log_count)
+		rl.DrawRectangleV({panel_x + LSPD_W - 3, bar_y}, {3, bar_h}, PANEL_BOR)
 	}
 
 	// ── Footer ──────────────────────────────────────────────────────────
@@ -341,10 +378,11 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	rl.DrawRectangleV({panel_x, footer_y}, {LSPD_W, LSPD_FOOTER_H}, HEADER_BG)
 	rl.DrawLineV({panel_x, footer_y}, {panel_x + LSPD_W, footer_y}, PANEL_BOR)
 
-	hints := "↑↓ scroll log   S start   T stop   R restart   Esc close"
+	hints := "↑↓ wheel scroll   S start   T stop   R restart   C copy log   Esc close"
 	rl.DrawTextEx(font, to_cstring(hints),
 		{panel_x + 10, footer_y + (LSPD_FOOTER_H - ref.y + 2)*0.5},
 		FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }
 
 // ---------------------------------------------------------------------------
@@ -359,10 +397,10 @@ _lspd_state :: proc(c: ^lsp.Language_Client) -> (label: string, col: rl.Color) {
 
 	if c == nil { return "not started", SUBDUED }
 	switch c.state {
-	case .Created, .Starting:     return "starting…", YELLOW
-	case .Initializing:           return "initializing…", YELLOW
-	case .Running:                return "running ●", GREEN
-	case .Shutting_Down:          return "stopping…", YELLOW
+	case .Created, .Starting:     return "starting...", YELLOW
+	case .Initializing:           return "initializing...", YELLOW
+	case .Running:                return "running", GREEN
+	case .Shutting_Down:          return "stopping...", YELLOW
 	case .Stopped:
 		if c.error_msg != "" { return "error", RED }
 		return "stopped", SUBDUED
@@ -385,20 +423,3 @@ _lspd_log_level :: proc(level: lsp.LSP_Log_Level) -> (label: string, col: rl.Col
 	return "[???]", SUBDUED
 }
 
-_lspd_clip_str :: proc(s: string, font: rl.Font, max_w: f32) -> string {
-	if rl.MeasureTextEx(font, to_cstring(s), FONT_SIZE-2, CHAR_SPACING).x <= max_w {
-		return s
-	}
-	end := len(s)
-	ellipsis := "…"
-	for end > 0 {
-		sub := strings.concatenate({s[:end], ellipsis}, context.temp_allocator)
-		if rl.MeasureTextEx(font, to_cstring(sub), FONT_SIZE-2, CHAR_SPACING).x <= max_w {
-			return sub
-		}
-		// step back one UTF-8 character
-		end -= 1
-		for end > 0 && (s[end] & 0xC0) == 0x80 { end -= 1 }
-	}
-	return ellipsis
-}

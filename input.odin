@@ -38,8 +38,12 @@ key_rep :: proc(key: rl.KeyboardKey) -> bool {
 // --- Top-level dispatcher ---
 
 handle_input :: proc(e: ^Editor, font: rl.Font) {
+	// Ctrl+Q always quits, regardless of any open dialog
+	if ctrl() && rl.IsKeyPressed(.Q) { e.should_quit = true; return }
+
 	// Priority: delete_confirm > lsp_dialog > recents > workspace_dlg > save_dlg > file_tree > outline > find_rep > mark_dlg > goto_dlg > palette > normal
 	if e.delete_confirm       { delete_confirm_handle_input(e); return }
+	if e.git_dialog.visible   { git_dialog_handle_input(&e.git_dialog, e); return }
 	if e.lsp_dialog.visible   { lsp_dialog_handle_input(&e.lsp_dialog, e); return }
 	if e.recents.open         { recents_handle_input(&e.recents, e); return }
 	if e.workspace_dlg.open   { workspace_dialog_handle_input(&e.workspace_dlg, e); return }
@@ -81,12 +85,6 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	// Ctrl+; open file tree
 	if ctrl() && rl.IsKeyPressed(.SEMICOLON) {
 		file_tree_open(&e.file_tree)
-		return
-	}
-
-	// Ctrl+L open LSP control dialog
-	if ctrl() && rl.IsKeyPressed(.L) {
-		lsp_dialog_open(&e.lsp_dialog)
 		return
 	}
 

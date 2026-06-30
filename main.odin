@@ -34,6 +34,7 @@ main :: proc() {
 	}
 
 	editor_lsp_init(&e)
+	editor_git_init(&e)
 	if len(os.args) > 1 {
 		lsp_on_open(&e, active_pane(&e))
 	}
@@ -43,6 +44,7 @@ main :: proc() {
 
 		handle_input(&e, font)
 		lsp_update(&e, dt)
+		git_update(&e, dt)
 
 		rl.BeginDrawing()
 		render(&e, font)

@@ -38,10 +38,12 @@ sig_help_request :: proc(c: ^Language_Client, path: string, line, char: int, ret
 	if retrigger { trigger_kind = 3 }
 
 	uri    := path_to_uri(path)
-	params := fmt.tprintf(
-		`{"textDocument":{"uri":%s},"position":{"line":%d,"character":%d},"context":{"triggerKind":%d,"isRetrigger":%v}}`,
-		json_str(uri), line, char, trigger_kind, retrigger,
-	)
+	ret_s  := retrigger ? "true" : "false"
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(uri), `},"position":{"line":`, fmt.tprintf("%d", line),
+		`,"character":`, fmt.tprintf("%d", char), `},"context":{"triggerKind":`, fmt.tprintf("%d", trigger_kind),
+		`,"isRetrigger":`, ret_s, `}}`,
+	}, context.temp_allocator)
 
 	m.state = .Pending
 	m.request_id = client_send_request(c, "textDocument/signatureHelp", params, Response_Callback{

@@ -87,6 +87,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	// Workspace picker — rendered above everything except palette
 	render_workspace_dialog(&e.workspace_dlg, font, sw, sh)
 
+	// Git panel
+	git_dialog_draw(&e.git_dialog, e, font)
+
 	// LSP control dialog
 	render_lsp_dialog(&e.lsp_dialog, e, font, sw, sh)
 
@@ -161,6 +164,9 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		if is_active && li == cur_line {
 			rl.DrawRectangleV({ox, y}, {ow, ch}, CUR_LINE_BG)
 		}
+
+		// Git gutter mark (thin colored bar at left edge of gutter)
+		git_draw_line_mark(e, p.filename, li + 1, ox, y, ch)
 
 		// Line number — right-aligned in gutter
 		ln_col  := LINENUM_CUR if li == cur_line else LINENUM
@@ -311,6 +317,14 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		lsp_w := rl.MeasureTextEx(font, to_cstring(lsp_str), FONT_SIZE - 2, CHAR_SPACING).x
 		lsp_x := ox + ow - pos_w - lsp_w
 		rl.DrawTextEx(font, to_cstring(lsp_str), {lsp_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, lsp_col)
+
+		// Git branch badge (right side, left of LSP)
+		if e.git_mgr.current.branch != "" {
+			br_str := fmt.tprintf(" %s ", e.git_mgr.current.branch)
+			br_col := rl.Color{166, 227, 161, 255}
+			br_w   := rl.MeasureTextEx(font, to_cstring(br_str), FONT_SIZE - 2, CHAR_SPACING).x
+			rl.DrawTextEx(font, to_cstring(br_str), {lsp_x - br_w, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, br_col)
+		}
 	}
 
 	// Active pane indicator: accent left border on status bar
@@ -385,19 +399,19 @@ render_delete_confirm :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	py := (sh - PANEL_H) * 0.5
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	rl.DrawRectangleV({px, py}, {PANEL_W, PANEL_H}, PANEL_BG)
-	rl.DrawRectangleLinesEx({px, py, PANEL_W, PANEL_H}, 1, DANGER)
+	dlg_begin(px, py, PANEL_W, PANEL_H, PANEL_BG, DANGER)
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 
 	rl.DrawTextEx(font, "Delete file?", {px + 16, py + 12}, FONT_SIZE, CHAR_SPACING, DANGER)
 
-	bname := to_cstring(path_basename(p.filename) if p.filename != "" else "untitled")
-	rl.DrawTextEx(font, bname, {px + 16, py + 12 + ref.y + 6}, FONT_SIZE, CHAR_SPACING, TEXT)
+	bname := path_basename(p.filename) if p.filename != "" else "untitled"
+	dlg_text(font, bname, px + 16, py + 12 + ref.y + 6, FONT_SIZE, CHAR_SPACING, TEXT, px + PANEL_W, 12)
 
 	hint   := to_cstring("Y  confirm  *  Esc / N  cancel")
 	hint_w := rl.MeasureTextEx(font, hint, FONT_SIZE - 2, CHAR_SPACING).x
 	rl.DrawTextEx(font, hint, {px + (PANEL_W - hint_w)*0.5, py + PANEL_H - ref.y - 10}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }
 
 render_mark_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
@@ -495,8 +509,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	px := sw - W - 4
 	py := f32(4)
 
-	rl.DrawRectangleV({px, py}, {W, panel_h}, DIALOG_BG)
-	rl.DrawRectangleLinesEx({px, py, W, panel_h}, 1, BORDER)
+	dlg_begin(px, py, W, panel_h, DIALOG_BG, BORDER)
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 	cy  := py + PAD
@@ -545,6 +558,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		rl.DrawRectangleV({s0x + s0w, s0ty}, {2, ref.y}, CURSOR_COL)
 	}
 	rl.EndScissorMode()
+	dlg_restore()
 
 	// Toggle buttons: [Aa] [ab] [.*]
 	tog_labels  := [3]cstring{"Aa", "ab", " *"}
@@ -581,6 +595,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			rl.DrawRectangleV({s1x + s1w, s1ty}, {2, ref.y}, CURSOR_COL)
 		}
 		rl.EndScissorMode()
+		dlg_restore()
 		cy += INPUT_H + PAD
 	}
 
@@ -669,6 +684,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			rl.DrawTextEx(font, to_cstring(pst), {content_x - offset + pre_w + mat_w, item_ty},
 			              FONT_SIZE, CHAR_SPACING, TEXT)
 			rl.EndScissorMode()
+			dlg_restore()
 		}
 
 		cy += f32(n_vis)*ITEM_H + SEP_H
@@ -680,6 +696,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	              {px + PAD, cy + 2}, hs, CHAR_SPACING, SUBDUED)
 	rl.DrawTextEx(font, "Tab:switch  ↑↓:next  Enter:replace  Esc:close",
 	              {px + PAD, cy + 2 + hs + 2}, hs, CHAR_SPACING, SUBDUED)
+	dlg_end()
 }
 
 adjust_scroll :: proc(p: ^Pane, vis: int) {
