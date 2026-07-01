@@ -1,11 +1,11 @@
-#+build !windows
+#+build linux, darwin
 package lsp
 
+import "core:c"
 import "core:fmt"
 import "core:strings"
 import "core:sync"
 import "core:thread"
-import linux "core:sys/linux"
 import "core:sys/posix"
 
 // ---------------------------------------------------------------------------
@@ -13,25 +13,25 @@ import "core:sys/posix"
 // ---------------------------------------------------------------------------
 
 Server_Process :: struct {
-	pid:       linux.Pid,
-	stdin_fd:  linux.Fd,
-	stdout_fd: linux.Fd,
+	pid:       posix.pid_t,
+	stdin_fd:  posix.FD,
+	stdout_fd: posix.FD,
 	running:   bool,
 }
 
 spawn_server :: proc(cmd: []string) -> (proc_: Server_Process, ok: bool) {
 	if len(cmd) == 0 { log_writef("ERR", "spawn_server: empty command"); return {}, false }
 
-	stdin_pipe:  [2]linux.Fd
-	stdout_pipe: [2]linux.Fd
+	stdin_pipe:  [2]posix.FD
+	stdout_pipe: [2]posix.FD
 
-	if e := linux.pipe2(&stdin_pipe,  {.CLOEXEC}); e != .NONE {
-		log_writef("ERR", fmt.tprintf("pipe2(stdin) failed: %v", e))
+	if posix.pipe(&stdin_pipe) != .OK {
+		log_writef("ERR", "pipe(stdin) failed")
 		return {}, false
 	}
-	if e := linux.pipe2(&stdout_pipe, {.CLOEXEC}); e != .NONE {
-		log_writef("ERR", fmt.tprintf("pipe2(stdout) failed: %v", e))
-		linux.close(stdin_pipe[0]); linux.close(stdin_pipe[1])
+	if posix.pipe(&stdout_pipe) != .OK {
+		log_writef("ERR", "pipe(stdout) failed")
+		posix.close(stdin_pipe[0]); posix.close(stdin_pipe[1])
 		return {}, false
 	}
 
@@ -40,25 +40,27 @@ spawn_server :: proc(cmd: []string) -> (proc_: Server_Process, ok: bool) {
 	argv[len(cmd)] = nil
 
 	log_writef("INF", fmt.tprintf("fork+exec: %s", cmd[0]))
-	pid, fork_err := linux.fork()
-	if fork_err != .NONE {
-		log_writef("ERR", fmt.tprintf("fork failed: %v", fork_err))
-		linux.close(stdin_pipe[0]);  linux.close(stdin_pipe[1])
-		linux.close(stdout_pipe[0]); linux.close(stdout_pipe[1])
+	pid := posix.fork()
+	if pid < 0 {
+		log_writef("ERR", "fork failed")
+		posix.close(stdin_pipe[0]);  posix.close(stdin_pipe[1])
+		posix.close(stdout_pipe[0]); posix.close(stdout_pipe[1])
 		return {}, false
 	}
 
 	if pid == 0 {
-		linux.dup2(stdin_pipe[0],  0)
-		linux.dup2(stdout_pipe[1], 1)
-		linux.close(stdin_pipe[0]);  linux.close(stdin_pipe[1])
-		linux.close(stdout_pipe[0]); linux.close(stdout_pipe[1])
+		// Child process
+		posix.dup2(stdin_pipe[0],  posix.FD(0))
+		posix.dup2(stdout_pipe[1], posix.FD(1))
+		posix.close(stdin_pipe[0]);  posix.close(stdin_pipe[1])
+		posix.close(stdout_pipe[0]); posix.close(stdout_pipe[1])
 		posix.execvp(argv[0], raw_data(argv))
-		linux.exit(1)
+		posix.exit(1)
 	}
 
-	linux.close(stdin_pipe[0])
-	linux.close(stdout_pipe[1])
+	// Parent
+	posix.close(stdin_pipe[0])
+	posix.close(stdout_pipe[1])
 
 	return Server_Process{
 		pid       = pid,
@@ -70,21 +72,21 @@ spawn_server :: proc(cmd: []string) -> (proc_: Server_Process, ok: bool) {
 
 process_kill :: proc(p: ^Server_Process) {
 	if !p.running { return }
-	linux.kill(p.pid, .SIGTERM)
-	linux.waitpid(p.pid, nil, {}, nil)
-	linux.close(p.stdin_fd)
-	linux.close(p.stdout_fd)
+	posix.kill(p.pid, .SIGTERM)
+	posix.waitpid(p.pid, nil, {})
+	posix.close(p.stdin_fd)
+	posix.close(p.stdout_fd)
 	p.running = false
 }
 
 // Returns (exited, exit_code). Non-blocking check.
 process_poll :: proc(p: ^Server_Process) -> (exited: bool, exit_code: int) {
 	if !p.running { return true, 0 }
-	status: u32
-	wpid, _ := linux.waitpid(p.pid, &status, {.WNOHANG}, nil)
+	status: c.int
+	wpid := posix.waitpid(p.pid, &status, {.NOHANG})
 	if wpid > 0 {
 		p.running = false
-		return true, int((status >> 8) & 0xff)
+		return true, int((u32(status) >> 8) & 0xff)
 	}
 	return false, 0
 }
@@ -94,7 +96,7 @@ process_poll :: proc(p: ^Server_Process) -> (exited: bool, exit_code: int) {
 // ---------------------------------------------------------------------------
 
 Read_Thread_Data :: struct {
-	fd:    linux.Fd,
+	fd:    posix.FD,
 	queue: ^Read_Queue,
 	done:  bool,
 }
@@ -115,9 +117,9 @@ _read_thread_proc :: proc(t: ^thread.Thread) {
 			buf = new_buf
 		}
 
-		n, err := linux.read(d.fd, buf[filled:])
-		if err != .NONE || n <= 0 { break }
-		filled += n
+		n := posix.read(d.fd, raw_data(buf[filled:]), c.size_t(uint(len(buf)) - uint(filled)))
+		if n <= 0 { break }
+		filled += int(n)
 
 		for {
 			content_len, header_end := parse_header(buf[:filled])
@@ -138,7 +140,7 @@ _read_thread_proc :: proc(t: ^thread.Thread) {
 // ---------------------------------------------------------------------------
 
 Write_Thread_Data :: struct {
-	fd:    linux.Fd,
+	fd:    posix.FD,
 	queue: ^Write_Queue,
 }
 
@@ -164,9 +166,9 @@ _write_thread_proc :: proc(t: ^thread.Thread) {
 			if pipe_ok {
 				written := 0
 				for written < len(item) {
-					n, err := linux.write(d.fd, item[written:])
-					if err != .NONE || n <= 0 { pipe_ok = false; break }
-					written += n
+					n := posix.write(d.fd, raw_data(item[written:]), c.size_t(uint(len(item)) - uint(written)))
+					if n <= 0 { pipe_ok = false; break }
+					written += int(n)
 				}
 			}
 			delete(item)
@@ -235,7 +237,7 @@ transport_stop :: proc(t: ^Transport) {
 	t.read_data.done = true
 	wq_stop(&t.outbox)
 
-	linux.close(t.process.stdout_fd)
+	posix.close(t.process.stdout_fd)
 
 	thread.join(t.read_thread)
 	thread.join(t.write_thread)
