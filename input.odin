@@ -65,7 +65,7 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		return
 	}
 
-	if ctrl() && rl.IsKeyPressed(.P) {
+	if ctrl() && shift() && rl.IsKeyPressed(.P) {
 		palette_open(&e.palette)
 		return
 	}
@@ -218,7 +218,11 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		if rl.IsKeyPressed(.D) { do_kill_line(p); lsp_on_text_changed(e, p); return }
 		if rl.IsKeyPressed(.A) { mc_clear(p); sel_all(p); return }
 		if rl.IsKeyPressed(.C) { copy_sel(p);              return }
-		if rl.IsKeyPressed(.X) { cut_sel(p); lsp_on_text_changed(e, p); return }
+		if rl.IsKeyPressed(.W) { editor_split(e, .Vertical); return }
+		if rl.IsKeyPressed(.X) {
+			if len(e.panes) > 1 { editor_close_split(e); return }
+			cut_sel(p); lsp_on_text_changed(e, p); return
+		}
 		if rl.IsKeyPressed(.V) { paste(p); lsp_on_text_changed(e, p); return }
 		if rl.IsKeyPressed(.F) { find_replace_open(e); return }
 		if rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return }
