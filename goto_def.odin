@@ -581,14 +581,14 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 	ITEM_H   :: f32(48)
 	FOOTER_H :: f32(26)
 
-	OVERLAY  :: rl.Color{0,   0,   0,   160}
-	PANEL_BG :: rl.Color{30,  30,  46,  255}
-	BORDER   :: rl.Color{58,  60,  78,  255}
-	SEL_BG   :: rl.Color{69,  71,  90,  255}
-	ACCENT   :: rl.Color{137, 180, 250, 255}
-	SUBDUED  :: rl.Color{108, 112, 134, 255}
-	HDR_BG   :: rl.Color{24,  24,  37,  255}
-	PREV_COL :: rl.Color{205, 214, 244, 180}
+	OVERLAY  :: rl.Color{0, 0, 0, 160}
+	PANEL_BG := BG
+	BORDER   := DIVIDER_COL
+	SEL_BG   := SEL_BG
+	ACCENT   := ACCENT_COL
+	SUBDUED  := LINENUM
+	HDR_BG   := STATUS_BG
+	PREV_COL := rl.Color{TEXT.r, TEXT.g, TEXT.b, 180}
 
 	n   := len(dp.results)
 	vis := min(n, DEF_MAX_VIS)

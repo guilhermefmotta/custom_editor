@@ -1,22 +1,32 @@
 package editor
 
 import "core:fmt"
-import lsp "./lsp"
-import rl "vendor:raylib"
+import lsp  "./lsp"
+import dbg  "./debug"
+import conf "./config"
+import rl   "vendor:raylib"
 
-// Catppuccin Mocha
-BG          :: rl.Color{30,  30,  46,  255}
-TEXT        :: rl.Color{205, 214, 244, 255}
-CURSOR_COL  :: rl.Color{137, 180, 250, 255}
-LINENUM       :: rl.Color{88,  91,  112, 255}
-LINENUM_CUR   :: rl.Color{205, 214, 244, 255}
-CUR_LINE_BG   :: rl.Color{40,  40,  58,  255}
-STATUS_BG   :: rl.Color{24,  24,  37,  255}
-SEL_BG      :: rl.Color{69,  71,  90,  255}
-MSG_COL     :: rl.Color{243, 139, 168, 255}
-DIVIDER_COL :: rl.Color{49,  50,  68,  255}
-ACCENT_COL  :: rl.Color{137, 180, 250, 255}
-INACTIVE_TOP:: rl.Color{49,  50,  68,  255}
+// Mutable — updated each frame from active theme (default: Catppuccin Mocha)
+BG           := rl.Color{30,  30,  46,  255}
+TEXT         := rl.Color{205, 214, 244, 255}
+CURSOR_COL   := rl.Color{137, 180, 250, 255}
+LINENUM      := rl.Color{88,  91,  112, 255}
+LINENUM_CUR  := rl.Color{205, 214, 244, 255}
+CUR_LINE_BG  := rl.Color{40,  40,  58,  255}
+STATUS_BG    := rl.Color{24,  24,  37,  255}
+SEL_BG       := rl.Color{69,  71,  90,  255}
+MSG_COL      := rl.Color{243, 139, 168, 255}
+DIVIDER_COL  := rl.Color{49,  50,  68,  255}
+ACCENT_COL   := rl.Color{137, 180, 250, 255}
+INACTIVE_TOP := rl.Color{49,  50,  68,  255}
+DIAG_WARN_COL:= rl.Color{249, 226, 175, 255}
+DIAG_INFO_COL:= rl.Color{137, 180, 250, 255}
+DIAG_HINT_COL:= rl.Color{166, 227, 161, 255}
+FUNC_COL     := rl.Color{137, 180, 250, 255}
+DIFF_ADD_COL := rl.Color{166, 227, 161, 255}
+DIFF_ADD_BG  := rl.Color{30,  50,  35,  255}
+DIFF_DEL_COL := rl.Color{243, 139, 168, 255}
+DIFF_DEL_BG  := rl.Color{50,  30,  35,  255}
 
 FONT_SIZE    : f32 = 18 // mutable — changed by Ctrl+= / Ctrl+-
 CHAR_SPACING : f32 : 0
@@ -30,10 +40,100 @@ STATUS_H     :: f32(22) // per-pane status bar height
 
 SCROLL_SPEED :: f32(15) // scroll animation lerp speed
 
+// Convert config.Color [4]u8 → rl.Color
+@(private="file")
+_c :: #force_inline proc(c: conf.Color) -> rl.Color { return {c[0], c[1], c[2], c[3]} }
+
+// Pull all UI + syntax colors from active theme into package-level mutable vars.
+// Called every frame so switching theme takes effect immediately.
+_apply_theme :: proc(e: ^Editor) {
+	t := conf.registry_active_theme(&e.registry)
+	if t == nil { return }
+	ui := t.ui
+	BG          = _c(ui.background)
+	TEXT        = _c(ui.foreground)
+	CURSOR_COL  = _c(ui.accent)
+	LINENUM     = _c(ui.line_number)
+	LINENUM_CUR = _c(ui.line_number_cur)
+	CUR_LINE_BG = _c(ui.line_highlight)
+	STATUS_BG   = _c(ui.status_bar_bg)
+	SEL_BG      = _c(ui.selection)
+	MSG_COL     = _c(ui.diag_error)
+	DIVIDER_COL = _c(ui.border)
+	ACCENT_COL  = _c(ui.accent)
+	INACTIVE_TOP= _c(ui.border)
+
+	// Diagnostic / diff semantic colors
+	DIAG_WARN_COL = _c(ui.diag_warn)
+	DIAG_INFO_COL = _c(ui.diag_info)
+	DIAG_HINT_COL = _c(ui.diag_hint)
+	DIFF_ADD_COL  = _c(ui.diag_hint)
+	DIFF_DEL_COL  = _c(ui.diag_error)
+	DIFF_ADD_BG   = _mix_bg(_c(ui.diag_hint),  _c(ui.background))
+	DIFF_DEL_BG   = _mix_bg(_c(ui.diag_error), _c(ui.background))
+
+	// Syntax token colors
+	sx := t.syntax
+	TOKEN_COLORS[.Default]    = _c(sx.variable)
+	TOKEN_COLORS[.Keyword]    = _c(sx.keyword)
+	TOKEN_COLORS[.Type]       = _c(sx.type_)
+	TOKEN_COLORS[.String_Lit] = _c(sx.string_)
+	TOKEN_COLORS[.Number]     = _c(sx.number)
+	TOKEN_COLORS[.Comment]    = _c(sx.comment)
+	TOKEN_COLORS[.Operator]   = _c(sx.operator)
+	TOKEN_COLORS[.Builtin]    = _c(sx.builtin)
+	TOKEN_COLORS[.Macro]      = _c(sx.preproc)
+	TOKEN_COLORS[.Attribute]  = _c(sx.label)
+	FUNC_COL = _c(sx.function_)
+
+	// git_dialog package-level vars
+	GITD_BG      = STATUS_BG
+	GITD_BORDER  = DIVIDER_COL
+	GITD_SEL     = SEL_BG
+	GITD_HEADER  = BG
+	GITD_SECTION = STATUS_BG
+	GITD_GREEN   = DIFF_ADD_COL
+	GITD_GREEN_BG= DIFF_ADD_BG
+	GITD_RED     = DIFF_DEL_COL
+	GITD_RED_BG  = DIFF_DEL_BG
+	GITD_BLUE    = ACCENT_COL
+
+	// suggest_widget package-level vars
+	SUGGEST_BG      = rl.Color{BG.r, BG.g, BG.b, 245}
+	SUGGEST_BORDER  = SEL_BG
+	SUGGEST_SEL     = DIVIDER_COL
+	SUGGEST_SEL_BDR = ACCENT_COL
+	SUGGEST_TEXT    = TEXT
+	SUGGEST_DETAIL  = LINENUM
+	SUGGEST_KIND_FN = FUNC_COL
+	SUGGEST_KIND_KW = TOKEN_COLORS[.Keyword]
+	SUGGEST_KIND_TY = TOKEN_COLORS[.Type]
+	SUGGEST_KIND_VA = TEXT
+	SUGGEST_KIND_SN = TOKEN_COLORS[.Number]
+	SUGGEST_KIND_MO = TOKEN_COLORS[.Builtin]
+	HOVER_BG        = rl.Color{STATUS_BG.r, STATUS_BG.g, STATUS_BG.b, 240}
+	HOVER_BORDER    = SEL_BG
+	SIGH_BG         = rl.Color{BG.r, BG.g, BG.b, 230}
+	SIGH_NORMAL     = TEXT
+	SIGH_BORDER     = SEL_BG
+	SIGH_ACTIVE     = DIAG_WARN_COL
+}
+
+@(private="file")
+_mix_bg :: proc(fg, bg: rl.Color) -> rl.Color {
+	m :: proc(a, b: u8, t: f32) -> u8 { return u8(f32(a)*t + f32(b)*(1.0-t)) }
+	return {m(fg.r,bg.r,0.22), m(fg.g,bg.g,0.22), m(fg.b,bg.b,0.22), 255}
+}
+
 render :: proc(e: ^Editor, font: rl.Font) {
 	sw       := f32(rl.GetScreenWidth())
 	sh       := f32(rl.GetScreenHeight())
 	usable_h := sh - MSG_LINE_H
+
+	_apply_theme(e)
+
+	// Pump debug adapter messages every frame
+	dbg.debug_tick(&e.debug_mgr)
 
 	rl.ClearBackground(BG)
 
@@ -102,8 +202,12 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	// File tree overlay
 	render_file_tree(&e.file_tree, font)
 
+	// Debug dialogs (above most things)
+	debug_eval_draw(&e.debug_eval, e, font, sw, sh)
+	debug_attach_draw(&e.debug_attach, e, font, sw, sh)
+
 	// Palette overlay — always on top
-	palette_render(&e.palette, font)
+	palette_render(&e.palette, e, font)
 }
 
 render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
@@ -145,6 +249,20 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	s_lo              := sel_lo(p) if sel_active else 0
 	s_hi              := sel_hi(p) if sel_active else 0
 
+	// Pre-compute selection line/col for enhanced rendering
+	s_lo_line, s_lo_col, s_hi_line, s_hi_col: int
+	if sel_active {
+		s_lo_line, s_lo_col = buffer_pos_to_line_col(&p.buf, s_lo)
+		s_hi_line, s_hi_col = buffer_pos_to_line_col(&p.buf, s_hi)
+		// Selection ending at col 0 of line N visually ends at end of line N-1
+		if s_hi_col == 0 && s_hi_line > s_lo_line {
+			s_hi_line -= 1
+			s_hi_col   = buffer_line_length(&p.buf, s_hi_line)
+		}
+	}
+	sel_first_y: f32 = -1  // y of first selected visible line
+	sel_last_y:  f32 = -1  // y of last selected visible line
+
 	text_top := oy + PANE_TOP_PAD
 	pane_diags := lsp.manager_get_diags(&e.lsp_mgr, p.filename)
 
@@ -168,6 +286,24 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		// Git gutter mark (thin colored bar at left edge of gutter)
 		git_draw_line_mark(e, p.filename, li + 1, ox, y, ch)
 
+		// Breakpoint circle (red, filled)
+		if p.filename != "" && dbg.bp_has(&e.debug_mgr, p.filename, li + 1) {
+			cx := ox + GUTTER_PAD*1.5
+			cy := y + ch*0.5
+			rl.DrawCircleV({cx, cy}, 5, rl.Color{243, 139, 168, 255})
+		}
+
+		// Current execution line arrow/highlight (when debugger is paused here)
+		if e.debug_mgr.stop_file == p.filename && e.debug_mgr.stop_line == li + 1 {
+			rl.DrawRectangleV({ox, y}, {ow, ch}, rl.Color{249, 226, 175, 30})
+			// Arrow indicator
+			cx := ox + GUTTER_PAD*1.5
+			cy := y + ch*0.5
+			rl.DrawTriangle(
+				{cx - 4, cy - 5}, {cx - 4, cy + 5}, {cx + 5, cy},
+				rl.Color{249, 226, 175, 255})
+		}
+
 		// Line number — right-aligned in gutter
 		ln_col  := LINENUM_CUR if li == cur_line else LINENUM
 		ln_str  := fmt.tprintf("%d", li + 1)
@@ -175,16 +311,21 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		ln_w    := rl.MeasureTextEx(font, ln_cstr, FONT_SIZE, CHAR_SPACING).x
 		rl.DrawTextEx(font, ln_cstr, {text_x - ln_w - GUTTER_PAD, y}, FONT_SIZE, CHAR_SPACING, ln_col)
 
-		// Selection highlight (primary)
+		// Selection highlight (primary) — rounded single-line, extended multi-line
 		line_end := line_start + len(line_bytes)
-		if sel_active {
-			ov_lo := max(s_lo, line_start)
-			ov_hi := min(s_hi, line_end)
-			if ov_lo < ov_hi {
-				rl.DrawRectangleV(
-					{text_x + f32(ov_lo - line_start)*cw, y},
-					{f32(ov_hi - ov_lo)*cw, ch},
-					SEL_BG)
+		if sel_active && li >= s_lo_line && li <= s_hi_line {
+			is_first_sel := li == s_lo_line
+			is_last_sel  := li == s_hi_line
+			xl := text_x + f32(s_lo_col if is_first_sel else 0)*cw
+			xr := text_x + f32(s_hi_col)*cw if is_last_sel else ox + ow
+			if xl < xr {
+				if is_first_sel { sel_first_y = y }
+				if is_last_sel  { sel_last_y  = y }
+				if is_first_sel && is_last_sel {
+					rl.DrawRectangleRounded({xl, y + 1, xr - xl, ch - 2}, 0.35, 6, SEL_BG)
+				} else {
+					rl.DrawRectangleV({xl, y}, {xr - xl, ch}, SEL_BG)
+				}
 			}
 		}
 		// Extra cursor selections
@@ -269,6 +410,29 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 					rl.DrawRectangleV({text_x + f32(ec_col)*cw, y}, {2, ch}, CURSOR_COL)
 				}
 			}
+		}
+	}
+
+	// Selection border outline — drawn after text so it's always visible
+	if sel_active && sel_first_y >= 0 && sel_last_y >= 0 {
+		x_lo    := text_x + f32(s_lo_col)*cw
+		x_hi    := text_x + f32(s_hi_col)*cw
+		x_right := ox + ow
+		y0      := sel_first_y
+		y_last  := sel_last_y
+		bdr     := rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 170}
+
+		if s_lo_line == s_hi_line {
+			rl.DrawRectangleRoundedLinesEx({x_lo, y0 + 1, x_hi - x_lo, ch - 2}, 0.35, 6, 1.5, bdr)
+		} else {
+			rl.DrawLineEx({x_lo,    y0},         {x_right, y0},         1, bdr)  // top of first row
+			rl.DrawLineEx({x_right, y0},         {x_right, y_last},     1, bdr)  // right edge down
+			rl.DrawLineEx({x_right, y_last},     {x_hi,    y_last},     1, bdr)  // step: top of last row
+			rl.DrawLineEx({x_hi,    y_last},     {x_hi,    y_last+ch},  1, bdr)  // right of last row
+			rl.DrawLineEx({x_hi,    y_last+ch},  {text_x,  y_last+ch},  1, bdr)  // bottom
+			rl.DrawLineEx({text_x,  y_last+ch},  {text_x,  y0+ch},      1, bdr)  // left edge up
+			rl.DrawLineEx({text_x,  y0+ch},      {x_lo,    y0+ch},      1, bdr)  // step: bottom of first row
+			rl.DrawLineEx({x_lo,    y0+ch},      {x_lo,    y0},         1, bdr)  // left of first row
 		}
 	}
 

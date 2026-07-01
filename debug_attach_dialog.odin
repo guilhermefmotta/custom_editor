@@ -1,0 +1,235 @@
+package editor
+
+// Attach-to-remote-debugger dialog.
+// Opened from the debug command palette (Attach Remote... command).
+// User enters host + port, presses Enter to connect via TCP.
+
+import rl  "vendor:raylib"
+import fmt "core:fmt"
+import str "core:strings"
+import dbg "./debug"
+
+Debug_Attach_Dialog :: struct {
+	open:      bool,
+	host_buf:  [dynamic]u8,
+	port_buf:  [dynamic]u8,
+	focus:     int,    // 0 = host, 1 = port
+	error_msg: string, // heap; cleared on next open
+}
+
+debug_attach_init :: proc(d: ^Debug_Attach_Dialog) {
+	d.host_buf = make([dynamic]u8)
+	d.port_buf = make([dynamic]u8)
+	// Default host
+	for b in transmute([]u8)string("localhost") {
+		append(&d.host_buf, b)
+	}
+}
+
+debug_attach_destroy :: proc(d: ^Debug_Attach_Dialog) {
+	delete(d.host_buf)
+	delete(d.port_buf)
+	delete(d.error_msg)
+}
+
+debug_attach_open :: proc(d: ^Debug_Attach_Dialog) {
+	d.open  = true
+	d.focus = 1 // start focus on port (host is usually localhost)
+	delete(d.error_msg)
+	d.error_msg = ""
+	// Keep whatever was typed before — user may re-open with same settings
+}
+
+debug_attach_close :: proc(d: ^Debug_Attach_Dialog) {
+	d.open = false
+}
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+
+debug_attach_handle_input :: proc(e: ^Editor, d: ^Debug_Attach_Dialog) {
+	if !d.open { return }
+
+	if rl.IsKeyPressed(.ESCAPE) { debug_attach_close(d); return }
+
+	// Tab switches focus between host and port
+	if rl.IsKeyPressed(.TAB) {
+		d.focus = 1 - d.focus
+		return
+	}
+
+	// Enter → connect
+	if rl.IsKeyPressed(.ENTER) {
+		_do_attach(e, d)
+		return
+	}
+
+	// Backspace on focused field
+	if rl.IsKeyPressed(.BACKSPACE) {
+		buf := _attach_focused_buf(d)
+		if len(buf^) > 0 { pop(buf) }
+		return
+	}
+
+	// Typed characters into focused field
+	ch := rl.GetCharPressed()
+	for ch != 0 {
+		buf := _attach_focused_buf(d)
+		if ch >= 32 && ch < 127 {
+			append(buf, u8(ch))
+		}
+		ch = rl.GetCharPressed()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Draw
+// ---------------------------------------------------------------------------
+
+debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32) {
+	if !d.open { return }
+
+	PANEL_W  :: f32(440)
+	HEADER_H :: f32(36)
+	ROW_H    :: f32(42)
+	FOOTER_H :: f32(50)
+	panel_h  := HEADER_H + ROW_H*2 + FOOTER_H
+
+	BLUE    :: rl.Color{137, 180, 250, 255}
+	BG      :: rl.Color{30,  30,  46,  255}
+	HDR_BG  :: rl.Color{24,  24,  37,  255}
+	BORDER  :: rl.Color{58,  60,  78,  255}
+	TEXT    :: rl.Color{205, 214, 244, 255}
+	SUBDUED :: rl.Color{108, 112, 134, 255}
+	RED     :: rl.Color{243, 139, 168, 255}
+	OVERLAY :: rl.Color{0,   0,   0,   160}
+
+	px := (sw - PANEL_W) * 0.5
+	py := sh * 0.30
+
+	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
+	dlg_begin(px, py, PANEL_W, panel_h, BG, BORDER)
+
+	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
+	cy  := py
+
+	// Header
+	rl.DrawRectangleV({px, cy}, {PANEL_W, HEADER_H}, HDR_BG)
+	rl.DrawLineV({px, cy + HEADER_H - 1}, {px + PANEL_W, cy + HEADER_H - 1}, BORDER)
+	rl.DrawTextEx(font, "Attach to Remote Debugger", {px+12, cy + (HEADER_H-ref.y)*0.5},
+		FONT_SIZE, CHAR_SPACING, BLUE)
+	cy += HEADER_H
+
+	// Host row
+	_draw_field(font, ref, "Host", string(e.debug_attach.host_buf[:]),
+		px, cy, PANEL_W, ROW_H,
+		d.focus == 0, BLUE, TEXT, SUBDUED, BORDER, HDR_BG)
+	cy += ROW_H
+
+	// Port row
+	_draw_field(font, ref, "Port", string(e.debug_attach.port_buf[:]),
+		px, cy, PANEL_W, ROW_H,
+		d.focus == 1, BLUE, TEXT, SUBDUED, BORDER, HDR_BG)
+	cy += ROW_H
+
+	// Footer
+	rl.DrawRectangleV({px, cy}, {PANEL_W, FOOTER_H}, HDR_BG)
+	rl.DrawLineV({px, cy}, {px+PANEL_W, cy}, BORDER)
+
+	if d.error_msg != "" {
+		dlg_text(font, d.error_msg, px+12, cy+8, FONT_SIZE-2, CHAR_SPACING, RED, px+PANEL_W, 10)
+	}
+
+	hint := "Tab switch field  Enter connect  Esc cancel"
+	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE-3, CHAR_SPACING).x
+	rl.DrawTextEx(font, to_cstring(hint),
+		{px + PANEL_W - hw - 10, cy + FOOTER_H - ref.y - 7},
+		FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+
+	dlg_end()
+}
+
+// ---------------------------------------------------------------------------
+// Connect
+// ---------------------------------------------------------------------------
+
+_do_attach :: proc(e: ^Editor, d: ^Debug_Attach_Dialog) {
+	host := str.trim_space(string(d.host_buf[:]))
+	port_s := str.trim_space(string(d.port_buf[:]))
+
+	if host == "" {
+		_attach_set_err(d, "Host cannot be empty")
+		return
+	}
+	if port_s == "" {
+		_attach_set_err(d, "Port cannot be empty")
+		return
+	}
+
+	port := 0
+	ok   := true
+	for ch in port_s {
+		if ch < '0' || ch > '9' { ok = false; break }
+		port = port*10 + int(ch-'0')
+	}
+	if !ok || port <= 0 || port > 65535 {
+		_attach_set_err(d, fmt.tprintf("Invalid port: %s", port_s))
+		return
+	}
+
+	err := dbg.session_attach_tcp(&e.debug_mgr, host, port)
+	if err != "" {
+		_attach_set_err(d, err)
+		return
+	}
+
+	debug_attach_close(d)
+}
+
+_attach_set_err :: proc(d: ^Debug_Attach_Dialog, msg: string) {
+	delete(d.error_msg)
+	d.error_msg = str.clone(msg)
+}
+
+_attach_focused_buf :: proc(d: ^Debug_Attach_Dialog) -> ^[dynamic]u8 {
+	if d.focus == 0 { return &d.host_buf }
+	return &d.port_buf
+}
+
+_draw_field :: proc(font: rl.Font, ref: rl.Vector2,
+	label, value: string,
+	px, cy, pw, row_h: f32,
+	focused: bool,
+	active_bdr, text_col, subdued_col, border_col, bg_col: rl.Color) {
+
+	rl.DrawRectangleV({px, cy}, {pw, row_h}, bg_col)
+	rl.DrawLineV({px, cy + row_h - 1}, {px + pw, cy + row_h - 1}, border_col)
+
+	lbl_w := rl.MeasureTextEx(font, to_cstring(label), FONT_SIZE-2, CHAR_SPACING).x + 8
+	rl.DrawTextEx(font, to_cstring(label),
+		{px+12, cy + (row_h-ref.y)*0.5},
+		FONT_SIZE-2, CHAR_SPACING, subdued_col)
+
+	// Input box
+	bx := px + 12 + lbl_w + 10
+	bw := pw - bx + px - 12
+	bdr := active_bdr if focused else border_col
+	rl.DrawRectangleLinesEx({bx, cy + 7, bw, row_h - 14}, 1, bdr)
+
+	inner_x := bx + 6
+	dlg_text(font, value if value != "" else (label == "Host" ? "localhost" : "port number"),
+		inner_x, cy + (row_h-ref.y)*0.5,
+		FONT_SIZE, CHAR_SPACING,
+		text_col if value != "" else subdued_col,
+		bx + bw, 6)
+
+	// Cursor beam at end of text when focused
+	if focused {
+		vw := rl.MeasureTextEx(font, to_cstring(value), FONT_SIZE, CHAR_SPACING).x
+		beam_x := inner_x + vw
+		if beam_x < bx + bw - 4 {
+			rl.DrawRectangleV({beam_x, cy + (row_h-ref.y)*0.5}, {2, ref.y}, active_bdr)
+		}
+	}
+}

@@ -164,21 +164,19 @@ _lspd_copy_log :: proc(d: ^LSP_Dialog, c: ^lsp.Language_Client) {
 render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32) {
 	if !d.visible { return }
 
-	// Colors (Catppuccin Mocha)
-	OVERLAY   :: rl.Color{0,   0,   0,   160}
-	PANEL_BG  :: rl.Color{30,  30,  46,  255}
-	PANEL_BOR :: rl.Color{58,  60,  78,  255}
-	HEADER_BG :: rl.Color{24,  24,  37,  255}
-	INFO_BG   :: rl.Color{36,  36,  54,  255}
-	SHADOW    :: rl.Color{0,   0,   0,   90}
-	ACCENT    :: rl.Color{137, 180, 250, 255}
-	GREEN     :: rl.Color{166, 227, 161, 255}
-	YELLOW    :: rl.Color{249, 226, 175, 255}
-	RED       :: rl.Color{243, 139, 168, 255}
-	PEACH     :: rl.Color{250, 179, 135, 255}
-	TEXT      :: rl.Color{205, 214, 244, 255}
-	SUBDUED   :: rl.Color{108, 112, 134, 255}
-	SEL_BG    :: rl.Color{49,  50,  68,  255}
+	OVERLAY   :: rl.Color{0, 0, 0, 160}
+	SHADOW    :: rl.Color{0, 0, 0, 90}
+	PANEL_BG  := BG
+	PANEL_BOR := DIVIDER_COL
+	HEADER_BG := STATUS_BG
+	INFO_BG   := BG
+	ACCENT    := ACCENT_COL
+	GREEN     := DIAG_HINT_COL
+	YELLOW    := DIAG_WARN_COL
+	RED       := MSG_COL
+	PEACH     := DIAG_WARN_COL
+	SUBDUED   := LINENUM
+	// TEXT and SEL_BG shadow package-level vars of same name — use them directly
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 
@@ -390,36 +388,27 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 // ---------------------------------------------------------------------------
 
 _lspd_state :: proc(c: ^lsp.Language_Client) -> (label: string, col: rl.Color) {
-	YELLOW :: rl.Color{249, 226, 175, 255}
-	GREEN  :: rl.Color{166, 227, 161, 255}
-	RED    :: rl.Color{243, 139, 168, 255}
-	SUBDUED :: rl.Color{108, 112, 134, 255}
-
-	if c == nil { return "not started", SUBDUED }
+	if c == nil { return "not started", LINENUM }
 	switch c.state {
-	case .Created, .Starting:     return "starting...", YELLOW
-	case .Initializing:           return "initializing...", YELLOW
-	case .Running:                return "running", GREEN
-	case .Shutting_Down:          return "stopping...", YELLOW
+	case .Created, .Starting:     return "starting...", DIAG_WARN_COL
+	case .Initializing:           return "initializing...", DIAG_WARN_COL
+	case .Running:                return "running", DIAG_HINT_COL
+	case .Shutting_Down:          return "stopping...", DIAG_WARN_COL
 	case .Stopped:
-		if c.error_msg != "" { return "error", RED }
-		return "stopped", SUBDUED
+		if c.error_msg != "" { return "error", MSG_COL }
+		return "stopped", LINENUM
 	}
-	return "unknown", SUBDUED
+	return "unknown", LINENUM
 }
 
 _lspd_log_level :: proc(level: lsp.LSP_Log_Level) -> (label: string, col: rl.Color) {
-	RED    :: rl.Color{243, 139, 168, 255}
-	ORANGE :: rl.Color{250, 179, 135, 255}
-	BLUE   :: rl.Color{137, 180, 250, 255}
-	SUBDUED :: rl.Color{108, 112, 134, 255}
 
 	switch level {
-	case .Error:   return "[ERR]", RED
-	case .Warning: return "[WRN]", ORANGE
-	case .Info:    return "[INF]", BLUE
-	case .Log:     return "[LOG]", SUBDUED
+	case .Error:   return "[ERR]", MSG_COL
+	case .Warning: return "[WRN]", DIAG_WARN_COL
+	case .Info:    return "[INF]", ACCENT_COL
+	case .Log:     return "[LOG]", LINENUM
 	}
-	return "[???]", SUBDUED
+	return "[???]", LINENUM
 }
 

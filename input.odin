@@ -1,8 +1,9 @@
 package editor
 
 import "core:fmt"
-import re "core:text/regex"
-import rl "vendor:raylib"
+import re  "core:text/regex"
+import dbg "./debug"
+import rl  "vendor:raylib"
 
 ctrl  :: proc() -> bool { return rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) }
 shift :: proc() -> bool { return rl.IsKeyDown(.LEFT_SHIFT)   || rl.IsKeyDown(.RIGHT_SHIFT) }
@@ -55,6 +56,10 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	if e.goto_dlg.open   { goto_dialog_handle_input(e); return }
 	if e.def_picker.open { goto_def_picker_handle_input(e); return }
 
+	// Debug dialogs — high priority, before other key bindings
+	if e.debug_attach.open { debug_attach_handle_input(e, &e.debug_attach); return }
+	if e.debug_eval.open   { debug_eval_handle_input(e, &e.debug_eval); return }
+
 	if e.palette.open {
 		palette_handle_input(&e.palette, e)
 		return
@@ -62,6 +67,48 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 
 	if ctrl() && rl.IsKeyPressed(.P) {
 		palette_open(&e.palette)
+		return
+	}
+
+	// ── Debug shortcuts ──────────────────────────────────────────
+	// F9 → toggle breakpoint at current line
+	if rl.IsKeyPressed(.F9) {
+		p := active_pane(e)
+		if p.filename != "" {
+			line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)
+			_dbg_bp_toggle(e, p.filename, line + 1)
+		}
+		return
+	}
+	// F5 → start or continue
+	if rl.IsKeyPressed(.F5) {
+		import_dbg_start_or_continue(e)
+		return
+	}
+	// Shift+F5 → stop
+	if shift() && rl.IsKeyPressed(.F5) {
+		import_dbg_stop(e)
+		return
+	}
+	// F10 → step over
+	if rl.IsKeyPressed(.F10) {
+		import_dbg_next(e)
+		return
+	}
+	// F11 → step into
+	if rl.IsKeyPressed(.F11) && !shift() {
+		import_dbg_step_in(e)
+		return
+	}
+	// Shift+F11 → step out
+	if shift() && rl.IsKeyPressed(.F11) {
+		import_dbg_step_out(e)
+		return
+	}
+	// Ctrl+E → evaluate selected text
+	if ctrl() && rl.IsKeyPressed(.E) {
+		sel := _get_selected_text(active_pane(e))
+		debug_eval_open(&e.debug_eval, sel)
 		return
 	}
 
@@ -970,3 +1017,25 @@ find_replace_replace_all :: proc(e: ^Editor) {
 	find_replace_scan(fr, p)
 	e.msg = fmt.tprintf("Replaced %d occurrences", count)
 }
+
+// ---------------------------------------------------------------------------
+// Debug input helpers
+// ---------------------------------------------------------------------------
+
+_dbg_bp_toggle :: proc(e: ^Editor, file: string, line: int) {
+	dbg.bp_toggle(&e.debug_mgr, file, line)
+}
+
+import_dbg_start_or_continue :: proc(e: ^Editor) {
+	state := dbg.manager_get_state(&e.debug_mgr)
+	switch state {
+	case .Idle:    dbg.session_start(&e.debug_mgr)
+	case .Paused:  dbg.debug_continue(&e.debug_mgr)
+	case .Running, .Starting, .Stopping: // no-op
+	}
+}
+
+import_dbg_stop    :: proc(e: ^Editor) { dbg.session_stop(&e.debug_mgr) }
+import_dbg_next    :: proc(e: ^Editor) { dbg.debug_next(&e.debug_mgr) }
+import_dbg_step_in :: proc(e: ^Editor) { dbg.debug_step_in(&e.debug_mgr) }
+import_dbg_step_out :: proc(e: ^Editor) { dbg.debug_step_out(&e.debug_mgr) }

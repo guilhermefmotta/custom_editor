@@ -472,19 +472,19 @@ _ws_clean_for_stat :: proc(path: string, allocator := context.temp_allocator) ->
 render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32) {
 	if !d.open { return }
 
-	OVERLAY   :: rl.Color{0,   0,   0,   170}
-	PANEL_BG  :: rl.Color{30,  30,  46,  255}
-	PANEL_BOR :: rl.Color{58,  60,  78,  255}
-	INPUT_BG  :: rl.Color{24,  24,  37,  255}
-	HEADER_BG :: rl.Color{24,  24,  37,  255}
-	SEL_BG_W  :: rl.Color{69,  71,  90,  255}
-	ACCENT    :: rl.Color{137, 180, 250, 255}
-	SUBDUED   :: rl.Color{108, 112, 134, 255}
-	DIR_COL   :: rl.Color{166, 227, 161, 255}
-	FILE_COL  :: rl.Color{205, 214, 244, 255}
-	ERR_COL   :: rl.Color{243, 139, 168, 255}
-	WARN_COL  :: rl.Color{250, 179, 135, 255}
-	SHADOW    :: rl.Color{0,   0,   0,   90}
+	OVERLAY   :: rl.Color{0, 0, 0, 170}
+	SHADOW    :: rl.Color{0, 0, 0, 90}
+	PANEL_BG  := BG
+	PANEL_BOR := DIVIDER_COL
+	INPUT_BG  := STATUS_BG
+	HEADER_BG := STATUS_BG
+	SEL_BG_W  := SEL_BG
+	ACCENT    := ACCENT_COL
+	SUBDUED   := LINENUM
+	DIR_COL   := DIAG_HINT_COL
+	FILE_COL  := TEXT
+	ERR_COL   := MSG_COL
+	WARN_COL  := DIAG_WARN_COL
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 	ch  := ref.y + LINE_SPACING

@@ -2,9 +2,11 @@ package editor
 
 import "core:fmt"
 import "core:os"
+import "core:sort"
 import "core:strings"
 import "core:sync"
-import rl "vendor:raylib"
+import rl   "vendor:raylib"
+import conf "./config"
 
 // ---- Command pattern ----
 
@@ -16,7 +18,7 @@ Command :: struct {
 
 // ---- Palette state ----
 
-Palette_Mode :: enum { Commands, Files, Search, Marks }
+Palette_Mode :: enum { Commands, Files, Search, Marks, Themes }
 
 Palette :: struct {
 	open:         bool,
@@ -27,6 +29,7 @@ Palette :: struct {
 	scroll:       int,
 	cmds:         [dynamic]Command,
 	files:        [dynamic]string,
+	themes:       [dynamic]string, // theme names for .Themes mode
 	cwd:          string,
 	search:       Search_State,
 	search_timer: f32,
@@ -39,6 +42,7 @@ palette_init :: proc() -> Palette {
 	p: Palette
 	p.query  = make([dynamic]u8)
 	p.files  = make([dynamic]string)
+	p.themes = make([dynamic]string)
 	p.cmds   = make([dynamic]Command)
 	p.search = search_state_init()
 
@@ -62,7 +66,9 @@ palette_init :: proc() -> Palette {
 		Command{"Exit",                     "Quit the editor",                                  cmd_exit},
 		Command{"LSP Control",              "Open LSP server control panel",                    cmd_lsp_control},
 		Command{"Git",                      "Open Git panel (stage, commit, diff)",             cmd_git_panel},
+		Command{"Switch Theme",             "Browse and apply editor color themes",             cmd_switch_theme},
 	)
+	register_debug_commands(&p)
 
 	cwd, err := os.get_working_directory(context.allocator)
 	if err == nil { p.cwd = cwd }
@@ -73,8 +79,8 @@ palette_destroy :: proc(p: ^Palette) {
 	search_state_destroy(&p.search)
 	delete(p.query)
 	delete(p.cmds)
-	for f in p.files { delete(f) }
-	delete(p.files)
+	for f in p.files  { delete(f) }; delete(p.files)
+	for t in p.themes { delete(t) }; delete(p.themes)
 	if p.cwd != "" { delete(p.cwd) }
 	p^ = {}
 }
@@ -89,6 +95,20 @@ palette_open :: proc(p: ^Palette) {
 
 palette_close :: proc(p: ^Palette) {
 	p.open = false
+}
+
+palette_open_themes :: proc(p: ^Palette, reg: ^conf.Registry) {
+	for t in p.themes { delete(t) }
+	clear(&p.themes)
+	for name in reg.theme.themes {
+		append(&p.themes, strings.clone(name))
+	}
+	sort.quick_sort(p.themes[:])
+	p.open     = true
+	p.mode     = .Themes
+	p.selected = 0
+	p.scroll   = 0
+	clear(&p.query)
 }
 
 // ---- Input ----
@@ -280,6 +300,19 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 			}
 			vis += 1
 		}
+
+	case .Themes:
+		vis := 0
+		for name in p.themes {
+			if !pal_match(name, q) { continue }
+			if vis == p.selected {
+				conf.registry_set_theme(&e.registry, name)
+				e.cfg.theme_name = name
+				palette_close(p)
+				return
+			}
+			vis += 1
+		}
 	}
 }
 
@@ -352,13 +385,17 @@ palette_count :: proc(p: ^Palette, q: string) -> int {
 		n := 0
 		for m in p.marks^ { if _mark_match(m, q) { n += 1 } }
 		return n
+	case .Themes:
+		n := 0
+		for t in p.themes { if pal_match(t, q) { n += 1 } }
+		return n
 	}
 	return 0
 }
 
 // ---- Rendering ----
 
-palette_render :: proc(p: ^Palette, font: rl.Font) {
+palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	if !p.open { return }
 
 	sw := f32(rl.GetScreenWidth())
@@ -373,15 +410,22 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 	QUERY_H  :: f32(48)
 	FOOTER_H :: f32(30)
 
-	OVERLAY   :: rl.Color{0,   0,   0,   160}
-	PANEL_BG  :: rl.Color{36,  36,  54,  255}
-	PANEL_BOR :: rl.Color{58,  60,  78,  255}
-	INPUT_BG  :: rl.Color{24,  24,  37,  255}
-	SEL_BG_P  :: rl.Color{69,  71,  90,  255}
-	ACCENT    :: rl.Color{137, 180, 250, 255}
-	SUBDUED   :: rl.Color{108, 112, 134, 255}
-	SHADOW    :: rl.Color{0,   0,   0,   80}
-	MATCH_COL :: rl.Color{166, 227, 161, 255}
+	OVERLAY :: rl.Color{0, 0, 0, 160}
+	SHADOW  :: rl.Color{0, 0, 0, 80}
+
+	// Pulled from active theme
+	th := conf.registry_active_theme(&e.registry)
+	_pc :: proc(c: conf.Color) -> rl.Color { return {c[0], c[1], c[2], c[3]} }
+	PANEL_BG  := BG
+	PANEL_BOR := DIVIDER_COL
+	INPUT_BG  := STATUS_BG
+	SEL_BG_P  := SEL_BG
+	ACCENT    := ACCENT_COL
+	SUBDUED   := LINENUM
+	MATCH_COL := rl.Color{166, 227, 161, 255}
+	if th != nil {
+		MATCH_COL = _pc(th.syntax.string_)
+	}
 
 	q       := string(p.query[:])
 	n_items := palette_count(p, q)
@@ -400,7 +444,7 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, QUERY_H}, INPUT_BG)
 	rl.DrawLineV({panel_x, panel_y + QUERY_H - 1}, {panel_x + PANEL_W, panel_y + QUERY_H - 1}, PANEL_BOR)
 
-	icon := ">" if p.mode == .Search else "?"
+	icon := ">" if p.mode == .Search else ("*" if p.mode == .Themes else "?")
 	rl.DrawTextEx(font, to_cstring(icon), {panel_x + 14, panel_y + 14}, FONT_SIZE, CHAR_SPACING, ACCENT)
 
 	if len(q) > 0 {
@@ -420,6 +464,7 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 			.Files    = "Type filename...",
 			.Search   = "Type to search... (Enter to run)",
 			.Marks    = "Filter marks...",
+			.Themes   = "Filter themes...",
 		}
 		placeholder := ph_map[p.mode]
 		rl.DrawTextEx(font, to_cstring(placeholder), {panel_x + 14 + cw + 10, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
@@ -517,6 +562,47 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 				draw_i += 1; data_i += 1
 			}
 		}
+
+	case .Themes:
+		active_name := ""
+		if at := conf.registry_active_theme(&e.registry); at != nil { active_name = at.name }
+		q := string(p.query[:])
+		for name in p.themes {
+			if !pal_match(name, q) { continue }
+			if data_i < p.scroll { data_i += 1; continue }
+			if draw_i >= PALETTE_MAX_VIS { break }
+
+			iy := item_y + f32(draw_i) * ITEM_H
+			if data_i == p.selected {
+				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
+				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
+			}
+
+			// Color swatches — 6 squares from this theme's colors
+			if th, ok := e.registry.theme.themes[name]; ok {
+				swatch_colors := [6]conf.Color{
+					th.ui.background, th.ui.foreground, th.ui.accent,
+					th.syntax.keyword, th.syntax.string_, th.syntax.comment,
+				}
+				sw_x := panel_x + PANEL_W - f32(len(swatch_colors))*16 - 14
+				for sc, si in swatch_colors {
+					rl.DrawRectangleV(
+						{sw_x + f32(si)*16, iy + (ITEM_H-12)*0.5},
+						{13, 12},
+						rl.Color{sc[0], sc[1], sc[2], 255},
+					)
+				}
+			}
+
+			is_active := name == active_name
+			name_col  := TEXT if !is_active else ACCENT
+			dlg_text(font, name, panel_x + 16, iy + (ITEM_H-ch)*0.5, FONT_SIZE, CHAR_SPACING, name_col, txt_max - 110, 0)
+			if is_active {
+				rl.DrawTextEx(font, "active", {panel_x + 16 + rl.MeasureTextEx(font, to_cstring(name), FONT_SIZE, CHAR_SPACING).x + 10, iy + (ITEM_H-ch)*0.5 + 2}, FONT_SIZE-3, CHAR_SPACING, ACCENT)
+			}
+
+			draw_i += 1; data_i += 1
+		}
 	}
 
 	// Footer
@@ -544,6 +630,8 @@ palette_render :: proc(p: ^Palette, font: rl.Font) {
 		n_m := 0
 		if p.marks != nil { n_m = len(p.marks^) }
 		footer_text = fmt.tprintf("%d marks  |  Enter jump  |  Del remove  |  Esc close", n_m)
+	case .Themes:
+		footer_text = fmt.tprintf("%d themes  |  Enter apply  |  Esc close", len(p.themes))
 	}
 	rl.DrawTextEx(font, to_cstring(footer_text), {panel_x + 12, fy + 8}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 	dlg_end()
@@ -690,6 +778,10 @@ cmd_exit :: proc(e: ^Editor, p: ^Palette) {
 cmd_lsp_control :: proc(e: ^Editor, p: ^Palette) {
 	palette_close(p)
 	lsp_dialog_open(&e.lsp_dialog)
+}
+
+cmd_switch_theme :: proc(e: ^Editor, p: ^Palette) {
+	palette_open_themes(p, &e.registry)
 }
 
 // ---- Helpers ----

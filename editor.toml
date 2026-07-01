@@ -275,3 +275,43 @@ when    = "editorFocus"
 command = "editor.jump_up"
 keys    = "Ctrl+Up"
 when    = "editorFocus"
+
+# ---------------------------------------------------------------------------
+# Debug Adapter Protocol (DAP)
+# ---------------------------------------------------------------------------
+
+[dap]
+show_inline_values   = true
+auto_expand_variables = false
+
+[[dap.adapters]]
+id       = "lldb"
+command  = ["lldb-dap"]
+languages = ["c", "cpp", "odin", "objective-c"]
+
+[[dap.adapters]]
+id       = "delve"
+command  = ["dlv", "dap"]
+languages = ["go"]
+
+[[dap.adapters]]
+id       = "debugpy"
+command  = ["python3", "-m", "debugpy.adapter"]
+languages = ["python"]
+
+# ---------------------------------------------------------------------------
+# Launch configurations (Ctrl+Shift+D -> Start Debugging)
+# ---------------------------------------------------------------------------
+
+[[launch]]
+name          = "Debug Current File"
+adapter       = "lldb"
+program       = "${workspace}/editor_dbg"
+cwd           = "${workspace}"
+args          = []
+stop_on_entry = false
+
+[[launch]]
+name          = "Attach to Process"
+adapter       = "lldb"
+attach_pid    = 0

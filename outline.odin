@@ -422,14 +422,14 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	ITEM_H   :: f32(23)
 	FOOTER_H :: f32(26)
 
-	OVERLAY  :: rl.Color{0,   0,   0,   160}
-	PANEL_BG :: rl.Color{30,  30,  46,  255}
-	BORDER   :: rl.Color{58,  60,  78,  255}
-	SEL_BG_C :: rl.Color{69,  71,  90,  255}
-	ACCENT   :: rl.Color{137, 180, 250, 255}
-	SUBDUED  :: rl.Color{108, 112, 134, 255}
-	INPUT_BG :: rl.Color{24,  24,  37,  255}
-	LNUM_COL :: rl.Color{88,  91,  112, 255}
+	OVERLAY  :: rl.Color{0, 0, 0, 160}
+	PANEL_BG := BG
+	BORDER   := DIVIDER_COL
+	SEL_BG_C := SEL_BG
+	ACCENT   := ACCENT_COL
+	SUBDUED  := LINENUM
+	INPUT_BG := STATUS_BG
+	LNUM_COL := LINENUM
 
 	n := len(od.filtered)
 	vis := min(n, OUTLINE_MAX_VIS)

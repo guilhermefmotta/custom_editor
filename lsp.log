@@ -1,2 +1,13 @@
 [lsp] log opened
-[15:06:21] [INF] lsp_manager_init root=/home/evil/Dev/custom_editor
+[22:56:06] [INF] lsp_manager_init root=/home/evil/Dev/custom_editor
+[23:18:05] [INF] spawning: ols
+[23:18:05] [INF] fork+exec: ols
+[23:18:05] [INF] process pid=91718 root=file:///home/evil/Dev/custom_editor
+[23:18:05] [INF] sending initialize pid=88579 root=file:///home/evil/Dev/custom_editor
+[23:18:05] [LOG] params[0:200]: {"processId":88579,"rootUri":"file:///home/evil/Dev/custom_editor","capabilities":{"textDocument":{"synchronization":{"dynamicRegistration":true,"willSave":false,"didSave":true,"willSaveWaitUntil":fal
+[23:18:05] [ERR] Starting Odin Language Server -202605
+[23:18:05] [LOG] ← response id=1
+[23:18:05] [INF] initialized: completion=true hover=true sighelp=true def=true semtok=true sync=2
+[23:18:07] [LOG] ← response id=2
+[23:18:08] [LOG] ← response id=3
+[23:18:13] [LOG] ← response id=4

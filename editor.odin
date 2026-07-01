@@ -6,6 +6,7 @@ import "core:strings"
 import lsp  "./lsp"
 import conf "./config"
 import git  "./git"
+import dbg  "./debug"
 
 Split_Dir :: enum { None, Vertical, Horizontal }
 
@@ -77,6 +78,9 @@ Editor :: struct {
 	lsp_mgr:        lsp.LSP_Manager,
 	cfg:            conf.Config,
 	registry:       conf.Registry,
+	debug_mgr:      dbg.Debug_Manager,
+	debug_eval:     Debug_Eval_Dialog,
+	debug_attach:   Debug_Attach_Dialog,
 }
 
 editor_init :: proc() -> Editor {
@@ -102,6 +106,9 @@ editor_init :: proc() -> Editor {
 	append(&e.panes, pane_init())
 	e.cfg      = conf.load_config(conf.default_config_paths())
 	e.registry = conf.registry_build(&e.cfg, "languages", "themes")
+	dbg.manager_init(&e.debug_mgr)
+	debug_eval_init(&e.debug_eval)
+	debug_attach_init(&e.debug_attach)
 	return e
 }
 
@@ -137,6 +144,9 @@ editor_destroy :: proc(e: ^Editor) {
 	nav_history_destroy(&e.nav_hist)
 	goto_def_picker_destroy(&e.def_picker)
 	editor_lsp_destroy(e)
+	dbg.manager_destroy(&e.debug_mgr)
+	debug_eval_destroy(&e.debug_eval)
+	debug_attach_destroy(&e.debug_attach)
 	conf.registry_destroy(&e.registry)
 	conf.config_destroy(&e.cfg)
 	e^ = {}

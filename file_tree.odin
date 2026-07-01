@@ -315,15 +315,15 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	ITEM_H   :: f32(24)
 	FOOTER_H :: f32(30)
 
-	OVERLAY  :: rl.Color{0,   0,   0,   150}
-	PANEL_BG :: rl.Color{30,  30,  46,  255}
-	PANEL_BOR:: rl.Color{58,  60,  78,  255}
-	SEL_BG_C :: rl.Color{69,  71,  90,  255}
-	ACCENT   :: rl.Color{137, 180, 250, 255}
-	SUBDUED  :: rl.Color{108, 112, 134, 255}
-	DIR_COL  :: rl.Color{166, 227, 161, 255}
-	INPUT_BG :: rl.Color{24,  24,  37,  255}
-	WARN_COL :: rl.Color{243, 139, 168, 255}
+	OVERLAY  :: rl.Color{0, 0, 0, 150}
+	PANEL_BG := BG
+	PANEL_BOR:= DIVIDER_COL
+	SEL_BG_C := SEL_BG
+	ACCENT   := ACCENT_COL
+	SUBDUED  := LINENUM
+	DIR_COL  := DIAG_HINT_COL
+	INPUT_BG := STATUS_BG
+	WARN_COL := MSG_COL
 
 	vis_count := min(len(ft.nodes), FILE_TREE_MAX_VIS)
 	panel_h   := HEADER_H + f32(vis_count)*ITEM_H + FOOTER_H

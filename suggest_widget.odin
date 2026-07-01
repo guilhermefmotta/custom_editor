@@ -9,28 +9,28 @@ import rl "vendor:raylib"
 // Colors — Catppuccin Mocha
 // ---------------------------------------------------------------------------
 
-SUGGEST_BG      :: rl.Color{30,  30,  46,  245}
-SUGGEST_BORDER  :: rl.Color{69,  71,  90,  255}
-SUGGEST_SEL     :: rl.Color{49,  50,  68,  255}
-SUGGEST_SEL_BDR :: rl.Color{137, 180, 250, 255}
-SUGGEST_TEXT    :: rl.Color{205, 214, 244, 255}
-SUGGEST_DETAIL  :: rl.Color{108, 112, 134, 255}
-SUGGEST_KIND_FN :: rl.Color{137, 180, 250, 255} // blue  — function/method
-SUGGEST_KIND_KW :: rl.Color{203, 166, 247, 255} // mauve — keyword
-SUGGEST_KIND_TY :: rl.Color{137, 220, 235, 255} // sky   — type/class
-SUGGEST_KIND_VA :: rl.Color{205, 214, 244, 255} // text  — variable/field
-SUGGEST_KIND_SN :: rl.Color{250, 179, 135, 255} // peach — snippet
-SUGGEST_KIND_MO :: rl.Color{148, 226, 213, 255} // teal  — module/namespace
+SUGGEST_BG      := rl.Color{30,  30,  46,  245}
+SUGGEST_BORDER  := rl.Color{69,  71,  90,  255}
+SUGGEST_SEL     := rl.Color{49,  50,  68,  255}
+SUGGEST_SEL_BDR := rl.Color{137, 180, 250, 255}
+SUGGEST_TEXT    := rl.Color{205, 214, 244, 255}
+SUGGEST_DETAIL  := rl.Color{108, 112, 134, 255}
+SUGGEST_KIND_FN := rl.Color{137, 180, 250, 255}
+SUGGEST_KIND_KW := rl.Color{203, 166, 247, 255}
+SUGGEST_KIND_TY := rl.Color{137, 220, 235, 255}
+SUGGEST_KIND_VA := rl.Color{205, 214, 244, 255}
+SUGGEST_KIND_SN := rl.Color{250, 179, 135, 255}
+SUGGEST_KIND_MO := rl.Color{148, 226, 213, 255}
 
 // Hover popup
-HOVER_BG     :: rl.Color{24, 24, 37, 240}
-HOVER_BORDER :: rl.Color{69, 71, 90, 255}
+HOVER_BG     := rl.Color{24, 24, 37, 240}
+HOVER_BORDER := rl.Color{69, 71, 90, 255}
 
 // Sig help bar
-SIGH_BG      :: rl.Color{30, 30, 46, 230}
-SIGH_ACTIVE  :: rl.Color{250, 179, 135, 255} // peach — active parameter
-SIGH_NORMAL  :: rl.Color{205, 214, 244, 255}
-SIGH_BORDER  :: rl.Color{69, 71, 90, 255}
+SIGH_BG      := rl.Color{30, 30, 46, 230}
+SIGH_ACTIVE  := rl.Color{250, 179, 135, 255}
+SIGH_NORMAL  := rl.Color{205, 214, 244, 255}
+SIGH_BORDER  := rl.Color{69, 71, 90, 255}
 
 // ---------------------------------------------------------------------------
 // Suggest widget state — embedded in Pane

@@ -70,16 +70,16 @@ GITD_HALF_W    :: (GITD_MERGE_W - 4) / 2
 GITD_ROW_MAX   :: 10 // max lines shown per side in merge view
 
 // Colors
-GITD_BG          :: rl.Color{24,  24,  37,  255}
-GITD_BORDER      :: rl.Color{58,  60,  78,  255}
-GITD_SEL         :: rl.Color{45,  50,  70,  255}
-GITD_HEADER      :: rl.Color{30,  30,  46,  255}
-GITD_SECTION     :: rl.Color{49,  50,  68,  255}
-GITD_GREEN       :: rl.Color{166, 227, 161, 255}
-GITD_GREEN_BG    :: rl.Color{30,  50,  35,  255}
-GITD_RED         :: rl.Color{243, 139, 168, 255}
-GITD_RED_BG      :: rl.Color{50,  30,  35,  255}
-GITD_BLUE        :: rl.Color{137, 180, 250, 255}
+GITD_BG       := rl.Color{24,  24,  37,  255}
+GITD_BORDER   := rl.Color{58,  60,  78,  255}
+GITD_SEL      := rl.Color{45,  50,  70,  255}
+GITD_HEADER   := rl.Color{30,  30,  46,  255}
+GITD_SECTION  := rl.Color{49,  50,  68,  255}
+GITD_GREEN    := rl.Color{166, 227, 161, 255}
+GITD_GREEN_BG := rl.Color{30,  50,  35,  255}
+GITD_RED      := rl.Color{243, 139, 168, 255}
+GITD_RED_BG   := rl.Color{50,  30,  35,  255}
+GITD_BLUE     := rl.Color{137, 180, 250, 255}
 GITD_ORANGE      :: rl.Color{250, 179, 135, 255}
 GITD_YELLOW      :: rl.Color{249, 226, 175, 255}
 GITD_SUBDUED     :: rl.Color{108, 112, 134, 255}
