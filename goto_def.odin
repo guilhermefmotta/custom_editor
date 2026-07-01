@@ -98,12 +98,14 @@ Goto_Def_Result :: struct {
 Picker_Mode :: enum { Def, Refs }
 
 Goto_Def_Picker :: struct {
-	open:    bool,
-	mode:    Picker_Mode,
-	word:    string, // heap-owned
-	results: [dynamic]Goto_Def_Result,
-	sel:     int,
-	scroll:  int,
+	open:       bool,
+	mode:       Picker_Mode,
+	word:       string, // heap-owned
+	results:    [dynamic]Goto_Def_Result,
+	sel:        int,
+	scroll:     int,
+	filter:     [256]u8,
+	filter_len: int,
 }
 
 DEF_MAX_VIS :: 12
@@ -125,8 +127,9 @@ _def_picker_clear :: proc(p: ^Goto_Def_Picker) {
 	delete(p.word); p.word = ""
 	for &r in p.results { delete(r.file); delete(r.preview) }
 	clear(&p.results)
-	p.sel    = 0
-	p.scroll = 0
+	p.sel        = 0
+	p.scroll     = 0
+	p.filter_len = 0
 }
 
 // ---- Symbol Extraction ---------------------------------------------------
@@ -537,18 +540,44 @@ _goto_def_jump :: proc(e: ^Editor, r: Goto_Def_Result) {
 
 // ---- Picker Input --------------------------------------------------------
 
+// Build filtered index list from dp.results based on dp.filter. Uses temp allocator.
+_def_filtered :: proc(dp: ^Goto_Def_Picker) -> []int {
+	out := make([dynamic]int, context.temp_allocator)
+	if dp.filter_len == 0 {
+		for i in 0..<len(dp.results) { append(&out, i) }
+		return out[:]
+	}
+	q := string(dp.filter[:dp.filter_len])
+	for i in 0..<len(dp.results) {
+		r := dp.results[i]
+		if strings.contains(r.preview, q) || strings.contains(r.file, q) {
+			append(&out, i)
+		}
+	}
+	return out[:]
+}
+
 goto_def_picker_handle_input :: proc(e: ^Editor) {
 	dp := &e.def_picker
 	if !dp.open { return }
-	n := len(dp.results)
 
 	if rl.IsKeyPressed(.ESCAPE) { dp.open = false; return }
 
+	filtered := _def_filtered(dp)
+	nf := len(filtered)
+
 	if rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.F12) {
-		if dp.sel < n {
-			_goto_def_jump(e, dp.results[dp.sel])
+		if dp.sel < nf {
+			_goto_def_jump(e, dp.results[filtered[dp.sel]])
 			dp.open = false
 		}
+		return
+	}
+
+	// Backspace deletes filter char
+	if key_rep(.BACKSPACE) && dp.filter_len > 0 {
+		dp.filter_len -= 1
+		dp.sel = 0; dp.scroll = 0
 		return
 	}
 
@@ -560,11 +589,25 @@ goto_def_picker_handle_input :: proc(e: ^Editor) {
 		return
 	}
 	if key_rep(.DOWN) {
-		if dp.sel < n - 1 {
+		if dp.sel < nf - 1 {
 			dp.sel += 1
 			if dp.sel >= dp.scroll + DEF_MAX_VIS { dp.scroll = dp.sel - DEF_MAX_VIS + 1 }
 		}
 		return
+	}
+
+	// Printable chars go to filter
+	for {
+		ch := rl.GetCharPressed()
+		if ch == 0 { break }
+		if ch < 32 { continue }
+		enc: [4]u8
+		n := rune_encode(ch, &enc)
+		if dp.filter_len + n <= len(dp.filter) {
+			for k in 0..<n { dp.filter[dp.filter_len + k] = enc[k] }
+			dp.filter_len += n
+			dp.sel = 0; dp.scroll = 0
+		}
 	}
 }
 
@@ -578,6 +621,7 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 
 	PANEL_W  :: f32(600)
 	HDR_H    :: f32(36)
+	FILTER_H :: f32(32)
 	ITEM_H   :: f32(48)
 	FOOTER_H :: f32(26)
 
@@ -590,9 +634,10 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 	HDR_BG   := STATUS_BG
 	PREV_COL := rl.Color{TEXT.r, TEXT.g, TEXT.b, 180}
 
-	n   := len(dp.results)
-	vis := min(n, DEF_MAX_VIS)
-	panel_h := f32(HDR_H) + f32(vis)*ITEM_H + FOOTER_H
+	filtered := _def_filtered(dp)
+	nf  := len(filtered)
+	vis := min(nf, DEF_MAX_VIS)
+	panel_h := HDR_H + FILTER_H + f32(vis)*ITEM_H + FOOTER_H
 
 	px := (sw - PANEL_W) * 0.5
 	py := sh * 0.15
@@ -604,18 +649,29 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 	rl.DrawRectangleV({px, py}, {PANEL_W, HDR_H}, HDR_BG)
 	rl.DrawLineV({px, py + HDR_H - 1}, {px + PANEL_W, py + HDR_H - 1}, BORDER)
 	label := "Go to Definition" if dp.mode == .Def else "Find References"
-	title := fmt.tprintf("%s  —  '%s'  (%d results)", label, dp.word, n)
+	title := fmt.tprintf("%s  —  '%s'  (%d / %d)", label, dp.word, nf, len(dp.results))
 	dlg_text(font, title, px + 10, py + 9, FONT_SIZE, CHAR_SPACING, ACCENT, px + PANEL_W, 10)
 
+	// Filter input row
+	fy_in := py + HDR_H
+	rl.DrawRectangleV({px, fy_in}, {PANEL_W, FILTER_H}, PANEL_BG)
+	rl.DrawLineV({px, fy_in + FILTER_H - 1}, {px + PANEL_W, fy_in + FILTER_H - 1}, BORDER)
+	filter_str := string(dp.filter[:dp.filter_len])
+	placeholder := dp.filter_len == 0
+	filter_disp := filter_str if !placeholder else "filter..."
+	filter_col  := TEXT if !placeholder else SUBDUED
+	dlg_text(font, filter_disp, px + 10, fy_in + 7, FONT_SIZE - 2, CHAR_SPACING, filter_col, px + PANEL_W, 10)
+
 	// Items
-	item_y := py + HDR_H
-	max_s  := max(0, n - DEF_MAX_VIS)
+	item_y := fy_in + FILTER_H
+	max_s  := max(0, nf - DEF_MAX_VIS)
 	if dp.scroll > max_s { dp.scroll = max_s }
 
 	for vi in 0..<vis {
 		fi    := dp.scroll + vi
-		if fi >= n { break }
-		r     := dp.results[fi]
+		if fi >= nf { break }
+		ri    := filtered[fi]
+		r     := dp.results[ri]
 		row_y := item_y + f32(vi)*ITEM_H
 
 		if fi == dp.sel {
@@ -630,11 +686,11 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 	}
 
 	// Footer
-	fy := item_y + f32(vis)*ITEM_H
-	rl.DrawRectangleV({px, fy}, {PANEL_W, FOOTER_H}, HDR_BG)
-	rl.DrawRectangleLinesEx({px, fy, PANEL_W, FOOTER_H}, 1, BORDER)
-	hint := "↑↓ navigate  ·  Enter / F12 jump  ·  Esc close  ·  Ctrl+[ back"
+	footer_y := item_y + f32(vis)*ITEM_H
+	rl.DrawRectangleV({px, footer_y}, {PANEL_W, FOOTER_H}, HDR_BG)
+	rl.DrawRectangleLinesEx({px, footer_y, PANEL_W, FOOTER_H}, 1, BORDER)
+	hint := "type to filter  ·  ↑↓ navigate  ·  Enter jump  ·  Esc close"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hint), {px + PANEL_W - hw - 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	rl.DrawTextEx(font, to_cstring(hint), {px + PANEL_W - hw - 10, footer_y + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	dlg_end()
 }

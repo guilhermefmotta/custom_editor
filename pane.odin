@@ -63,7 +63,9 @@ pane_open :: proc(p: ^Pane, path: string) -> bool {
 	defer delete(data)
 	buffer_destroy(&p.buf)
 	p.buf = buffer_init()
-	buffer_insert_string(&p.buf, 0, string(data))
+	// Strip \r so CRLF files display correctly
+	clean, _ := strings.replace_all(string(data), "\r", "", context.temp_allocator)
+	buffer_insert_string(&p.buf, 0, clean)
 	p.cursor      = 0
 	p.sel_anchor  = 0
 	p.scroll      = 0

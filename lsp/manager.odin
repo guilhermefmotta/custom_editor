@@ -138,9 +138,10 @@ _start_rooted_client :: proc(e: ^Client_Entry, root: string) -> ^Language_Client
 	cmd := e.config.command
 	jdtls_extra: []string
 	if e.config.name == "jdtls" {
-		hash    := _simple_hash(root)
-		home    := os.get_env("HOME", context.temp_allocator)
-		ddir    := fmt.tprintf("%s/.cache/jdtls/workspace/%x", home, hash)
+		hash := _simple_hash(root)
+		home := os.get_env("HOME", context.temp_allocator)
+		if home == "" { home = os.get_env("USERPROFILE", context.temp_allocator) }
+		ddir := fmt.tprintf("%s/.cache/jdtls/workspace/%x", home, hash)
 		jdtls_extra = make([]string, len(cmd) + 2, context.temp_allocator)
 		for s, i in cmd { jdtls_extra[i] = s }
 		jdtls_extra[len(cmd)]   = "-data"
@@ -261,6 +262,7 @@ _make_jdtls_config :: proc(root_path: string) -> Server_Config {
 	// Workspace data dir: ~/.cache/jdtls/workspace/<simple hash of root>
 	hash := _simple_hash(root_path)
 	home := os.get_env("HOME", context.temp_allocator)
+	if home == "" { home = os.get_env("USERPROFILE", context.temp_allocator) }
 	data_dir := fmt.tprintf("%s/.cache/jdtls/workspace/%x", home, hash)
 
 	// jdtls initialization options (standard set; expand as needed)

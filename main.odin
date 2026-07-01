@@ -15,6 +15,8 @@ FONT_PATHS :: []string{
 }
 
 main :: proc() {
+	rl.SetTraceLogLevel(.WARNING)
+
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
 	rl.InitWindow(1280, 720, "editor")
 	defer rl.CloseWindow()
@@ -55,16 +57,23 @@ main :: proc() {
 }
 
 load_font :: proc() -> (font: rl.Font, custom: bool) {
-	// ASCII 32-126 + UI arrow/symbol codepoints needed by find panel
-	cps: [99]rune
-	for i in 0..<95 { cps[i] = rune(32 + i) }
-	cps[95] = 0x2191 // ↑
-	cps[96] = 0x2193 // ↓
-	cps[97] = 0x2261 // ≡
-	cps[98] = 0x229E // ⊞
+	// ASCII 32-126 (95)
+	// Latin-1 Supplement 0xA0-0xFF (96) — covers most European accented chars
+	// Latin Extended-A 0x100-0x17F (128) — covers remaining common accents
+	// UI symbols (4)
+	NUM_CP :: 95 + 96 + 128 + 4
+	cps: [NUM_CP]rune
+	i := 0
+	for c := rune(32); c <= 126; c += 1 { cps[i] = c; i += 1 }
+	for c := rune(0xA0); c <= 0xFF; c += 1 { cps[i] = c; i += 1 }
+	for c := rune(0x100); c <= 0x17F; c += 1 { cps[i] = c; i += 1 }
+	cps[i] = 0x2191; i += 1 // ↑
+	cps[i] = 0x2193; i += 1 // ↓
+	cps[i] = 0x2261; i += 1 // ≡
+	cps[i] = 0x229E; i += 1 // ⊞
 
 	for path in FONT_PATHS {
-		f := rl.LoadFontEx(to_cstring(path), 64, raw_data(cps[:]), 99)
+		f := rl.LoadFontEx(to_cstring(path), 64, raw_data(cps[:]), NUM_CP)
 		if f.glyphCount > 0 {
 			rl.SetTextureFilter(f.texture, .BILINEAR)
 			return f, true
