@@ -98,6 +98,16 @@ palette_close :: proc(p: ^Palette) {
 	p.open = false
 }
 
+palette_open_files :: proc(p: ^Palette, e: ^Editor) {
+	p.open = true
+	cmd_find_file(e, p)
+}
+
+palette_open_search :: proc(p: ^Palette, e: ^Editor) {
+	p.open = true
+	cmd_search_workspace(e, p)
+}
+
 palette_open_themes :: proc(p: ^Palette, reg: ^conf.Registry) {
 	for t in p.themes { delete(t) }
 	clear(&p.themes)
