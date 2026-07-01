@@ -135,13 +135,8 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		return
 	}
 
-	// Ctrl+Shift+O: open workspace dialog
-	if ctrl() && shift() && rl.IsKeyPressed(.O) {
-		workspace_dialog_open(&e.workspace_dlg)
-		return
-	}
-
-	// Ctrl+Shift+L: toggle line numbers
+	if ctrl() && shift() && rl.IsKeyPressed(.W) { editor_close_split(e); return }
+	if ctrl() && shift() && rl.IsKeyPressed(.F) { cmd_search_workspace(e, &e.palette); return }
 	if ctrl() && shift() && rl.IsKeyPressed(.L) {
 		e.panes[e.active].show_line_numbers = !e.panes[e.active].show_line_numbers
 		return
@@ -219,12 +214,11 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		if rl.IsKeyPressed(.A) { mc_clear(p); sel_all(p); return }
 		if rl.IsKeyPressed(.C) { copy_sel(p);              return }
 		if rl.IsKeyPressed(.W) { editor_split(e, .Vertical); return }
-		if rl.IsKeyPressed(.X) {
-			if len(e.panes) > 1 { editor_close_split(e); return }
-			cut_sel(p); lsp_on_text_changed(e, p); return
-		}
+		if rl.IsKeyPressed(.X) { cut_sel(p); lsp_on_text_changed(e, p); return }
 		if rl.IsKeyPressed(.V) { paste(p); lsp_on_text_changed(e, p); return }
 		if rl.IsKeyPressed(.F) { find_replace_open(e); return }
+		if rl.IsKeyPressed(.N) { cmd_new_file(e, &e.palette); return }
+		if rl.IsKeyPressed(.P) { workspace_dialog_open(&e.workspace_dlg); return }
 		if rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return }
 		if rl.IsKeyPressed(.Q)   { e.should_quit = true; return }
 		if rl.IsKeyPressed(.SLASH) { do_comment_toggle(p); lsp_on_text_changed(e, p); return }
