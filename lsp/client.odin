@@ -178,7 +178,7 @@ client_start :: proc(c: ^Language_Client, cmd: []string) -> bool {
 		_client_log(c, .Error, fmt.tprintf("transport_start failed for: %s", cmd_str))
 		return false
 	}
-	_client_log(c, .Info, fmt.tprintf("process pid=%d root=%s", int(c.transport.process.pid), c.root_uri))
+	_client_log(c, .Info, fmt.tprintf("transport started, root=%s", c.root_uri))
 	c.state = .Initializing
 	_send_initialize(c)
 	return true
