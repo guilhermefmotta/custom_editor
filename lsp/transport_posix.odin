@@ -1,4 +1,4 @@
-//+build !windows
+#+build !windows
 package lsp
 
 import "core:fmt"
