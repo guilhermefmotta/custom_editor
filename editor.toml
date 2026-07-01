@@ -19,8 +19,9 @@ format_on_save    = false
 trim_trailing_ws  = false
 insert_final_nl   = true
 bracket_matching  = true
-show_status_bar   = true
-show_minimap      = false
+show_status_bar      = true
+show_minimap         = false
+status_bar_position  = "top"    # top | bottom
 
 # ---------------------------------------------------------------------------
 [window]

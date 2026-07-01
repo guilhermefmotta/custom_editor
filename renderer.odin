@@ -218,6 +218,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	cw  := ref.x
 	ch  := ref.y + LINE_SPACING
 
+	status_top  := e.cfg.editor.status_bar_position != "bottom"
 	text_area_h := oh - STATUS_H - PANE_TOP_PAD
 	vis_lines   := int(text_area_h / ch)
 	if vis_lines < 1 do return
@@ -263,7 +264,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	sel_first_y: f32 = -1  // y of first selected visible line
 	sel_last_y:  f32 = -1  // y of last selected visible line
 
-	text_top := oy + PANE_TOP_PAD
+	text_top   := oy + PANE_TOP_PAD + (STATUS_H if status_top else 0)
 	pane_diags := lsp.manager_get_diags(&e.lsp_mgr, p.filename)
 
 	// Draw one extra line to fill partial-scroll gaps at top and bottom
@@ -439,7 +440,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	}
 
 	// Per-pane status bar
-	sy := oy + oh - STATUS_H
+	sy := (oy + PANE_TOP_PAD) if status_top else (oy + oh - STATUS_H)
 	rl.DrawRectangleV({ox, sy}, {ow, STATUS_H}, STATUS_BG)
 
 	fname    := p.filename if p.filename != "" else "untitled"
@@ -501,13 +502,13 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	// LSP overlays — only for active pane
 	if is_active {
 		cursor_x := text_x + f32(cur_col)*cw
-		cursor_y  := oy + PANE_TOP_PAD + (f32(cur_line) - p.scroll_anim) * ch
+		cursor_y  := text_top + (f32(cur_line) - p.scroll_anim) * ch
 
 		c := _get_client(e, p)
 
 		// Signature help bar
 		if p.lsp.show_sig_help {
-			render_sig_help(c, font, ox, oy + PANE_TOP_PAD, ow, cursor_y)
+			render_sig_help(c, font, ox, text_top, ow, cursor_y)
 		}
 
 		// Suggest / completion widget

@@ -60,8 +60,9 @@ Editor_Config :: struct {
 	trim_trailing_ws:  bool,
 	insert_final_nl:   bool,
 	bracket_matching:  bool,
-	show_status_bar:   bool,
-	show_minimap:      bool,
+	show_status_bar:        bool,
+	show_minimap:           bool,
+	status_bar_position:    string, // "top" | "bottom"
 	rulers:            []int, // vertical rulers at these columns
 }
 
@@ -371,6 +372,7 @@ config_destroy :: proc(c: ^Config) {
 	delete(c.window.title)
 	for r in c.editor.rulers { _ = r }
 	delete(c.editor.rulers)
+	delete(c.editor.status_bar_position)
 	_lsp_config_destroy(&c.lsp)
 	_dap_config_destroy(&c.dap)
 	for &f in c.formatters { _fmt_config_destroy(&f) }
@@ -447,8 +449,9 @@ config_defaults :: proc() -> Config {
 		trim_trailing_ws = false,
 		insert_final_nl  = true,
 		bracket_matching = true,
-		show_status_bar  = true,
-		show_minimap     = false,
+		show_status_bar       = true,
+		show_minimap          = false,
+		status_bar_position   = strings.clone("top"),
 	}
 
 	c.window = {

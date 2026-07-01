@@ -138,6 +138,9 @@ _apply_editor :: proc(cfg: ^Config, t: ^TOML_Table) {
 	if b, ok := toml_bool(t, "bracket_matching"); ok { e.bracket_matching = b }
 	if b, ok := toml_bool(t, "show_status_bar");  ok { e.show_status_bar  = b }
 	if b, ok := toml_bool(t, "show_minimap");     ok { e.show_minimap     = b }
+	if s, ok := toml_str(t, "status_bar_position"); ok {
+		if s == "top" || s == "bottom" { _replace_str(&e.status_bar_position, s) }
+	}
 }
 
 @(private)
