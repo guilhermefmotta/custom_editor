@@ -242,7 +242,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 
 	total_lines := buffer_line_count(&p.buf)
 	digs        := digit_count(total_lines)
-	text_x      := ox + f32(digs)*cw + GUTTER_PAD*2
+	text_x      := ox + f32(digs)*cw + GUTTER_PAD*2 if p.show_line_numbers else ox + GUTTER_PAD*2
 
 	cur_line, cur_col := buffer_pos_to_line_col(&p.buf, p.cursor)
 	sel_active        := has_selection(p)
@@ -305,11 +305,13 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		}
 
 		// Line number — right-aligned in gutter
-		ln_col  := LINENUM_CUR if li == cur_line else LINENUM
-		ln_str  := fmt.tprintf("%d", li + 1)
-		ln_cstr := to_cstring(ln_str)
-		ln_w    := rl.MeasureTextEx(font, ln_cstr, FONT_SIZE, CHAR_SPACING).x
-		rl.DrawTextEx(font, ln_cstr, {text_x - ln_w - GUTTER_PAD, y}, FONT_SIZE, CHAR_SPACING, ln_col)
+		if p.show_line_numbers {
+			ln_col  := LINENUM_CUR if li == cur_line else LINENUM
+			ln_str  := fmt.tprintf("%d", li + 1)
+			ln_cstr := to_cstring(ln_str)
+			ln_w    := rl.MeasureTextEx(font, ln_cstr, FONT_SIZE, CHAR_SPACING).x
+			rl.DrawTextEx(font, ln_cstr, {text_x - ln_w - GUTTER_PAD, y}, FONT_SIZE, CHAR_SPACING, ln_col)
+		}
 
 		// Selection highlight (primary) — rounded single-line, extended multi-line
 		line_end := line_start + len(line_bytes)

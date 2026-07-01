@@ -141,6 +141,12 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		return
 	}
 
+	// Ctrl+Shift+L: toggle line numbers
+	if ctrl() && shift() && rl.IsKeyPressed(.L) {
+		e.panes[e.active].show_line_numbers = !e.panes[e.active].show_line_numbers
+		return
+	}
+
 	// Ctrl+O cycle active pane
 	if ctrl() && rl.IsKeyPressed(.O) {
 		if len(e.panes) > 1 { e.active = (e.active + 1) % len(e.panes) }

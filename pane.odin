@@ -20,28 +20,30 @@ Undo_Op :: struct {
 }
 
 Pane :: struct {
-	buf:         Gap_Buffer,
-	cursor:      int,
-	sel_anchor:  int,
-	scroll:      int,
-	scroll_anim: f32,
-	filename:    string,
-	lang:        Lang,
-	dirty:       bool,
-	undo:        [dynamic]Undo_Op,
-	u_merge:     int,
-	extras:      [dynamic]Extra_Cursor,
-	lsp:         Pane_LSP,
-	suggest:     Suggest_Widget,
+	buf:              Gap_Buffer,
+	cursor:           int,
+	sel_anchor:       int,
+	scroll:           int,
+	scroll_anim:      f32,
+	filename:         string,
+	lang:             Lang,
+	dirty:            bool,
+	undo:             [dynamic]Undo_Op,
+	u_merge:          int,
+	extras:           [dynamic]Extra_Cursor,
+	lsp:              Pane_LSP,
+	suggest:          Suggest_Widget,
+	show_line_numbers: bool,
 }
 
 MAX_UNDO :: 500
 
 pane_init :: proc() -> Pane {
 	p: Pane
-	p.buf    = buffer_init()
-	p.undo   = make([dynamic]Undo_Op)
-	p.extras = make([dynamic]Extra_Cursor)
+	p.buf               = buffer_init()
+	p.undo              = make([dynamic]Undo_Op)
+	p.extras            = make([dynamic]Extra_Cursor)
+	p.show_line_numbers = true
 	return p
 }
 

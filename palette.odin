@@ -67,6 +67,7 @@ palette_init :: proc() -> Palette {
 		Command{"LSP Control",              "Open LSP server control panel",                    cmd_lsp_control},
 		Command{"Git",                      "Open Git panel (stage, commit, diff)",             cmd_git_panel},
 		Command{"Switch Theme",             "Browse and apply editor color themes",             cmd_switch_theme},
+		Command{"Toggle Line Numbers",      "Show or hide line numbers in the active pane",     cmd_toggle_line_numbers},
 	)
 	register_debug_commands(&p)
 
@@ -782,6 +783,11 @@ cmd_lsp_control :: proc(e: ^Editor, p: ^Palette) {
 
 cmd_switch_theme :: proc(e: ^Editor, p: ^Palette) {
 	palette_open_themes(p, &e.registry)
+}
+
+cmd_toggle_line_numbers :: proc(e: ^Editor, p: ^Palette) {
+	e.panes[e.active].show_line_numbers = !e.panes[e.active].show_line_numbers
+	palette_close(p)
 }
 
 // ---- Helpers ----
