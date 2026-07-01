@@ -57,6 +57,8 @@ file_tree_close :: proc(ft: ^File_Tree) {
 	ft.status_msg = ""
 }
 
+FT_MAX_CHILDREN :: 500  // max entries per directory expansion
+
 _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_idx: int) -> int {
 	SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
 	                  ".cache", "build", "dist", ".next", "vendor"}
@@ -93,6 +95,7 @@ _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_i
 			depth  = depth,
 		}
 		if is_dir { append(&dirs, node) } else { append(&files, node) }
+		if len(dirs) + len(files) >= FT_MAX_CHILDREN { ft.status_msg = "Showing first 500 entries"; break }
 	}
 
 	_ft_sort_nodes :: proc(arr: ^[dynamic]File_Tree_Node) {

@@ -11,6 +11,9 @@ Lang :: enum {
 	Go,
 	Rust,
 	Java,
+	Kotlin,
+	YAML,
+	Properties,
 }
 
 Token_Kind :: enum {
@@ -60,6 +63,9 @@ detect_lang :: proc(path: string) -> Lang {
 	case "go":                          return .Go
 	case "rs":                          return .Rust
 	case "java":                        return .Java
+	case "kt", "kts":                   return .Kotlin
+	case "yml", "yaml":                 return .YAML
+	case "properties", "gradle":        return .Properties
 	}
 	return .None
 }
@@ -88,7 +94,10 @@ tokenize_line :: proc(line: string, lang: Lang) -> []Span {
 		if ch == '/' && i+1 < n && line[i+1] == '/' && lang != .Python {
 			append(&spans, Span{i, n - i, .Comment}); break
 		}
-		if ch == '#' && lang == .Python {
+		if ch == '#' && (lang == .Python || lang == .YAML || lang == .Properties) {
+			append(&spans, Span{i, n - i, .Comment}); break
+		}
+		if ch == '!' && lang == .Properties {
 			append(&spans, Span{i, n - i, .Comment}); break
 		}
 
@@ -167,7 +176,19 @@ tokenize_line :: proc(line: string, lang: Lang) -> []Span {
 		// Identifier / keyword
 		if is_alpha(ch) || ch == '_' {
 			start := i; i += 1
-			for i < n && (is_alpha(line[i]) || is_digit(line[i]) || line[i] == '_') { i += 1 }
+			for i < n && (is_alpha(line[i]) || is_digit(line[i]) || line[i] == '_' ||
+			              (lang == .YAML && line[i] == '-')) { i += 1 }
+			// YAML key: word immediately followed by ':'
+			if lang == .YAML && i < n && line[i] == ':' &&
+			   (i+1 == n || line[i+1] == ' ' || line[i+1] == '\t') {
+				append(&spans, Span{start, i - start, .Keyword})
+				continue
+			}
+			// Properties key: word before '=' or ':'
+			if lang == .Properties && i < n && (line[i] == '=' || line[i] == ':') {
+				append(&spans, Span{start, i - start, .Keyword})
+				continue
+			}
 			kind := classify_word(line[start:i], lang)
 			append(&spans, Span{start, i - start, kind})
 			continue
@@ -328,6 +349,41 @@ classify_word :: proc(word: string, lang: Lang) -> Token_Kind {
 		     "add", "remove", "contains", "equals", "hashCode", "toString",
 		     "valueOf", "parseInt", "parseLong", "parseDouble":
 			return .Builtin
+		}
+	case .Kotlin:
+		switch word {
+		case "abstract", "actual", "annotation", "as", "break", "by", "catch", "class",
+		     "companion", "const", "constructor", "continue", "crossinline", "data",
+		     "delegate", "do", "dynamic", "else", "enum", "expect", "external", "false",
+		     "field", "file", "final", "finally", "for", "fun", "get", "if", "import",
+		     "in", "infix", "init", "inline", "inner", "interface", "internal", "is",
+		     "it", "lateinit", "noinline", "null", "object", "open", "operator", "out",
+		     "override", "package", "param", "private", "protected", "public", "receiver",
+		     "reified", "return", "sealed", "set", "setparam", "super", "suspend",
+		     "tailrec", "this", "throw", "true", "try", "typealias", "typeof", "val",
+		     "value", "var", "vararg", "when", "where", "while":
+			return .Keyword
+		case "Boolean", "Byte", "Char", "Double", "Float", "Int", "Long", "Short",
+		     "String", "Unit", "Any", "Nothing", "Array", "List", "MutableList",
+		     "Map", "MutableMap", "Set", "MutableSet", "Pair", "Triple",
+		     "Collection", "Sequence", "Flow", "StateFlow", "SharedFlow":
+			return .Type
+		case "println", "print", "readLine", "TODO", "error", "check", "require",
+		     "also", "apply", "let", "run", "with", "repeat", "forEach", "map",
+		     "filter", "fold", "reduce", "firstOrNull", "lastOrNull", "takeIf",
+		     "takeUnless", "listOf", "mutableListOf", "mapOf", "mutableMapOf",
+		     "setOf", "mutableSetOf", "emptyList", "emptyMap", "emptySet":
+			return .Builtin
+		}
+	case .YAML:
+		switch word {
+		case "true", "false", "null", "yes", "no", "on", "off":
+			return .Keyword
+		}
+	case .Properties:
+		switch word {
+		case "true", "false":
+			return .Keyword
 		}
 	case .None:
 	}
