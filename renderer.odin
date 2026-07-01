@@ -146,8 +146,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 		rl.EndScissorMode()
 	}
 
-	// Divider between panes
-	if len(e.panes) > 1 {
+	// Divider(s) between panes
+	n_panes := len(e.panes)
+	if n_panes == 2 {
 		switch e.split {
 		case .Vertical:
 			mid := sw * e.split_ratio
@@ -156,6 +157,12 @@ render :: proc(e: ^Editor, font: rl.Font) {
 			mid := usable_h * e.split_ratio
 			rl.DrawRectangleV({0, mid - DIVIDER_W * 0.5}, {sw, DIVIDER_W}, DIVIDER_COL)
 		case .None:
+		}
+	} else if n_panes > 2 {
+		col_w := sw / f32(n_panes)
+		for i in 1 ..< n_panes {
+			dx := f32(i) * col_w - DIVIDER_W * 0.5
+			rl.DrawRectangleV({dx, 0}, {DIVIDER_W, usable_h}, DIVIDER_COL)
 		}
 	}
 

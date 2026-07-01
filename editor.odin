@@ -183,15 +183,17 @@ editor_save :: proc(e: ^Editor) -> bool {
 	return ok
 }
 
+MAX_PANES :: 4
+
 editor_split :: proc(e: ^Editor, dir: Split_Dir) {
-	if len(e.panes) >= 2 { e.msg = "Max 2 panes"; return }
-	np  := pane_init()
-	cur := active_pane(e)
-	if cur.filename != "" do pane_open(&np, cur.filename)
+	if len(e.panes) >= MAX_PANES { e.msg = fmt.tprintf("Max %d panes", MAX_PANES); return }
+	np := pane_init()
 	append(&e.panes, np)
-	e.split       = dir
-	e.split_ratio = 0.5
-	e.active      = 1
+	if len(e.panes) == 2 {
+		e.split       = dir
+		e.split_ratio = 0.5
+	}
+	e.active = len(e.panes) - 1
 }
 
 editor_close_split :: proc(e: ^Editor) {
@@ -356,17 +358,26 @@ goto_dialog_confirm :: proc(e: ^Editor) {
 // ---- Pane rect ----
 
 get_pane_rect :: proc(e: ^Editor, idx: int, sw, sh: f32) -> (x, y, w, h: f32) {
-	if len(e.panes) <= 1 || e.split == .None { return 0, 0, sw, sh }
-	switch e.split {
-	case .Vertical:
-		mid := sw * e.split_ratio
-		if idx == 0 { return 0, 0, mid - DIVIDER_W * 0.5, sh }
-		return mid + DIVIDER_W * 0.5, 0, sw - mid - DIVIDER_W * 0.5, sh
-	case .Horizontal:
-		mid := sh * e.split_ratio
-		if idx == 0 { return 0, 0, sw, mid - DIVIDER_W * 0.5 }
-		return 0, mid + DIVIDER_W * 0.5, sw, sh - mid - DIVIDER_W * 0.5
-	case .None:
+	n := len(e.panes)
+	if n <= 1 { return 0, 0, sw, sh }
+	if n == 2 {
+		switch e.split {
+		case .Vertical:
+			mid := sw * e.split_ratio
+			if idx == 0 { return 0, 0, mid - DIVIDER_W * 0.5, sh }
+			return mid + DIVIDER_W * 0.5, 0, sw - mid - DIVIDER_W * 0.5, sh
+		case .Horizontal:
+			mid := sh * e.split_ratio
+			if idx == 0 { return 0, 0, sw, mid - DIVIDER_W * 0.5 }
+			return 0, mid + DIVIDER_W * 0.5, sw, sh - mid - DIVIDER_W * 0.5
+		case .None:
+		}
 	}
-	return 0, 0, sw, sh
+	// 3+ panes: equal vertical columns
+	col_w := sw / f32(n)
+	cx    := f32(idx) * col_w
+	cw    := col_w
+	if idx > 0   { cx += DIVIDER_W * 0.5; cw -= DIVIDER_W * 0.5 }
+	if idx < n-1 { cw -= DIVIDER_W * 0.5 }
+	return cx, 0, cw, sh
 }
