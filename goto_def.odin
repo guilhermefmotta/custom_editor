@@ -253,17 +253,7 @@ _def_line_symbol :: proc(line: []u8, lang: Lang) -> string {
 			}
 		}
 
-	case .Kotlin:
-		kotlin_mods := []string{"public ", "private ", "protected ", "internal ", "open ",
-		                        "override ", "data ", "sealed ", "inline ", "suspend "}
-		ts4 := ts
-		for { prev := ts4; for m in kotlin_mods { if strings.has_prefix(ts4, m) { ts4 = ts4[len(m):] } }; if ts4 == prev { break } }
-		if strings.has_prefix(ts4, "fun ")       { return _ol_ident(transmute([]u8)ts4, 4) }
-		if strings.has_prefix(ts4, "class ")     { return _ol_ident(transmute([]u8)ts4, 6) }
-		if strings.has_prefix(ts4, "object ")    { return _ol_ident(transmute([]u8)ts4, 7) }
-		if strings.has_prefix(ts4, "interface ") { return _ol_ident(transmute([]u8)ts4, 10) }
-
-	case .None, .YAML, .Properties:
+	case .None:
 	}
 	return ""
 }

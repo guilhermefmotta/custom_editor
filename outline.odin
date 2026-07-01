@@ -310,24 +310,8 @@ outline_scan :: proc(od: ^Outline_Dialog, p: ^Pane) {
 				}
 			}
 
-		case .Kotlin:
-			ts := strings.trim_left(s, " \t")
-			kotlin_mods := []string{"public ", "private ", "protected ", "internal ",
-			                        "open ", "final ", "abstract ", "override ",
-			                        "data ", "sealed ", "inline ", "suspend ", "companion "}
-			for { prev := ts; for m in kotlin_mods { if _ol_str_pfx(ts, m) { ts = ts[len(m):] } }; if ts == prev { break } }
-			switch {
-			case _ol_str_pfx(ts, "fun "):
-				nm := _ol_ident(transmute([]u8)ts, 4)
-				if nm != "" { sym.kind = "fun"; sym.name = strings.clone(nm); found = true }
-			case _ol_str_pfx(ts, "class "), _ol_str_pfx(ts, "object "), _ol_str_pfx(ts, "interface "):
-				start := 6 if _ol_str_pfx(ts, "class ") || _ol_str_pfx(ts, "object ") else 10
-				nm := _ol_ident(transmute([]u8)ts, start)
-				if nm != "" { sym.kind = "class"; sym.name = strings.clone(nm); found = true }
-			}
-
 		// ---- Unknown / plain text ----------------------------------------
-		case .None, .YAML, .Properties:
+		case .None:
 			if indent != 0 { continue }
 			if _ol_str_pfx(s, "//") || _ol_str_pfx(s, "#") || _ol_str_pfx(s, "/*") { continue }
 			if len(line) > 0 && _ol_is_word(line[0]) {

@@ -79,20 +79,20 @@ lsp_dialog_handle_input :: proc(d: ^LSP_Dialog, e: ^Editor) -> (consumed: bool) 
 	}
 
 	// Actions
-	p := active_pane(e)
-	ext := lsp.path_ext(p.filename) if p.filename != "" else ""
-	c   := lsp.lsp_manager_find_client_for_path(&e.lsp_mgr, p.filename)
+	p    := active_pane(e)
+	path := p.filename
+	c    := lsp.lsp_manager_find_client_for_path(&e.lsp_mgr, path)
 
 	if rl.IsKeyPressed(.S) {
-		_lspd_do_start(d, e, ext)
+		_lspd_do_start(d, e, path)
 		return true
 	}
 	if rl.IsKeyPressed(.T) {
-		_lspd_do_stop(d, e, ext)
+		_lspd_do_stop(d, e, path)
 		return true
 	}
 	if rl.IsKeyPressed(.R) {
-		_lspd_do_restart(d, e, ext)
+		_lspd_do_restart(d, e, path)
 		return true
 	}
 	if rl.IsKeyPressed(.C) {
@@ -107,9 +107,9 @@ lsp_dialog_handle_input :: proc(d: ^LSP_Dialog, e: ^Editor) -> (consumed: bool) 
 // Actions
 // ---------------------------------------------------------------------------
 
-_lspd_do_start :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
-	if ext == "" { _lspd_set_msg(d, false, "no file open"); return }
-	ok, err := lsp.lsp_manager_start_for_ext(&e.lsp_mgr, ext)
+_lspd_do_start :: proc(d: ^LSP_Dialog, e: ^Editor, path: string) {
+	if path == "" { _lspd_set_msg(d, false, "no file open"); return }
+	ok, err := lsp.lsp_manager_start_for_path(&e.lsp_mgr, path)
 	if !ok { _lspd_set_msg(d, false, err); return }
 	lsp_reopen_all_panes(e)
 	_lspd_set_msg(d, true, "starting...")
@@ -117,17 +117,17 @@ _lspd_do_start :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
 	d.auto_scroll = true
 }
 
-_lspd_do_stop :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
-	if ext == "" { _lspd_set_msg(d, false, "no file open"); return }
-	ok, err := lsp.lsp_manager_stop_for_ext(&e.lsp_mgr, ext)
+_lspd_do_stop :: proc(d: ^LSP_Dialog, e: ^Editor, path: string) {
+	if path == "" { _lspd_set_msg(d, false, "no file open"); return }
+	ok, err := lsp.lsp_manager_stop_for_path(&e.lsp_mgr, path)
 	if !ok { _lspd_set_msg(d, false, err); return }
 	_lspd_set_msg(d, true, "stopped")
 	d.auto_scroll = true
 }
 
-_lspd_do_restart :: proc(d: ^LSP_Dialog, e: ^Editor, ext: string) {
-	if ext == "" { _lspd_set_msg(d, false, "no file open"); return }
-	ok, err := lsp.lsp_manager_restart_for_ext(&e.lsp_mgr, ext)
+_lspd_do_restart :: proc(d: ^LSP_Dialog, e: ^Editor, path: string) {
+	if path == "" { _lspd_set_msg(d, false, "no file open"); return }
+	ok, err := lsp.lsp_manager_restart_for_path(&e.lsp_mgr, path)
 	if !ok { _lspd_set_msg(d, false, err); return }
 	lsp_reopen_all_panes(e)
 	_lspd_set_msg(d, true, "restarting...")
@@ -180,12 +180,14 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 
-	p   := active_pane(e)
-	ext := lsp.path_ext(p.filename) if p.filename != "" else ""
+	p    := active_pane(e)
+	path := p.filename
+	ext  := lsp.path_ext(path) if path != "" else ""
 
 	// Gather server info
-	server_name := lsp.lsp_manager_server_name_for_path(&e.lsp_mgr, p.filename)
-	c           := lsp.lsp_manager_find_client_for_path(&e.lsp_mgr, p.filename)
+	server_name := lsp.lsp_manager_server_name_for_path(&e.lsp_mgr, path)
+	c           := lsp.lsp_manager_find_client_for_path(&e.lsp_mgr, path)
+	proj_root   := lsp._project_root_for_file(path) if path != "" else e.lsp_mgr.root_path
 
 	// Log lines
 	log_count := 0
@@ -281,8 +283,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 		root_label := "Root:   "
 		rlw        := rl.MeasureTextEx(font, to_cstring(root_label), FONT_SIZE-1, CHAR_SPACING).x
 		rl.DrawTextEx(font, to_cstring(root_label), {tx, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
-		root := e.lsp_mgr.root_path
-		rl.DrawTextEx(font, to_cstring(root), {tx+rlw, ty}, FONT_SIZE-1, CHAR_SPACING, TEXT)
+		rl.DrawTextEx(font, to_cstring(proj_root), {tx+rlw, ty}, FONT_SIZE-1, CHAR_SPACING, TEXT)
 		ty += ref.y + 8
 	}
 
@@ -298,7 +299,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 		stop_col    := RED
 		restart_col := YELLOW
 		copy_col    := ACCENT
-		if ext == "" { start_col = SUBDUED; stop_col = SUBDUED; restart_col = SUBDUED; copy_col = SUBDUED }
+		if path == "" { start_col = SUBDUED; stop_col = SUBDUED; restart_col = SUBDUED; copy_col = SUBDUED }
 		if c == nil  { stop_col = SUBDUED; restart_col = SUBDUED }
 
 		_draw_btn :: proc(font: rl.Font, label: string, bx, by, bh, pad_x, pad_y: f32,

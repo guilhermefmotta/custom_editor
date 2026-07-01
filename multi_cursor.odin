@@ -264,8 +264,8 @@ mc_delete_fwd :: proc(p: ^Pane) {
 
 lang_comment_prefix :: proc(lang: Lang) -> string {
 	switch lang {
-	case .Python, .YAML, .Properties: return "#"
-	case .None, .Odin, .C, .Go, .JavaScript, .Rust, .Java, .Kotlin: return "//"
+	case .Python: return "#"
+	case .None, .Odin, .C, .Go, .JavaScript, .Rust, .Java: return "//"
 	}
 	return "//"
 }
