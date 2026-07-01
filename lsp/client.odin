@@ -6,7 +6,6 @@ import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:time"
-import linux "core:sys/linux"
 
 // ---------------------------------------------------------------------------
 // Client state machine
@@ -234,11 +233,8 @@ client_update :: proc(c: ^Language_Client) {
 
 	// Detect unexpected process exit (e.g. OLS binary not found → exits immediately).
 	if c.transport.process.running {
-		status: u32
-		wpid, _ := linux.waitpid(c.transport.process.pid, &status, {.WNOHANG}, nil)
-		if wpid > 0 {
-			c.transport.process.running = false
-			exit_code := (status >> 8) & 0xff
+		exited, exit_code := process_poll(&c.transport.process)
+		if exited {
 			_client_log(c, .Error, fmt.tprintf("server process exited unexpectedly (exit code %d) — check binary is in PATH and executable", exit_code))
 			if c.error_msg != "" { delete(c.error_msg) }
 			c.error_msg = strings.clone(fmt.tprintf("server exited (code %d)", exit_code))
