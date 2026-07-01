@@ -534,6 +534,7 @@ _on_window_log_message :: proc(c: ^Language_Client, method: string, body: []u8) 
 // Deep clone a json.Value (heap allocator)
 // ---------------------------------------------------------------------------
 
+Deep_Clone_Value :: proc(v: json.Value) -> json.Value { return _deep_clone_value(v) }
 _deep_clone_value :: proc(v: json.Value) -> json.Value {
 	switch val in v {
 	case json.Null:   return json.Null{}

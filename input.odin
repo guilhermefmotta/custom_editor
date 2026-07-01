@@ -56,6 +56,20 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	if e.goto_dlg.open   { goto_dialog_handle_input(e); return }
 	if e.def_picker.open { goto_def_picker_handle_input(e); return }
 
+	// Rename dialog (F2)
+	if e.rename_dlg.open {
+		new_name, confirmed := rename_dialog_handle_input(&e.rename_dlg)
+		if confirmed { lsp_rename_confirm(e, new_name) }
+		return
+	}
+
+	// Code action dialog (Ctrl+.)
+	if e.code_action_dlg.open {
+		_, sel := code_action_dialog_handle_input(&e.code_action_dlg)
+		if sel >= 0 { lsp_apply_code_action(e, sel) }
+		return
+	}
+
 	// Debug dialogs — high priority, before other key bindings
 	if e.debug_attach.open { debug_attach_handle_input(e, &e.debug_attach); return }
 	if e.debug_eval.open   { debug_eval_handle_input(e, &e.debug_eval); return }
@@ -118,6 +132,51 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		return
 	}
 
+	// Ctrl+Shift+I → format document
+	if ctrl() && shift() && rl.IsKeyPressed(.I) {
+		lsp_format_document(e)
+		return
+	}
+
+	// F2 → rename symbol
+	if rl.IsKeyPressed(.F2) {
+		lsp_rename_open(e)
+		return
+	}
+
+	// Ctrl+. → code actions
+	if ctrl() && rl.IsKeyPressed(.PERIOD) {
+		lsp_code_actions_request(e)
+		return
+	}
+
+	// Alt+Z → toggle word wrap
+	if alt() && rl.IsKeyPressed(.Z) {
+		p := active_pane(e)
+		p.word_wrap = !p.word_wrap
+		e.msg = "Word wrap: on" if p.word_wrap else "Word wrap: off"
+		return
+	}
+
+	// Ctrl+W → close current tab
+	if ctrl() && rl.IsKeyPressed(.W) {
+		pane_close_tab(active_pane(e))
+		lsp_on_open(e, active_pane(e))
+		return
+	}
+
+	// Ctrl+PageUp → previous tab; Ctrl+PageDown → next tab
+	if ctrl() && rl.IsKeyPressed(.PAGE_UP) {
+		pane_tab_prev(active_pane(e))
+		lsp_on_open(e, active_pane(e))
+		return
+	}
+	if ctrl() && rl.IsKeyPressed(.PAGE_DOWN) {
+		pane_tab_next(active_pane(e))
+		lsp_on_open(e, active_pane(e))
+		return
+	}
+
 	// Suggest widget intercepts keys when visible
 	if active_pane(e).suggest.visible {
 		if suggest_handle_input(e, active_pane(e)) { return }
@@ -160,16 +219,40 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			if mp.x >= px2 && mp.x < px2+pw2 && mp.y >= py2 && mp.y < py2+ph2 { clicked = i; break }
 		}
 		if clicked >= 0 {
-			if alt() && clicked == e.active {
+			cp := &e.panes[clicked]
+			// Check tab bar click
+			tab_h := TAB_BAR_H if len(cp.tabs) > 0 else f32(0)
+			px2, py2, _, _ := get_pane_rect(e, clicked, sw, sh)
+			tab_bar_y := py2 + PANE_TOP_PAD
+			if tab_h > 0 && mp.y >= tab_bar_y && mp.y < tab_bar_y + tab_h {
+				// Hit tab bar: find which tab
+				e.active = clicked
+				tx := px2
+				for ti in 0..<len(cp.tabs) {
+					lbl := path_basename(cp.tabs[ti].filename)
+					dirty_mark := "● " if cp.tabs[ti].dirty else ""
+					tab_label  := fmt.tprintf(" %s%s ", dirty_mark, lbl)
+					tw := rl.MeasureTextEx(font, to_cstring(tab_label), FONT_SIZE - 2, CHAR_SPACING).x + 8
+					if mp.x >= tx && mp.x < tx + tw {
+						if ti != cp.cur_tab {
+							_pane_save_tab_state(cp)
+							cp.cur_tab = ti
+							_pane_load_tab(cp, ti)
+							lsp_on_open(e, cp)
+						}
+						break
+					}
+					tx += tw + 1
+				}
+			} else if alt() && clicked == e.active {
 				// Alt+click: add extra cursor, keep primary
-				px2, py2, _, _ := get_pane_rect(e, e.active, sw, sh)
 				mc_add(active_pane(e), mouse_to_cursor(active_pane(e), font, mp, px2, py2))
 			} else {
 				e.active = clicked
 				ap       := active_pane(e)
 				mc_clear(ap)
-				px2, py2, _, _ := get_pane_rect(e, e.active, sw, sh)
-				pos        := mouse_to_cursor(ap, font, mp, px2, py2)
+				px2b, py2b, _, _ := get_pane_rect(e, e.active, sw, sh)
+				pos        := mouse_to_cursor(ap, font, mp, px2b, py2b)
 				ap.cursor   = pos
 				ap.sel_anchor = pos
 			}
@@ -261,12 +344,8 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			mc_insert_bytes(p, []u8{'\n'})
 		} else {
 			undo_delete_sel(p)
-			undo_push_insert(p, p.cursor, []u8{'\n'}, false)
+			_auto_indent_enter(p)
 			undo_break(p)
-			buffer_insert_byte(&p.buf, p.cursor, '\n')
-			p.cursor     += 1
-			p.sel_anchor  = p.cursor
-			p.dirty       = true
 		}
 		text_changed = true
 	}
@@ -295,19 +374,72 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		}
 	}
 
-	// Printable chars — coalesced inserts for single Ctrl+Z to undo a word
+	// Printable chars
 	for {
 		ch := rl.GetCharPressed()
-		if ch == 0 do break
-		if ch < 32 do continue
+		if ch == 0 { break }
+		if ch < 32 { continue }
+
 		utf_buf: [4]u8
 		n := rune_encode(ch, &utf_buf)
+
 		if mc_has_extras(p) {
 			mc_insert_bytes(p, utf_buf[:n])
+			text_changed = true
+			continue
+		}
+
+		if n == 1 {
+			b    := utf_buf[0]
+			blen := buffer_len(&p.buf)
+			next : u8 = 0
+			if p.cursor < blen { next = buffer_get_byte(&p.buf, p.cursor) }
+
+			// Skip over existing closing bracket/quote when typing it
+			is_close := b == ')' || b == ']' || b == '}'
+			is_quote  := b == '"' || b == '\'' || b == '`'
+			if (is_close || is_quote) && next == b && !has_selection(p) {
+				p.cursor += 1
+				p.sel_anchor = p.cursor
+				text_changed = true
+				continue
+			}
+
+			undo_delete_sel(p)
+			undo_push_insert(p, p.cursor, utf_buf[:1], true)
+			buffer_insert_byte(&p.buf, p.cursor, b)
+			p.cursor     += 1
+			p.sel_anchor  = p.cursor
+			p.dirty       = true
+
+			// Auto-close: insert matching char after cursor
+			blen2 := buffer_len(&p.buf)
+			next2 : u8 = 0
+			if p.cursor < blen2 { next2 = buffer_get_byte(&p.buf, p.cursor) }
+			can_close := p.cursor >= blen2 || next2 == '\n' || next2 == ' ' || next2 == '\t' ||
+			             next2 == ')' || next2 == ']' || next2 == '}' ||
+			             next2 == '"' || next2 == '\'' || next2 == '`'
+
+			close: u8 = 0
+			if !has_selection(p) {
+				switch b {
+				case '(': close = ')'
+				case '[': close = ']'
+				case '{': close = '}'
+				case '"':  if can_close && next2 != '"'  { close = '"'  }
+				case '\'': if can_close && next2 != '\'' { close = '\'' }
+				case '`':  if can_close && next2 != '`'  { close = '`'  }
+				}
+			}
+			if close != 0 && can_close && (close == ')' || close == ']' || close == '}' || next2 != close) {
+				buffer_insert_byte(&p.buf, p.cursor, close)
+				p.dirty = true
+			}
 		} else {
+			// Multi-byte UTF-8: no auto-pair
 			undo_delete_sel(p)
 			undo_push_insert(p, p.cursor, utf_buf[:n], true)
-			for i in 0 ..< n { buffer_insert_byte(&p.buf, p.cursor + i, utf_buf[i]) }
+			for i in 0..<n { buffer_insert_byte(&p.buf, p.cursor+i, utf_buf[i]) }
 			p.cursor     += n
 			p.sel_anchor  = p.cursor
 			p.dirty       = true
@@ -466,11 +598,88 @@ sel_all :: proc(p: ^Pane) {
 	p.cursor     = buffer_len(&p.buf)
 }
 
+_auto_indent_enter :: proc(p: ^Pane) {
+	line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)
+	ls      := buffer_line_start(&p.buf, line)
+	blen    := buffer_len(&p.buf)
+
+	// Measure current line indent
+	indent := 0
+	for ls+indent < blen {
+		b := buffer_get_byte(&p.buf, ls+indent)
+		if b != ' ' && b != '\t' { break }
+		indent += 1
+	}
+	indent_bytes := make([]u8, indent, context.temp_allocator)
+	for i in 0..<indent { indent_bytes[i] = buffer_get_byte(&p.buf, ls+i) }
+
+	// Char before cursor (skip trailing whitespace)
+	char_before: u8
+	check := p.cursor - 1
+	for check >= ls && (buffer_get_byte(&p.buf, check) == ' ' || buffer_get_byte(&p.buf, check) == '\t') { check -= 1 }
+	if check >= ls { char_before = buffer_get_byte(&p.buf, check) }
+
+	// Char at cursor position (skip leading whitespace)
+	check2 := p.cursor
+	for check2 < blen && (buffer_get_byte(&p.buf, check2) == ' ' || buffer_get_byte(&p.buf, check2) == '\t') { check2 += 1 }
+	char_after: u8
+	if check2 < blen && buffer_get_byte(&p.buf, check2) != '\n' { char_after = buffer_get_byte(&p.buf, check2) }
+
+	opens  := char_before == '{' || char_before == '(' || char_before == '[' || char_before == ':'
+	closes := char_after  == '}' || char_after  == ')' || char_after  == ']'
+
+	ins: [1024]u8
+	n := 0
+	ins[n] = '\n'; n += 1
+	copy(ins[n:], indent_bytes); n += indent
+
+	cursor_pos: int
+	if opens {
+		for _ in 0..<4 { ins[n] = ' '; n += 1 }
+		cursor_pos = p.cursor + n
+		if closes {
+			ins[n] = '\n'; n += 1
+			copy(ins[n:], indent_bytes); n += indent
+		}
+	} else {
+		cursor_pos = p.cursor + n
+	}
+
+	undo_push_insert(p, p.cursor, ins[:n], false)
+	for b in ins[:n] { buffer_insert_byte(&p.buf, p.cursor, b); p.cursor += 1 }
+	p.cursor     = cursor_pos
+	p.sel_anchor = p.cursor
+	p.dirty      = true
+}
+
 // --- Edit actions ---
 
 do_backspace :: proc(p: ^Pane) {
 	if undo_delete_sel(p) do return
 	if p.cursor <= 0 do return
+	// Smart backspace: delete both chars when cursor is between matched pair
+	{
+		blen := buffer_len(&p.buf)
+		prev := buffer_get_byte(&p.buf, p.cursor - 1)
+		next : u8 = 0
+		if p.cursor < blen { next = buffer_get_byte(&p.buf, p.cursor) }
+		pair_close: u8
+		switch prev {
+		case '(':  pair_close = ')'
+		case '[':  pair_close = ']'
+		case '{':  pair_close = '}'
+		case '"':  pair_close = '"'
+		case '\'': pair_close = '\''
+		case '`':  pair_close = '`'
+		}
+		if pair_close != 0 && next == pair_close {
+			buffer_delete(&p.buf, p.cursor - 1, 2)
+			p.cursor    -= 1
+			p.sel_anchor = p.cursor
+			p.dirty      = true
+			return
+		}
+	}
 	move_left(p, false)
 	// Properly handle multi-byte UTF-8
 	first  := buffer_get_byte(&p.buf, p.cursor)

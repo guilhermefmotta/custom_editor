@@ -32,7 +32,8 @@ main :: proc() {
 
 	if len(os.args) > 1 {
 		editor_open(&e, os.args[1])
-		// Notify LSP about the initial file after LSP is running
+	} else {
+		session_restore(&e)
 	}
 
 	editor_lsp_init(&e)
@@ -54,6 +55,8 @@ main :: proc() {
 
 		mem.free_all(context.temp_allocator)
 	}
+
+	session_save(&e)
 }
 
 load_font :: proc() -> (font: rl.Font, custom: bool) {

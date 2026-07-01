@@ -441,3 +441,279 @@ _path_dirname :: proc(path: string) -> string {
 _file_exists :: proc(path: string) -> bool {
 	return os.exists(path)
 }
+
+// ---------------------------------------------------------------------------
+// TextEdit / WorkspaceEdit application
+// ---------------------------------------------------------------------------
+
+// Convert LSP {line, char} to byte offset in pane. Treats char as byte offset (ASCII-safe).
+_lsp_pos_to_offset :: proc(p: ^Pane, line, char: int) -> int {
+	ls := buffer_line_start(&p.buf, line)
+	ll := buffer_line_length(&p.buf, line)
+	return ls + clamp(char, 0, ll)
+}
+
+// Apply a single TextEdit JSON object to a pane.
+_apply_text_edit_obj :: proc(p: ^Pane, obj: json.Object) {
+	range_obj, has_r := lsp.json_obj_obj(obj, "range")
+	if !has_r { return }
+	r := lsp.parse_range(range_obj)
+	new_text, _ := lsp.json_obj_str(obj, "newText")
+
+	start_off := _lsp_pos_to_offset(p, r.start.line, r.start.character)
+	end_off   := _lsp_pos_to_offset(p, r.end.line,   r.end.character)
+	if end_off < start_off { end_off = start_off }
+	end_off = min(end_off, buffer_len(&p.buf))
+
+	if end_off > start_off { buffer_delete(&p.buf, start_off, end_off - start_off) }
+	if len(new_text) > 0   { buffer_insert_string(&p.buf, start_off, new_text) }
+	p.dirty = true
+}
+
+// Apply TextEdit[] (json.Array) to a pane, in reverse order to preserve offsets.
+apply_text_edits_to_pane :: proc(p: ^Pane, edits: json.Array) {
+	// Apply in reverse so earlier edits don't shift later positions
+	for i := len(edits) - 1; i >= 0; i -= 1 {
+		obj, is_obj := edits[i].(json.Object)
+		if !is_obj { continue }
+		_apply_text_edit_obj(p, obj)
+	}
+	blen := buffer_len(&p.buf)
+	p.cursor     = clamp(p.cursor, 0, blen)
+	p.sel_anchor = p.cursor
+}
+
+// Apply a WorkspaceEdit JSON object — handles both `changes` and `documentChanges`.
+apply_workspace_edit :: proc(e: ^Editor, val: json.Value) {
+	obj, is_obj := val.(json.Object)
+	if !is_obj { return }
+
+	// `changes`: { uri: TextEdit[] }
+	if changes_v, has := obj["changes"]; has {
+		if changes_obj, ok := changes_v.(json.Object); ok {
+			for uri_str, edits_v in changes_obj {
+				edits_arr, is_arr := edits_v.(json.Array)
+				if !is_arr { continue }
+				path := lsp.uri_to_path(uri_str)
+				_apply_edits_to_file(e, path, edits_arr)
+			}
+		}
+	}
+
+	// `documentChanges`: [{textDocument:{uri}, edits:[...]}]
+	if dc_v, has := obj["documentChanges"]; has {
+		if dc_arr, ok := dc_v.(json.Array); ok {
+			for item_v in dc_arr {
+				item, is_obj2 := item_v.(json.Object)
+				if !is_obj2 { continue }
+				td_obj, has_td := lsp.json_obj_obj(item, "textDocument")
+				if !has_td { continue }
+				uri_str, has_uri := lsp.json_obj_str(td_obj, "uri")
+				if !has_uri { continue }
+				edits_arr, has_edits := lsp.json_obj_arr(item, "edits")
+				if !has_edits { continue }
+				path := lsp.uri_to_path(uri_str)
+				_apply_edits_to_file(e, path, edits_arr)
+			}
+		}
+	}
+}
+
+_apply_edits_to_file :: proc(e: ^Editor, path: string, edits: json.Array) {
+	if len(edits) == 0 { return }
+	// Apply to open pane if file is already loaded
+	for &p in e.panes {
+		if p.filename == path {
+			apply_text_edits_to_pane(&p, edits)
+			return
+		}
+	}
+	// File not open: load it, apply, save
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil { return }
+	defer delete(data)
+	tmp := pane_init()
+	defer pane_destroy(&tmp)
+	clean, _ := strings.replace_all(string(data), "\r", "", context.allocator)
+	defer delete(clean)
+	buffer_insert_string(&tmp.buf, 0, clean)
+	tmp.filename = strings.clone(path)
+	tmp.lang     = detect_lang(path)
+	apply_text_edits_to_pane(&tmp, edits)
+	text := buffer_to_string(&tmp.buf)
+	defer delete(text)
+	_ = os.write_entire_file(path, transmute([]u8)text)
+}
+
+// ---------------------------------------------------------------------------
+// Format document  (Ctrl+Shift+I)
+// ---------------------------------------------------------------------------
+
+lsp_format_document :: proc(e: ^Editor) {
+	p := active_pane(e)
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_formatting { e.msg = "LSP: format not supported"; return }
+	lsp.manager_format(&e.lsp_mgr, p.filename, 4, true, lsp.Response_Callback{
+		proc_ = _on_format_response, user = e,
+	})
+}
+
+_on_format_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	if error != nil { return }
+	e := cast(^Editor)user
+	arr, is_arr := result.(json.Array)
+	if !is_arr { return }
+	p := active_pane(e)
+	apply_text_edits_to_pane(p, arr)
+	e.msg = "Formatted"
+}
+
+// ---------------------------------------------------------------------------
+// Rename symbol  (F2)
+// ---------------------------------------------------------------------------
+
+lsp_rename_open :: proc(e: ^Editor) {
+	p    := active_pane(e)
+	word := _def_word_at_cursor(p)
+	if word == "" { e.msg = "No symbol under cursor"; return }
+	rename_dialog_open(&e.rename_dlg, word)
+}
+
+lsp_rename_confirm :: proc(e: ^Editor, new_name: string) {
+	p := active_pane(e)
+	if p.filename == "" { return }
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_rename { e.msg = "LSP: rename not supported"; return }
+	line, char := _cursor_lsp_pos(p)
+	lsp.manager_rename(&e.lsp_mgr, p.filename, line, char, new_name, lsp.Response_Callback{
+		proc_ = _on_rename_response, user = e,
+	})
+}
+
+_on_rename_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	e := cast(^Editor)user
+	if error != nil { e.msg = "Rename failed"; return }
+	if _, is_null := result.(json.Null); is_null { e.msg = "Rename: no edits"; return }
+	apply_workspace_edit(e, result)
+	e.msg = "Renamed"
+}
+
+// ---------------------------------------------------------------------------
+// Code actions  (Ctrl+.)
+// ---------------------------------------------------------------------------
+
+lsp_code_actions_request :: proc(e: ^Editor) {
+	p := active_pane(e)
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_code_actions { e.msg = "LSP: code actions not supported"; return }
+	line, char := _cursor_lsp_pos(p)
+	lsp.manager_code_actions(&e.lsp_mgr, p.filename, line, char, lsp.Response_Callback{
+		proc_ = _on_code_actions_response, user = e,
+	})
+}
+
+_on_code_actions_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	e := cast(^Editor)user
+	if error != nil { return }
+	arr, is_arr := result.(json.Array)
+	if !is_arr || len(arr) == 0 { e.msg = "No code actions available"; return }
+
+	d := &e.code_action_dlg
+	code_action_dialog_clear(d)
+
+	for item_v in arr {
+		obj, is_obj := item_v.(json.Object)
+		if !is_obj { continue }
+		a: Code_Action
+		title, _ := lsp.json_obj_str(obj, "title")
+		a.title = strings.clone(title)
+		kind, has_kind := lsp.json_obj_str(obj, "kind")
+		if has_kind { a.kind = strings.clone(kind) } else { a.kind = strings.clone("") }
+		is_pref, _ := lsp.json_obj_bool(obj, "isPreferred")
+		a.is_preferred = is_pref
+
+		// Edit
+		if edit_v, has_e := obj["edit"]; has_e {
+			if _, not_null := edit_v.(json.Null); !not_null {
+				a.has_edit  = true
+				a.edit_json = strings.clone(fmt.tprintf("%v", edit_v))
+				// Store the raw edit value — we deep-clone it for later application
+				_store_action_edit(e, len(d.actions), lsp.Deep_Clone_Value(edit_v))
+			}
+		}
+
+		// Command
+		if cmd_v, has_c := obj["command"]; has_c {
+			#partial switch cv in cmd_v {
+			case json.Object:
+				cmd_id, _ := lsp.json_obj_str(cv, "command")
+				a.cmd_id    = strings.clone(cmd_id)
+				a.has_cmd   = true
+			case string:
+				a.cmd_id  = strings.clone(cv)
+				a.has_cmd = true
+			}
+		}
+
+		append(&d.actions, a)
+	}
+
+	if len(d.actions) == 1 {
+		// Only one action: apply immediately
+		lsp_apply_code_action(e, 0)
+	} else if len(d.actions) > 0 {
+		code_action_dialog_open(d)
+	}
+}
+
+// Temporary store for deep-cloned edit JSON values (indexed by action index).
+// We keep them as a parallel map keyed by dialog open epoch.
+@(private="file")
+_pending_edits: map[int]json.Value
+
+_store_action_edit :: proc(e: ^Editor, idx: int, v: json.Value) {
+	if _pending_edits == nil { _pending_edits = make(map[int]json.Value) }
+	if old, has := _pending_edits[idx]; has { json.destroy_value(old) }
+	_pending_edits[idx] = lsp._deep_clone_value(v)
+}
+
+lsp_apply_code_action :: proc(e: ^Editor, idx: int) {
+	d := &e.code_action_dlg
+	if idx < 0 || idx >= len(d.actions) { return }
+	a := d.actions[idx]
+
+	if a.has_edit {
+		if edit_v, has := _pending_edits[idx]; has {
+			apply_workspace_edit(e, edit_v)
+			json.destroy_value(edit_v)
+			delete_key(&_pending_edits, idx)
+		}
+	}
+	// Clean up remaining pending edits when dialog closes
+	for k, v in _pending_edits { json.destroy_value(v) }
+	clear(&_pending_edits)
+
+	if a.has_cmd && a.cmd_id != "" {
+		p := active_pane(e)
+		c := _get_client(e, p)
+		if c != nil {
+			params := fmt.tprintf(`{"command":%s,"arguments":[]}`, lsp.json_str(a.cmd_id))
+			lsp.client_send_request(c, "workspace/executeCommand", params, lsp.Response_Callback{
+				proc_ = _on_execute_command,
+			})
+		}
+	}
+
+	e.msg = fmt.tprintf("Applied: %s", a.title)
+}
+
+_on_execute_command :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+}

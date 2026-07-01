@@ -37,6 +37,7 @@ GUTTER_PAD   : f32 : 8
 MSG_LINE_H   :: f32(22) // global message bar at very bottom
 PANE_TOP_PAD :: f32(2)  // accent strip height at top of each pane
 STATUS_H     :: f32(22) // per-pane status bar height
+TAB_BAR_H    :: f32(28) // per-pane tab bar height
 
 SCROLL_SPEED :: f32(15) // scroll animation lerp speed
 
@@ -203,6 +204,12 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	// Go to Definition picker
 	render_def_picker(&e.def_picker, font, sw, sh)
 
+	// Rename dialog
+	render_rename_dialog(&e.rename_dlg, font, sw, sh)
+
+	// Code action dialog
+	render_code_action_dialog(&e.code_action_dlg, font, sw, sh)
+
 	// Delete confirm overlay
 	if e.delete_confirm { render_delete_confirm(e, font, sw, sh) }
 
@@ -225,8 +232,9 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	cw  := ref.x
 	ch  := ref.y + LINE_SPACING
 
+	tab_bar_h   := TAB_BAR_H if len(p.tabs) > 0 else f32(0)
 	status_top  := e.cfg.editor.status_bar_position != "bottom"
-	text_area_h := oh - STATUS_H - PANE_TOP_PAD
+	text_area_h := oh - STATUS_H - PANE_TOP_PAD - tab_bar_h
 	vis_lines   := int(text_area_h / ch)
 	if vis_lines < 1 do return
 
@@ -247,6 +255,11 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	// Top accent strip
 	strip_col := ACCENT_COL if is_active else INACTIVE_TOP
 	rl.DrawRectangleV({ox, oy}, {ow, PANE_TOP_PAD}, strip_col)
+
+	// Tab bar
+	if len(p.tabs) > 0 {
+		_render_tab_bar(p, font, ox, oy + PANE_TOP_PAD, ow, TAB_BAR_H, is_active)
+	}
 
 	total_lines := buffer_line_count(&p.buf)
 	digs        := digit_count(total_lines)
@@ -271,7 +284,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	sel_first_y: f32 = -1  // y of first selected visible line
 	sel_last_y:  f32 = -1  // y of last selected visible line
 
-	text_top   := oy + PANE_TOP_PAD + (STATUS_H if status_top else 0)
+	text_top   := oy + PANE_TOP_PAD + tab_bar_h + (STATUS_H if status_top else 0)
 	pane_diags := lsp.manager_get_diags(&e.lsp_mgr, p.filename)
 
 	// Draw one extra line to fill partial-scroll gaps at top and bottom
@@ -454,6 +467,16 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	modified := "● " if p.dirty else ""
 	rl.DrawTextEx(font, to_cstring(fmt.tprintf(" %s%s", modified, fname)),
 		{ox + 4, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
+
+	// Breadcrumb: current symbol at cursor
+	{
+		sym := _breadcrumb_symbol(e, p, cur_line)
+		if sym != "" {
+			sym_w := rl.MeasureTextEx(font, to_cstring(sym), FONT_SIZE - 2, CHAR_SPACING).x
+			sym_x := ox + ow / 2 - sym_w / 2
+			rl.DrawTextEx(font, to_cstring(sym), {sym_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, LINENUM)
+		}
+	}
 
 	pos_str := fmt.tprintf(" Ln %d, Col %d ", cur_line + 1, cur_col + 1)
 	pos_w   := rl.MeasureTextEx(font, to_cstring(pos_str), FONT_SIZE, CHAR_SPACING).x
@@ -900,4 +923,58 @@ to_cstring :: proc(s: string) -> cstring {
 	copy(buf, s)
 	buf[len(s)] = 0
 	return cstring(raw_data(buf))
+}
+
+// ---------------------------------------------------------------------------
+// Tab bar
+// ---------------------------------------------------------------------------
+
+TAB_ACTIVE_BG  := STATUS_BG
+TAB_INACTIVE_BG := rl.Color{24, 24, 37, 180}
+TAB_DIVIDER    := rl.Color{49, 50, 68, 255}
+
+_render_tab_bar :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, th: f32, is_active: bool) {
+	rl.DrawRectangleV({ox, oy}, {ow, th}, TAB_INACTIVE_BG)
+
+	x := ox
+	for t, ti in p.tabs {
+		label := path_basename(t.filename)
+		if label == "" { label = "untitled" }
+		dirty_mark := "● " if t.dirty else ""
+		tab_label  := fmt.tprintf(" %s%s ", dirty_mark, label)
+		tw := rl.MeasureTextEx(font, to_cstring(tab_label), FONT_SIZE - 2, CHAR_SPACING).x + 8
+
+		bg := TAB_ACTIVE_BG if ti == p.cur_tab else TAB_INACTIVE_BG
+		rl.DrawRectangleV({x, oy}, {tw, th}, bg)
+
+		// Active tab: accent bottom border
+		if ti == p.cur_tab {
+			col := ACCENT_COL if is_active else INACTIVE_TOP
+			rl.DrawRectangleV({x, oy + th - 2}, {tw, 2}, col)
+		}
+
+		text_col := TEXT if ti == p.cur_tab else LINENUM
+		ty := oy + (th - rl.MeasureTextEx(font, "M", FONT_SIZE - 2, CHAR_SPACING).y) * 0.5
+		rl.DrawTextEx(font, to_cstring(tab_label), {x + 4, ty}, FONT_SIZE - 2, CHAR_SPACING, text_col)
+
+		// Divider
+		rl.DrawRectangleV({x + tw, oy}, {1, th}, TAB_DIVIDER)
+		x += tw + 1
+		if x > ox + ow { break }
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Breadcrumb
+// ---------------------------------------------------------------------------
+
+_breadcrumb_symbol :: proc(e: ^Editor, p: ^Pane, cur_line: int) -> string {
+	if len(e.outline.symbols) == 0 { return "" }
+	best := ""
+	for s in e.outline.symbols {
+		if s.line <= cur_line { best = s.name }
+		else { break }
+	}
+	if best == "" { return "" }
+	return fmt.tprintf("  %s", best)
 }

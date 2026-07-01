@@ -53,34 +53,36 @@ Find_Replace :: struct {
 }
 
 Editor :: struct {
-	panes:       [dynamic]Pane,
-	active:      int,
-	split:       Split_Dir,
-	split_ratio: f32,
-	msg:         string,
-	palette:     Palette,
-	save_dlg:    Save_Dialog,
-	file_tree:   File_Tree,
-	marks:       [dynamic]Mark,
-	mark_dlg:    Mark_Dialog,
-	goto_dlg:    Goto_Dialog,
-	find_rep:    Find_Replace,
-	outline:        Outline_Dialog,
-	recents:        Recents_Dialog,
-	workspace_dlg:  Workspace_Dialog,
-	lsp_dialog:     LSP_Dialog,
-	git_mgr:        git.Git_Manager,
-	git_dialog:     Git_Dialog,
-	nav_hist:       Nav_History,
-	def_picker:     Goto_Def_Picker,
-	delete_confirm: bool,
-	should_quit:    bool,
-	lsp_mgr:        lsp.LSP_Manager,
-	cfg:            conf.Config,
-	registry:       conf.Registry,
-	debug_mgr:      dbg.Debug_Manager,
-	debug_eval:     Debug_Eval_Dialog,
-	debug_attach:   Debug_Attach_Dialog,
+	panes:           [dynamic]Pane,
+	active:          int,
+	split:           Split_Dir,
+	split_ratio:     f32,
+	msg:             string,
+	palette:         Palette,
+	save_dlg:        Save_Dialog,
+	file_tree:       File_Tree,
+	marks:           [dynamic]Mark,
+	mark_dlg:        Mark_Dialog,
+	goto_dlg:        Goto_Dialog,
+	find_rep:        Find_Replace,
+	outline:         Outline_Dialog,
+	recents:         Recents_Dialog,
+	workspace_dlg:   Workspace_Dialog,
+	lsp_dialog:      LSP_Dialog,
+	git_mgr:         git.Git_Manager,
+	git_dialog:      Git_Dialog,
+	nav_hist:        Nav_History,
+	def_picker:      Goto_Def_Picker,
+	rename_dlg:      Rename_Dialog,
+	code_action_dlg: Code_Action_Dialog,
+	delete_confirm:  bool,
+	should_quit:     bool,
+	lsp_mgr:         lsp.LSP_Manager,
+	cfg:             conf.Config,
+	registry:        conf.Registry,
+	debug_mgr:       dbg.Debug_Manager,
+	debug_eval:      Debug_Eval_Dialog,
+	debug_attach:    Debug_Attach_Dialog,
 }
 
 editor_init :: proc() -> Editor {
@@ -101,8 +103,10 @@ editor_init :: proc() -> Editor {
 	e.recents         = recents_init()
 	workspace_dialog_init(&e.workspace_dlg)
 	git_dialog_init(&e.git_dialog)
-	e.nav_hist  = nav_history_init()
-	e.def_picker = goto_def_picker_init()
+	e.nav_hist       = nav_history_init()
+	e.def_picker     = goto_def_picker_init()
+	e.rename_dlg     = rename_dialog_init()
+	e.code_action_dlg = code_action_dialog_init()
 	append(&e.panes, pane_init())
 	e.cfg      = conf.load_config(conf.default_config_paths())
 	e.registry = conf.registry_build(&e.cfg, "languages", "themes")
@@ -143,6 +147,8 @@ editor_destroy :: proc(e: ^Editor) {
 	git.git_manager_destroy(&e.git_mgr)
 	nav_history_destroy(&e.nav_hist)
 	goto_def_picker_destroy(&e.def_picker)
+	rename_dialog_destroy(&e.rename_dlg)
+	code_action_dialog_destroy(&e.code_action_dlg)
 	editor_lsp_destroy(e)
 	dbg.manager_destroy(&e.debug_mgr)
 	debug_eval_destroy(&e.debug_eval)
@@ -166,7 +172,17 @@ editor_open :: proc(e: ^Editor, path: string) -> bool {
 			return false
 		}
 	}
-	if !pane_open(active_pane(e), path) { return false }
+	p := active_pane(e)
+	if len(p.tabs) == 0 {
+		// First file ever: open normally and register as tab 0
+		if !pane_open(p, path) { return false }
+		if len(p.tabs) == 0 {
+			append(&p.tabs, Pane_Tab{filename = strings.clone(p.filename)})
+			p.cur_tab = 0
+		}
+	} else {
+		if !pane_open_tab(p, path) { return false }
+	}
 	recents_push(&e.recents, path)
 	lsp_on_open(e, active_pane(e))
 	return true

@@ -19,21 +19,32 @@ Undo_Op :: struct {
 	data:     [dynamic]u8,
 }
 
+Pane_Tab :: struct {
+	filename: string, // heap-owned absolute path
+	cursor:   int,
+	scroll:   int,
+	dirty:    bool,
+}
+
 Pane :: struct {
-	buf:              Gap_Buffer,
-	cursor:           int,
-	sel_anchor:       int,
-	scroll:           int,
-	scroll_anim:      f32,
-	filename:         string,
-	lang:             Lang,
-	dirty:            bool,
-	undo:             [dynamic]Undo_Op,
-	u_merge:          int,
-	extras:           [dynamic]Extra_Cursor,
-	lsp:              Pane_LSP,
-	suggest:          Suggest_Widget,
+	buf:               Gap_Buffer,
+	cursor:            int,
+	sel_anchor:        int,
+	scroll:            int,
+	scroll_anim:       f32,
+	filename:          string,
+	lang:              Lang,
+	dirty:             bool,
+	undo:              [dynamic]Undo_Op,
+	u_merge:           int,
+	extras:            [dynamic]Extra_Cursor,
+	lsp:               Pane_LSP,
+	suggest:           Suggest_Widget,
 	show_line_numbers: bool,
+	word_wrap:         bool,
+	// Tab management
+	tabs:              [dynamic]Pane_Tab,
+	cur_tab:           int,
 }
 
 MAX_UNDO :: 500
@@ -43,6 +54,7 @@ pane_init :: proc() -> Pane {
 	p.buf               = buffer_init()
 	p.undo              = make([dynamic]Undo_Op)
 	p.extras            = make([dynamic]Extra_Cursor)
+	p.tabs              = make([dynamic]Pane_Tab)
 	p.show_line_numbers = true
 	return p
 }
@@ -53,8 +65,110 @@ pane_destroy :: proc(p: ^Pane) {
 	for &op in p.undo { delete(op.data) }
 	delete(p.undo)
 	delete(p.extras)
+	for &t in p.tabs { if t.filename != "" { delete(t.filename) } }
+	delete(p.tabs)
 	pane_lsp_destroy(&p.lsp)
 	p^ = {}
+}
+
+// Save current buffer state into the current tab slot.
+_pane_save_tab_state :: proc(p: ^Pane) {
+	if p.cur_tab < 0 || p.cur_tab >= len(p.tabs) { return }
+	t := &p.tabs[p.cur_tab]
+	if t.filename != "" { delete(t.filename) }
+	t.filename = strings.clone(p.filename)
+	t.cursor   = p.cursor
+	t.scroll   = p.scroll
+	t.dirty    = p.dirty
+}
+
+// Open a file as a new tab (or switch to existing tab for that file).
+pane_open_tab :: proc(p: ^Pane, path: string) -> bool {
+	abs_path := _pane_abs(path)
+	defer delete(abs_path)
+
+	// Check if already open in a tab
+	for i in 0..<len(p.tabs) {
+		if p.tabs[i].filename == abs_path {
+			_pane_save_tab_state(p)
+			p.cur_tab = i
+			_pane_load_tab(p, i)
+			return true
+		}
+	}
+
+	// Save current state before switching
+	if len(p.tabs) > 0 { _pane_save_tab_state(p) }
+
+	// Open file into buffer
+	if !pane_open(p, path) { return false }
+
+	// Add new tab
+	new_tab := Pane_Tab{
+		filename = strings.clone(p.filename),
+		cursor   = 0,
+		scroll   = 0,
+		dirty    = false,
+	}
+	// Insert after current tab
+	insert_at := p.cur_tab + 1
+	if len(p.tabs) == 0 { insert_at = 0 }
+	if insert_at > len(p.tabs) { insert_at = len(p.tabs) }
+	inject_at(&p.tabs, insert_at, new_tab)
+	p.cur_tab = insert_at
+	return true
+}
+
+// Load tab i into the buffer (switch to it).
+_pane_load_tab :: proc(p: ^Pane, i: int) {
+	if i < 0 || i >= len(p.tabs) { return }
+	t := &p.tabs[i]
+	if t.filename == "" { return }
+	if !pane_open(p, t.filename) { return }
+	blen := buffer_len(&p.buf)
+	p.cursor     = clamp(t.cursor, 0, blen)
+	p.sel_anchor = p.cursor
+	p.scroll     = t.scroll
+	p.scroll_anim = f32(p.scroll)
+}
+
+// Close current tab; switch to adjacent tab. Returns false if no more tabs.
+pane_close_tab :: proc(p: ^Pane) -> bool {
+	n := len(p.tabs)
+	if n <= 1 {
+		// Last tab: clear pane
+		if n == 1 {
+			if p.tabs[0].filename != "" { delete(p.tabs[0].filename) }
+			ordered_remove(&p.tabs, 0)
+		}
+		buffer_destroy(&p.buf)
+		p.buf = buffer_init()
+		if p.filename != "" { delete(p.filename); p.filename = "" }
+		p.cursor = 0; p.sel_anchor = 0; p.scroll = 0; p.scroll_anim = 0
+		p.dirty = false
+		p.cur_tab = 0
+		return false
+	}
+	if p.tabs[p.cur_tab].filename != "" { delete(p.tabs[p.cur_tab].filename) }
+	ordered_remove(&p.tabs, p.cur_tab)
+	if p.cur_tab >= len(p.tabs) { p.cur_tab = len(p.tabs) - 1 }
+	_pane_load_tab(p, p.cur_tab)
+	return true
+}
+
+pane_tab_next :: proc(p: ^Pane) {
+	if len(p.tabs) <= 1 { return }
+	_pane_save_tab_state(p)
+	p.cur_tab = (p.cur_tab + 1) % len(p.tabs)
+	_pane_load_tab(p, p.cur_tab)
+}
+
+pane_tab_prev :: proc(p: ^Pane) {
+	if len(p.tabs) <= 1 { return }
+	_pane_save_tab_state(p)
+	n := len(p.tabs)
+	p.cur_tab = (p.cur_tab + n - 1) % n
+	_pane_load_tab(p, p.cur_tab)
 }
 
 pane_open :: proc(p: ^Pane, path: string) -> bool {

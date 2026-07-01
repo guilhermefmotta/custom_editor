@@ -538,6 +538,21 @@ manager_format :: proc(m: ^LSP_Manager, path: string, tab_size: int, use_spaces:
 	client_send_request(c, "textDocument/formatting", params, cb)
 }
 
+manager_code_actions :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
+	c := lsp_manager_find_client_for_path(m, path)
+	if c == nil || !c.caps.has_code_actions { return }
+	uri := path_to_uri(path)
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(uri),
+		`},"range":{"start":{"line":`, fmt.tprintf("%d", line),
+		`,"character":`, fmt.tprintf("%d", char),
+		`},"end":{"line":`, fmt.tprintf("%d", line),
+		`,"character":`, fmt.tprintf("%d", char),
+		`}},"context":{"diagnostics":[]}}`,
+	}, context.temp_allocator)
+	client_send_request(c, "textDocument/codeAction", params, cb)
+}
+
 // ---------------------------------------------------------------------------
 // Explicit server control — called from LSP dialog only
 // ---------------------------------------------------------------------------
