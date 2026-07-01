@@ -157,6 +157,15 @@ active_pane :: proc(e: ^Editor) -> ^Pane {
 }
 
 editor_open :: proc(e: ^Editor, path: string) -> bool {
+	fi, fi_err := os.stat(path, context.temp_allocator)
+	if fi_err == nil {
+		limit_bytes := i64(e.cfg.performance.max_file_size_kb) * 1024
+		if fi.size > limit_bytes {
+			e.msg = fmt.tprintf("File too large (%d MB) — limit %d MB. Raise max_file_size_kb in editor.toml.",
+				fi.size / (1024*1024), limit_bytes / (1024*1024))
+			return false
+		}
+	}
 	if !pane_open(active_pane(e), path) { return false }
 	recents_push(&e.recents, path)
 	lsp_on_open(e, active_pane(e))
