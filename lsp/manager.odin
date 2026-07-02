@@ -252,6 +252,15 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 		command    = _clone_strs({"omnisharp", "--languageserver", "--hostPID", "0"}),
 		extensions = _clone_strs({"cs"}),
 	})
+
+	// ---- XML / HTML (LemMinX / Eclipse XML LS) ----
+	// Install: https://github.com/eclipse/lemminx/releases  or  npm i -g @xml-tools/server
+	// On Arch/Manjaro: yay -S lemminx; on others put lemminx binary on PATH.
+	lsp_manager_register(m, Server_Config{
+		name       = strings.clone("lemminx"),
+		command    = _clone_strs({"lemminx"}),
+		extensions = _clone_strs({"xml", "pom", "xsd", "xsl", "xslt", "svg", "html", "htm"}),
+	})
 }
 
 // ---------------------------------------------------------------------------

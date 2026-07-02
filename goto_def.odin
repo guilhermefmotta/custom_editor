@@ -256,7 +256,7 @@ _def_line_symbol :: proc(line: []u8, lang: Lang) -> string {
 			}
 		}
 
-	case .None:
+	case .Xml, .None:
 	}
 	return ""
 }

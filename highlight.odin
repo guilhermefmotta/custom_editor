@@ -11,6 +11,7 @@ Lang :: enum {
 	Go,
 	Rust,
 	Java,
+	Xml,
 }
 
 Token_Kind :: enum {
@@ -59,7 +60,9 @@ detect_lang :: proc(path: string) -> Lang {
 	case "js", "ts", "jsx", "tsx":     return .JavaScript
 	case "go":                          return .Go
 	case "rs":                          return .Rust
-	case "java":                        return .Java
+	case "java":                             return .Java
+	case "xml", "pom", "xsd", "xsl",
+	     "xslt", "svg", "html", "htm":      return .Xml
 	}
 	return .None
 }
@@ -67,6 +70,13 @@ detect_lang :: proc(path: string) -> Lang {
 tokenize_line :: proc(line: string, lang: Lang) -> []Span {
 	if lang == .None || len(line) == 0 do return nil
 	spans := make([dynamic]Span, context.temp_allocator)
+
+	// XML uses a fully separate tokenizer
+	if lang == .Xml {
+		_tokenize_xml(line, &spans)
+		return spans[:]
+	}
+
 	i, n  := 0, len(line)
 
 	for i < n {
@@ -329,9 +339,119 @@ classify_word :: proc(word: string, lang: Lang) -> Token_Kind {
 		     "valueOf", "parseInt", "parseLong", "parseDouble":
 			return .Builtin
 		}
-	case .None:
+	case .None, .Xml:
 	}
 	return .Default
+}
+
+// XML tokenizer — handles one logical line.
+_tokenize_xml :: proc(line: string, spans: ^[dynamic]Span) {
+	n := len(line)
+	i := 0
+
+	_push :: proc(spans: ^[dynamic]Span, start, length: int, kind: Token_Kind) {
+		if length > 0 { append(spans, Span{start = start, len = length, kind = kind}) }
+	}
+
+	// XML/HTML comment: <!-- ... -->
+	if n >= 4 && line[:4] == "<!--" {
+		end := n
+		for j := 4; j <= n - 3; j += 1 {
+			if line[j:j+3] == "-->" { end = j + 3; break }
+		}
+		_push(spans, 0, end, .Comment)
+		i = end
+		if i >= n { return }
+	}
+
+	for i < n {
+		ch := line[i]
+
+		// Comment mid-line
+		if i + 4 <= n && line[i:i+4] == "<!--" {
+			end := n
+			for j := i + 4; j <= n - 3; j += 1 {
+				if line[j:j+3] == "-->" { end = j + 3; break }
+			}
+			_push(spans, i, end - i, .Comment)
+			i = end
+			continue
+		}
+
+		// Processing instruction <?...?> or DOCTYPE <!...>
+		if ch == '<' && i + 1 < n && (line[i+1] == '?' || line[i+1] == '!') {
+			end := i + 2
+			for end < n && line[end] != '>' { end += 1 }
+			if end < n { end += 1 }
+			_push(spans, i, end - i, .Macro)
+			i = end
+			continue
+		}
+
+		// Opening or closing tag  <tagname  or  </tagname
+		if ch == '<' {
+			_push(spans, i, 1, .Operator) // <
+			i += 1
+			if i < n && line[i] == '/' {
+				_push(spans, i, 1, .Operator) // /
+				i += 1
+			}
+			// tag name
+			tag_start := i
+			for i < n && line[i] != ' ' && line[i] != '\t' &&
+			    line[i] != '>' && line[i] != '/' && line[i] != '\n' { i += 1 }
+			_push(spans, tag_start, i - tag_start, .Type)
+
+			// Attributes inside the tag
+			for i < n && line[i] != '>' {
+				c2 := line[i]
+				if c2 == '"' || c2 == '\'' {
+					// attribute value string
+					q   := c2
+					end := i + 1
+					for end < n && line[end] != q { end += 1 }
+					if end < n { end += 1 }
+					_push(spans, i, end - i, .String_Lit)
+					i = end
+					continue
+				}
+				if c2 == '=' {
+					_push(spans, i, 1, .Operator)
+					i += 1
+					continue
+				}
+				if c2 == '/' {
+					_push(spans, i, 1, .Operator)
+					i += 1
+					continue
+				}
+				// attribute name
+				if _xml_ident_start(c2) {
+					attr_start := i
+					for i < n && _xml_ident_char(line[i]) { i += 1 }
+					_push(spans, attr_start, i - attr_start, .Attribute)
+					continue
+				}
+				i += 1
+			}
+			// closing >
+			if i < n && line[i] == '>' {
+				_push(spans, i, 1, .Operator)
+				i += 1
+			}
+			continue
+		}
+
+		// CDATA text — plain default, no span needed
+		i += 1
+	}
+}
+
+_xml_ident_start :: proc(c: u8) -> bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == ':' || c == '-'
+}
+_xml_ident_char :: proc(c: u8) -> bool {
+	return _xml_ident_start(c) || (c >= '0' && c <= '9') || c == '.' || c == '-'
 }
 
 // Draw line with syntax-colored spans. Gaps between spans use TEXT color.

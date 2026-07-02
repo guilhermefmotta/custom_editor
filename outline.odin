@@ -311,6 +311,8 @@ outline_scan :: proc(od: ^Outline_Dialog, p: ^Pane) {
 			}
 
 		// ---- Unknown / plain text ----------------------------------------
+		case .Xml:
+			// No outline for XML files
 		case .None:
 			if indent != 0 { continue }
 			if _ol_str_pfx(s, "//") || _ol_str_pfx(s, "#") || _ol_str_pfx(s, "/*") { continue }
