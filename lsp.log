@@ -1,2 +1,4 @@
 [lsp] log opened
-[02:58:17] [INF] lsp_manager_init root=/home/evil/Dev/custom_editor
+[02:09:07] [INF] lsp_manager_init root=/home/evil/Dev/custom_editor
+[02:09:31] [WRN] 'jdtls' not on PATH and no auto-install available
+[lsp] log closed

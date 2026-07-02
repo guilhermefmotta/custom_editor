@@ -290,24 +290,70 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 	lsp_manager_register(m, _make_jdtls_config(m.root_path))
 
 	// ---- Lua (lua-language-server) ----
-	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("lua-language-server"),
-		command    = _clone_strs({"lua-language-server"}),
-		extensions = _clone_strs({"lua"}),
-	})
+	{
+		when ODIN_OS == .Windows {
+			lua_install := _clone_strs({"powershell", "-NoProfile", "-Command",
+				`$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
+				`$url="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-win32-x64.zip"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$dir\luals.zip"; ` +
+				`Expand-Archive -Force "$dir\luals.zip" "$dir\lua-language-server"; ` +
+				`$bin="$dir\lua-language-server\bin"; ` +
+				`[Environment]::SetEnvironmentVariable("PATH","$bin;$env:PATH","User")`})
+		} else {
+			lua_install := _clone_strs({"sh", "-c",
+				`set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
+				`OS=$(uname -s); ARCH=$(uname -m); ` +
+				`if [ "$OS" = "Darwin" ]; then PLAT=darwin; else PLAT=linux; fi; ` +
+				`if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then ARCH=arm64; else ARCH=x64; fi; ` +
+				`URL="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-$PLAT-$ARCH.tar.gz"; ` +
+				`TMP=$(mktemp -d); curl -fsSL "$URL" | tar -xz -C "$TMP"; ` +
+				`cp "$TMP/bin/lua-language-server" "$DEST/lua-language-server"; ` +
+				`chmod +x "$DEST/lua-language-server"; rm -rf "$TMP"; ` +
+				`echo "Installed: $DEST/lua-language-server"`})
+		}
+		lsp_manager_register(m, Server_Config{
+			name          = strings.clone("lua-language-server"),
+			command       = _clone_strs({"lua-language-server"}),
+			extensions    = _clone_strs({"lua"}),
+			install_cmd   = lua_install,
+			install_label = strings.clone("Downloading lua-language-server..."),
+		})
+	}
 
 	// ---- Zig (zls) ----
-	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("zls"),
-		command    = _clone_strs({"zls"}),
-		extensions = _clone_strs({"zig"}),
-	})
+	{
+		when ODIN_OS == .Windows {
+			zls_install := _clone_strs({"powershell", "-NoProfile", "-Command",
+				`$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
+				`$url="https://github.com/zigtools/zls/releases/latest/download/zls-x86_64-windows.zip"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$dir\zls.zip"; ` +
+				`Expand-Archive -Force "$dir\zls.zip" "$dir\zls"; ` +
+				`[Environment]::SetEnvironmentVariable("PATH","$dir\zls;$env:PATH","User")`})
+		} else {
+			zls_install := _clone_strs({"sh", "-c",
+				`set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
+				`ARCH=$(uname -m); OS=$(uname -s | tr A-Z a-z); ` +
+				`if [ "$OS" = "darwin" ]; then OS=macos; fi; ` +
+				`URL="https://github.com/zigtools/zls/releases/latest/download/zls-$ARCH-$OS.tar.xz"; ` +
+				`curl -fsSL "$URL" | tar -xJ -C "$DEST" zls; ` +
+				`chmod +x "$DEST/zls"; echo "Installed: $DEST/zls"`})
+		}
+		lsp_manager_register(m, Server_Config{
+			name          = strings.clone("zls"),
+			command       = _clone_strs({"zls"}),
+			extensions    = _clone_strs({"zig"}),
+			install_cmd   = zls_install,
+			install_label = strings.clone("Downloading zls (Zig Language Server)..."),
+		})
+	}
 
-	// ---- C# (omnisharp) ----
+	// ---- C# (csharp-ls via dotnet) ----
 	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("omnisharp"),
-		command    = _clone_strs({"omnisharp", "--languageserver", "--hostPID", "0"}),
-		extensions = _clone_strs({"cs"}),
+		name          = strings.clone("csharp-ls"),
+		command       = _clone_strs({"csharp-ls"}),
+		extensions    = _clone_strs({"cs"}),
+		install_cmd   = _clone_strs({"dotnet", "tool", "install", "-g", "csharp-ls"}),
+		install_label = strings.clone("Installing csharp-ls via dotnet tool..."),
 	})
 
 	// ---- XML / HTML (LemMinX) ----
@@ -432,11 +478,25 @@ _make_jdtls_config :: proc(root_path: string) -> Server_Config {
 		"-data", data_dir,
 	}
 
+	// Auto-install: `pip3 install jdtls` installs a Python wrapper that
+	// bundles the Eclipse JDT LS jar. Requires Java 17+ already on PATH.
+	when ODIN_OS == .Windows {
+		install := _clone_strs({"powershell", "-NoProfile", "-Command",
+			`pip3 install jdtls; ` +
+			`if ($LASTEXITCODE -ne 0) { pip install jdtls }`})
+	} else {
+		install := _clone_strs({"sh", "-c",
+			`pip3 install jdtls 2>&1 || pip install jdtls 2>&1; ` +
+			`echo "Note: Java 17+ must be on PATH for jdtls to start."`})
+	}
+
 	return Server_Config{
-		name         = strings.clone("jdtls"),
-		command      = _clone_strs(cmd),
-		extensions   = _clone_strs({"java"}),
-		init_options = strings.clone(init_opts),
+		name          = strings.clone("jdtls"),
+		command       = _clone_strs(cmd),
+		extensions    = _clone_strs({"java"}),
+		init_options  = strings.clone(init_opts),
+		install_cmd   = install,
+		install_label = strings.clone("Installing jdtls via pip3 (requires Java 17+)..."),
 	}
 }
 
@@ -766,7 +826,18 @@ lsp_manager_start_for_path :: proc(m: ^LSP_Manager, path: string) -> (ok: bool, 
 				}
 			}
 			c := _start_rooted_client(&e, root)
-			if c == nil { return false, fmt.tprintf("failed to spawn '%s' — check PATH", e.config.command[0]) }
+			if c == nil {
+				switch e.install_state {
+				case .Running:
+					return false, fmt.tprintf("installing '%s'... open LSP Control to watch progress", e.config.name)
+				case .Done:
+					return false, fmt.tprintf("'%s' installed — starting server...", e.config.name)
+				case .Failed:
+					return false, fmt.tprintf("auto-install of '%s' failed — see LSP Control for output", e.config.name)
+				case .None:
+					return false, fmt.tprintf("'%s' not found on PATH — LSP Control (Ctrl+Shift+L) → Install", e.config.name)
+				}
+			}
 			return true, ""
 		}
 	}

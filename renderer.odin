@@ -495,7 +495,11 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		lsp_str: string
 		lsp_col: rl.Color
 		lc := lsp.lsp_manager_find_client_for_path(&e.lsp_mgr, p.filename)
-		if lc == nil {
+		inst_info := lsp.lsp_manager_install_info_for_path(&e.lsp_mgr, p.filename)
+		if lc == nil && inst_info.state == .Running {
+			lsp_str = " LSP:installing... "
+			lsp_col = rl.Color{249, 226, 175, 255}
+		} else if lc == nil {
 			lsp_str = " LSP:off "
 			lsp_col = rl.Color{88, 91, 112, 255}
 		} else {
