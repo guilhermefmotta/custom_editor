@@ -22,14 +22,22 @@ Server_Config :: struct {
 
 	// Name for display / logging
 	name: string, // heap
+
+	// Auto-install: command to run when binary is not found on PATH.
+	// Empty slice = no auto-install available.
+	install_cmd:   []string, // heap
+	install_label: string,   // heap — shown in UI: "Installing pylsp via pip..."
 }
 
 server_config_destroy :: proc(c: ^Server_Config) {
-	for s in c.command    { delete(s) }
-	for s in c.extensions { delete(s) }
+	for s in c.command      { delete(s) }
+	for s in c.extensions   { delete(s) }
+	for s in c.install_cmd  { delete(s) }
 	delete(c.command)
 	delete(c.extensions)
+	delete(c.install_cmd)
 	delete(c.init_options)
+	delete(c.install_label)
 	delete(c.name)
 }
 
@@ -43,9 +51,14 @@ Rooted_Client :: struct {
 	client: ^Language_Client,
 }
 
+Install_State :: enum { None, Running, Done, Failed }
+
 Client_Entry :: struct {
-	config:  Server_Config,
-	clients: [dynamic]Rooted_Client, // one per project root, lazily started
+	config:         Server_Config,
+	clients:        [dynamic]Rooted_Client, // one per project root, lazily started
+	install_state:  Install_State,
+	install_job:    Install_Job,
+	install_output: [dynamic]u8, // captured stdout+stderr of install process
 }
 
 LSP_Manager :: struct {
@@ -68,6 +81,8 @@ lsp_manager_destroy :: proc(m: ^LSP_Manager) {
 		}
 		delete(e.clients)
 		server_config_destroy(&e.config)
+		if e.install_job.active { install_job_kill(&e.install_job) }
+		delete(e.install_output)
 	}
 	delete(m.entries)
 	delete(m.root_path)
@@ -79,7 +94,11 @@ lsp_manager_destroy :: proc(m: ^LSP_Manager) {
 // ---------------------------------------------------------------------------
 
 lsp_manager_register :: proc(m: ^LSP_Manager, cfg: Server_Config) {
-	append(&m.entries, Client_Entry{config = cfg, clients = make([dynamic]Rooted_Client)})
+	append(&m.entries, Client_Entry{
+		config         = cfg,
+		clients        = make([dynamic]Rooted_Client),
+		install_output = make([dynamic]u8),
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +153,36 @@ _start_rooted_client :: proc(e: ^Client_Entry, root: string) -> ^Language_Client
 			return rc.client
 		}
 	}
+
+	// Check if install is in progress; retry start after done
+	if e.install_state == .Running { return nil }
+	if e.install_state == .Failed  { return nil }
+
+	// Check binary exists on PATH; auto-install if missing
+	if len(e.config.command) > 0 {
+		exists, _ := server_binary_exists(e.config.command[0])
+		if !exists {
+			if e.install_state == .None && len(e.config.install_cmd) > 0 {
+				label := e.config.install_label if e.config.install_label != "" else fmt.tprintf("Installing %s...", e.config.name)
+				log_writef("INF", fmt.tprintf("%s (binary '%s' not found)", label, e.config.command[0]))
+				clear(&e.install_output)
+				append(&e.install_output, ..transmute([]u8)label)
+				append(&e.install_output, '\n')
+				job, ok := install_job_start(e.config.install_cmd)
+				if ok {
+					e.install_job   = job
+					e.install_state = .Running
+				} else {
+					e.install_state = .Failed
+					append(&e.install_output, ..transmute([]u8)string("Failed to start installer\n"))
+				}
+			} else if e.install_state == .None {
+				log_writef("WRN", fmt.tprintf("'%s' not on PATH and no auto-install available", e.config.command[0]))
+			}
+			return nil
+		}
+	}
+
 	// Build command — for jdtls, inject a unique -data dir per root
 	cmd := e.config.command
 	jdtls_extra: []string
@@ -182,30 +231,38 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 
 	// ---- Python (pylsp) ----
 	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("pylsp"),
-		command    = _clone_strs({"pylsp"}),
-		extensions = _clone_strs({"py"}),
+		name          = strings.clone("pylsp"),
+		command       = _clone_strs({"pylsp"}),
+		extensions    = _clone_strs({"py"}),
+		install_cmd   = _clone_strs({"pip3", "install", "python-lsp-server"}),
+		install_label = strings.clone("Installing pylsp via pip3..."),
 	})
 
 	// ---- Go (gopls) ----
 	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("gopls"),
-		command    = _clone_strs({"gopls", "serve"}),
-		extensions = _clone_strs({"go"}),
+		name          = strings.clone("gopls"),
+		command       = _clone_strs({"gopls", "serve"}),
+		extensions    = _clone_strs({"go"}),
+		install_cmd   = _clone_strs({"go", "install", "golang.org/x/tools/gopls@latest"}),
+		install_label = strings.clone("Installing gopls via go install..."),
 	})
 
 	// ---- Rust (rust-analyzer) ----
 	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("rust-analyzer"),
-		command    = _clone_strs({"rust-analyzer"}),
-		extensions = _clone_strs({"rs"}),
+		name          = strings.clone("rust-analyzer"),
+		command       = _clone_strs({"rust-analyzer"}),
+		extensions    = _clone_strs({"rs"}),
+		install_cmd   = _clone_strs({"rustup", "component", "add", "rust-analyzer"}),
+		install_label = strings.clone("Installing rust-analyzer via rustup..."),
 	})
 
 	// ---- JavaScript / TypeScript (typescript-language-server) ----
 	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("typescript-language-server"),
-		command    = _clone_strs({"typescript-language-server", "--stdio"}),
-		extensions = _clone_strs({"js", "ts", "jsx", "tsx", "mjs", "cjs"}),
+		name          = strings.clone("typescript-language-server"),
+		command       = _clone_strs({"typescript-language-server", "--stdio"}),
+		extensions    = _clone_strs({"js", "ts", "jsx", "tsx", "mjs", "cjs"}),
+		install_cmd   = _clone_strs({"npm", "install", "-g", "typescript-language-server", "typescript"}),
+		install_label = strings.clone("Installing typescript-language-server via npm..."),
 	})
 
 	// ---- Java (jdtls — Eclipse JDT Language Server) ----
@@ -253,14 +310,35 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 		extensions = _clone_strs({"cs"}),
 	})
 
-	// ---- XML / HTML (LemMinX / Eclipse XML LS) ----
-	// Install: https://github.com/eclipse/lemminx/releases  or  npm i -g @xml-tools/server
-	// On Arch/Manjaro: yay -S lemminx; on others put lemminx binary on PATH.
-	lsp_manager_register(m, Server_Config{
-		name       = strings.clone("lemminx"),
-		command    = _clone_strs({"lemminx"}),
-		extensions = _clone_strs({"xml", "pom", "xsd", "xsl", "xslt", "svg", "html", "htm"}),
-	})
+	// ---- XML / HTML (LemMinX) ----
+	{
+		when ODIN_OS == .Windows {
+			lemminx_install := _clone_strs({"powershell", "-NoProfile", "-Command",
+				`$dir="$env:LOCALAPPDATA\editor"; ` +
+				`New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
+				`$url="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-win32.exe"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$dir\lemminx.exe"; ` +
+				`$old=$env:PATH; ` +
+				`[Environment]::SetEnvironmentVariable("PATH","$dir;$old","User")`})
+		} else {
+			lemminx_install := _clone_strs({"sh", "-c",
+				`set -e; ` +
+				`DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
+				`OS=$(uname -s); ` +
+				`if [ "$OS" = "Darwin" ]; then SUFFIX=osx; else SUFFIX=linux; fi; ` +
+				`URL="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-$SUFFIX"; ` +
+				`curl -fsSL "$URL" -o "$DEST/lemminx" || wget -qO "$DEST/lemminx" "$URL"; ` +
+				`chmod +x "$DEST/lemminx"; ` +
+				`echo "Installed: $DEST/lemminx"`})
+		}
+		lsp_manager_register(m, Server_Config{
+			name          = strings.clone("lemminx"),
+			command       = _clone_strs({"lemminx"}),
+			extensions    = _clone_strs({"xml", "pom", "xsd", "xsl", "xslt", "svg", "html", "htm"}),
+			install_cmd   = lemminx_install,
+			install_label = strings.clone("Downloading LemMinX (XML Language Server)..."),
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +445,93 @@ _simple_hash :: proc(s: string) -> u32 {
 	h: u32 = 5381
 	for c in s { h = h * 33 ~ u32(c) }
 	return h
+}
+
+// ---------------------------------------------------------------------------
+// Poll running install jobs — call once per frame from editor update loop
+// ---------------------------------------------------------------------------
+
+// Returns true if any server just finished installing (caller may want to retry open).
+lsp_manager_update_installs :: proc(m: ^LSP_Manager) -> (any_finished: bool) {
+	for &e in m.entries {
+		if e.install_state != .Running { continue }
+		exited, success := install_job_poll(&e.install_job, &e.install_output)
+		if exited {
+			if success {
+				e.install_state = .Done
+				log_writef("INF", fmt.tprintf("installed '%s' successfully", e.config.name))
+				append(&e.install_output, ..transmute([]u8)string("\n✓ Done. Restart server via LSP Control (Ctrl+Shift+L).\n"))
+			} else {
+				e.install_state = .Failed
+				log_writef("ERR", fmt.tprintf("install of '%s' failed — check LSP dialog for output", e.config.name))
+				append(&e.install_output, ..transmute([]u8)string("\n✗ Install failed. Check output above.\n"))
+			}
+			any_finished = true
+		}
+	}
+	return
+}
+
+// ---- Install info struct (returned to UI) ----------------------------------
+
+Install_Info :: struct {
+	state:       Install_State,
+	output:      string, // points into entry's install_output — valid until next update
+	label:       string, // install label text
+	has_install: bool,   // install_cmd is defined
+	server_name: string, // name of the server
+}
+
+// Get install info for a file's extension (for UI display).
+lsp_manager_install_info_for_path :: proc(m: ^LSP_Manager, path: string) -> Install_Info {
+	ext := path_ext(path)
+	for &e in m.entries {
+		for ex in e.config.extensions {
+			if ex != ext { continue }
+			return Install_Info{
+				state       = e.install_state,
+				output      = string(e.install_output[:]),
+				label       = e.config.install_label,
+				has_install = len(e.config.install_cmd) > 0,
+				server_name = e.config.name,
+			}
+		}
+	}
+	return {}
+}
+
+// Get install status for a server name (for UI display).
+lsp_manager_install_state :: proc(m: ^LSP_Manager, server_name: string) -> (state: Install_State, output: string) {
+	for &e in m.entries {
+		if e.config.name == server_name {
+			return e.install_state, string(e.install_output[:])
+		}
+	}
+	return .None, ""
+}
+
+// Trigger install for a server by name. Returns false if no install command defined.
+lsp_manager_trigger_install :: proc(m: ^LSP_Manager, server_name: string) -> bool {
+	for &e in m.entries {
+		if e.config.name != server_name { continue }
+		if len(e.config.install_cmd) == 0 { return false }
+		if e.install_state == .Running { return true } // already running
+		if e.install_job.active { install_job_kill(&e.install_job) }
+		clear(&e.install_output)
+		label := e.config.install_label if e.config.install_label != "" else fmt.tprintf("Installing %s...", e.config.name)
+		append(&e.install_output, ..transmute([]u8)label)
+		append(&e.install_output, '\n')
+		job, ok := install_job_start(e.config.install_cmd)
+		if ok {
+			e.install_job   = job
+			e.install_state = .Running
+			return true
+		}
+		e.install_state = .Failed
+		append(&e.install_output, ..transmute([]u8)string("Failed to spawn installer process\n"))
+		return false
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

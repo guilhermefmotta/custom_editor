@@ -113,6 +113,13 @@ _lsp_find_root :: proc(e: ^Editor) -> string {
 
 lsp_update :: proc(e: ^Editor, dt: f32) {
 	lsp.lsp_manager_update(&e.lsp_mgr)
+	if lsp.lsp_manager_update_installs(&e.lsp_mgr) {
+		// A server just finished installing — try to start it for any open pane
+		for i in 0..<len(e.panes) {
+			p := &e.panes[i]
+			if p.filename != "" { lsp_on_open(e, p) }
+		}
+	}
 
 	for i in 0..<len(e.panes) {
 		p := &e.panes[i]

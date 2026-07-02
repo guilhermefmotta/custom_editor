@@ -93,6 +93,13 @@ lsp_dialog_handle_input :: proc(d: ^LSP_Dialog, e: ^Editor) -> (consumed: bool) 
 	if rl.IsKeyPressed(.T) { _lspd_do_stop(d, e, path);    return true }
 	if rl.IsKeyPressed(.R) { _lspd_do_restart(d, e, path); return true }
 	if rl.IsKeyPressed(.C) { _lspd_copy_log(d, c);         return true }
+	if rl.IsKeyPressed(.I) {
+		inst := lsp.lsp_manager_install_info_for_path(&e.lsp_mgr, path)
+		if inst.has_install && inst.state != .Running {
+			_lspd_do_install(d, e, path, inst.server_name)
+		}
+		return true
+	}
 
 	return true // swallow all while open
 }
@@ -125,6 +132,15 @@ _lspd_do_restart :: proc(d: ^LSP_Dialog, e: ^Editor, path: string) {
 	lsp_reopen_all_panes(e)
 	_lspd_set_msg(d, true, "restarting...")
 	d.scroll = 999999; d.auto_scroll = true
+}
+
+_lspd_do_install :: proc(d: ^LSP_Dialog, e: ^Editor, path: string, server_name: string) {
+	ok := lsp.lsp_manager_trigger_install(&e.lsp_mgr, server_name)
+	if ok {
+		_lspd_set_msg(d, true, fmt.tprintf("Installing %s...", server_name))
+	} else {
+		_lspd_set_msg(d, false, fmt.tprintf("No auto-install for %s", server_name))
+	}
 }
 
 _lspd_copy_log :: proc(d: ^LSP_Dialog, c: ^lsp.Language_Client) {
@@ -320,6 +336,10 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 			return bw + BTN_GAP, hovered && active && clicked
 		}
 
+		// Install info for current file
+		inst := lsp.lsp_manager_install_info_for_path(&e.lsp_mgr, path)
+		can_install := inst.has_install && inst.state != .Running && !has_client
+
 		btn_y := ty
 		advance: f32
 		did_click: bool
@@ -339,15 +359,38 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 		_, did_click       = _btn(font, "C  Copy log", bx, btn_y, BTN_H, BTN_PAD_X, has_client,           ACCENT, ACCENT, mouse, clicked, SUBDUED)
 		if did_click { _lspd_copy_log(d, c) }
 
+		// Install button — shown when server has auto-install and isn't running
+		if inst.has_install {
+			install_label_btn: string
+			install_col := GREEN
+			switch inst.state {
+			case .None:    install_label_btn = "I  Install"
+			case .Running: install_label_btn = "Installing..."; install_col = YELLOW
+			case .Done:    install_label_btn = "Installed ✓"; install_col = GREEN
+			case .Failed:  install_label_btn = "Retry Install"; install_col = RED
+			}
+			bx2 := tx + 380 // right side of button row
+			_, did_click = _btn(font, install_label_btn, bx2, btn_y, BTN_H, BTN_PAD_X, can_install || inst.state == .Running, install_col, install_col, mouse, clicked, SUBDUED)
+			if did_click && can_install {
+				_lspd_do_install(d, e, path, inst.server_name)
+			}
+		}
+
 		ty += BTN_H + 8
 
 		// Action / error message
 		if d.action_msg != "" {
 			msg_col := GREEN if d.action_ok else RED
 			rl.DrawTextEx(font, to_cstring(d.action_msg), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, msg_col)
+		} else if inst.state == .Running {
+			rl.DrawTextEx(font, to_cstring(inst.label if inst.label != "" else "Installing..."),
+				{tx, ty}, FONT_SIZE - 2, CHAR_SPACING, YELLOW)
 		} else if c != nil && c.error_msg != "" {
 			em := fmt.tprintf("! %s", c.error_msg)
 			dlg_text(font, em, tx, ty, FONT_SIZE - 2, CHAR_SPACING, RED, px + W - 16, 0)
+		} else if server_name == "" && path != "" && !inst.has_install {
+			dlg_text(font, fmt.tprintf("no server for '.%s' files", lsp.path_ext(path)),
+				tx, ty, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, px + W - 16, 0)
 		}
 	}
 
@@ -359,17 +402,22 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	log_y := info_y + INFO_H
 	log_h := panel_h - HDR_H - INFO_H - FOOT_H
 
+	// Install output takes over log section while installing
+	inst2 := lsp.lsp_manager_install_info_for_path(&e.lsp_mgr, path)
+	show_install_log := inst2.has_install && (inst2.state == .Running || inst2.state == .Failed || inst2.state == .Done)
+
 	// Log section header
 	LOG_HDR_H :: f32(24)
 	rl.DrawRectangleV({px, log_y}, {W, LOG_HDR_H}, HDR_BG)
 	rl.DrawLineV({px, log_y + LOG_HDR_H}, {px + W, log_y + LOG_HDR_H}, PANEL_BOR)
-	log_hdr := fmt.tprintf("Log  —  %d entries", log_count)
-	rl.DrawTextEx(font, to_cstring(log_hdr),
+	log_hdr_text := fmt.tprintf("Install output") if show_install_log else fmt.tprintf("Log  —  %d entries", log_count)
+	log_hdr_col  := YELLOW if inst2.state == .Running else (GREEN if inst2.state == .Done else (RED if inst2.state == .Failed else SUBDUED))
+	rl.DrawTextEx(font, to_cstring(log_hdr_text),
 		{px + 14, log_y + (LOG_HDR_H - ref.y) * 0.5},
-		FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+		FONT_SIZE - 2, CHAR_SPACING, log_hdr_col if show_install_log else SUBDUED)
 
 	// Auto-scroll indicator
-	if d.auto_scroll && log_count > vis {
+	if !show_install_log && d.auto_scroll && log_count > vis {
 		as_str := "auto-scroll"
 		as_w := rl.MeasureTextEx(font, to_cstring(as_str), FONT_SIZE - 3, CHAR_SPACING).x
 		rl.DrawTextEx(font, to_cstring(as_str),
@@ -379,6 +427,27 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 
 	entries_y := log_y + LOG_HDR_H
 
+	// Install output display
+	if show_install_log {
+		out_lines := strings.split_lines(inst2.output, context.temp_allocator)
+		// Show last `vis` lines of output
+		first := max(0, len(out_lines) - vis)
+		for i in first..<len(out_lines) {
+			row_y := entries_y + f32(i - first) * LOG_LN_H
+			if row_y + LOG_LN_H > log_y + log_h { break }
+			col := TEXT
+			if strings.has_prefix(out_lines[i], "✓") || strings.has_prefix(out_lines[i], "Installed") { col = GREEN }
+			if strings.has_prefix(out_lines[i], "✗") || strings.has_prefix(out_lines[i], "error")     { col = RED   }
+			if strings.has_prefix(out_lines[i], "WARNING") { col = YELLOW }
+			rl.DrawTextEx(font,
+				to_cstring(text_clip(font, out_lines[i], W - 32, FONT_SIZE - 2, CHAR_SPACING)),
+				{px + 14, row_y + (LOG_LN_H - (FONT_SIZE - 2)) * 0.5},
+				FONT_SIZE - 2, CHAR_SPACING, col)
+		}
+		// After section ends, skip normal log rendering
+	}
+
+	if !show_install_log {
 	// Log entries
 	if log_count == 0 {
 		rl.DrawTextEx(font, "no log messages yet",
@@ -439,12 +508,13 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 		thumb_y := entries_y + (total_h - thumb_h) * f32(d.scroll) / f32(max_scroll)
 		rl.DrawRectangleV({track_x, thumb_y}, {SB_W, thumb_h}, PANEL_BOR)
 	}
+	} // end if !show_install_log
 
 	// ── Footer ────────────────────────────────────────────────────────────
 	foot_y := py + panel_h - FOOT_H
 	rl.DrawRectangleV({px, foot_y}, {W, FOOT_H}, HDR_BG)
 	rl.DrawLineV({px, foot_y}, {px + W, foot_y}, PANEL_BOR)
-	hints := "S start   T stop   R restart   C copy   ↑↓ / wheel scroll   Esc close"
+	hints := "S start   T stop   R restart   C copy   I install   ↑↓ scroll   Esc close"
 	hints_w := rl.MeasureTextEx(font, to_cstring(hints), FONT_SIZE - 3, CHAR_SPACING).x
 	rl.DrawTextEx(font, to_cstring(hints),
 		{px + (W - hints_w) * 0.5, foot_y + (FOOT_H - ref.y) * 0.5 + 1},
