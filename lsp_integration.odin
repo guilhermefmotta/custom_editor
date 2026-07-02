@@ -92,11 +92,18 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 	switch id {
 	case "pylsp":
 		when ODIN_OS == .Windows {
-			return _s({"powershell", "-NoProfile", "-Command", "pip3 install python-lsp-server"}),
-			       strings.clone("Installing pylsp via pip3...")
+			return _s({"powershell", "-NoProfile", "-Command", "pip install python-lsp-server"}),
+			       strings.clone("Installing pylsp...")
 		} else {
-			return _s({"sh", "-c", "pip3 install python-lsp-server 2>&1 || pip install python-lsp-server 2>&1"}),
-			       strings.clone("Installing pylsp via pip3...")
+			return _s({"sh", "-c",
+			           `set -e; ` +
+			           `if command -v pipx >/dev/null 2>&1; then ` +
+			           `  pipx install python-lsp-server 2>&1; ` +
+			           `else ` +
+			           `  pip3 install --break-system-packages python-lsp-server 2>&1 || ` +
+			           `  pip3 install --user python-lsp-server 2>&1; ` +
+			           `fi; echo "Done."`}),
+			       strings.clone("Installing pylsp...")
 		}
 	case "gopls":
 		return _s({"go", "install", "golang.org/x/tools/gopls@latest"}),
@@ -116,12 +123,27 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 	case "jdtls":
 		when ODIN_OS == .Windows {
 			return _s({"powershell", "-NoProfile", "-Command",
-			           "pip3 install jdtls; if ($LASTEXITCODE -ne 0) { pip install jdtls }"}),
-			       strings.clone("Installing jdtls via pip3 (requires Java 17+)...")
+			           `winget install --silent EclipseAdoptium.Temurin.21.JDK; ` +
+			           `$url="https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.9.0/jdt-language-server-1.9.0-202203031534.tar.gz"; ` +
+			           `$dir="$env:LOCALAPPDATA\jdtls"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
+			           `Invoke-WebRequest -Uri $url -OutFile "$dir\jdtls.tar.gz"`}),
+			       strings.clone("Installing jdtls (requires Java 17+)...")
 		} else {
+			// Try brew (linuxbrew/macOS), then apt, then snap.
+			// set -e exits non-zero if ALL methods fail.
 			return _s({"sh", "-c",
-			           "pip3 install jdtls 2>&1 || pip install jdtls 2>&1; echo 'Note: Java 17+ must be on PATH'"}),
-			       strings.clone("Installing jdtls via pip3 (requires Java 17+)...")
+			           `set -e; ` +
+			           `if command -v brew >/dev/null 2>&1; then ` +
+			           `  brew install jdtls 2>&1; ` +
+			           `elif command -v apt-get >/dev/null 2>&1; then ` +
+			           `  sudo apt-get install -y jdtls 2>&1; ` +
+			           `elif command -v snap >/dev/null 2>&1; then ` +
+			           `  sudo snap install jdtls 2>&1; ` +
+			           `else ` +
+			           `  echo "ERROR: no supported package manager found (brew/apt/snap)"; exit 1; ` +
+			           `fi; ` +
+			           `echo "Done. Java 17+ must be on PATH for jdtls to start."`}),
+			       strings.clone("Installing jdtls via brew (requires Java 17+)...")
 		}
 	case "lua-language-server":
 		when ODIN_OS == .Windows {
