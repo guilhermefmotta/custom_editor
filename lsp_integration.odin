@@ -66,15 +66,122 @@ _register_lsp_from_config :: proc(e: ^Editor) {
 		cmd[0] = strings.clone(srv.command)
 		for a, i in srv.args { cmd[i+1] = strings.clone(a) }
 
+		// Look up auto-install command for known server IDs
+		inst_cmd, inst_label := _install_cmd_for_id(srv.id)
+
 		// Transfer ownership of cmd and exts backing arrays to lsp manager
 		lsp.lsp_manager_register(&e.lsp_mgr, lsp.Server_Config{
-			name         = strings.clone(srv.name),
-			command      = cmd,
-			extensions   = exts[:],
-			init_options = strings.clone(srv.init_options),
+			name          = strings.clone(srv.name),
+			command       = cmd,
+			extensions    = exts[:],
+			init_options  = strings.clone(srv.init_options),
+			install_cmd   = inst_cmd,
+			install_label = inst_label,
 		})
 		// exts header goes out of scope; backing array now owned by Server_Config
 	}
+}
+
+// Map well-known server IDs to install commands (cross-platform).
+_install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
+	_s :: proc(strs: []string) -> []string {
+		out := make([]string, len(strs))
+		for s, i in strs { out[i] = strings.clone(s) }
+		return out
+	}
+	switch id {
+	case "pylsp":
+		when ODIN_OS == .Windows {
+			return _s({"powershell", "-NoProfile", "-Command", "pip3 install python-lsp-server"}),
+			       strings.clone("Installing pylsp via pip3...")
+		} else {
+			return _s({"sh", "-c", "pip3 install python-lsp-server 2>&1 || pip install python-lsp-server 2>&1"}),
+			       strings.clone("Installing pylsp via pip3...")
+		}
+	case "gopls":
+		return _s({"go", "install", "golang.org/x/tools/gopls@latest"}),
+		       strings.clone("Installing gopls via go install...")
+	case "rust-analyzer":
+		return _s({"rustup", "component", "add", "rust-analyzer"}),
+		       strings.clone("Installing rust-analyzer via rustup...")
+	case "typescript-language-server":
+		when ODIN_OS == .Windows {
+			return _s({"powershell", "-NoProfile", "-Command",
+			           "npm install -g typescript-language-server typescript"}),
+			       strings.clone("Installing typescript-language-server via npm...")
+		} else {
+			return _s({"sh", "-c", "npm install -g typescript-language-server typescript 2>&1"}),
+			       strings.clone("Installing typescript-language-server via npm...")
+		}
+	case "jdtls":
+		when ODIN_OS == .Windows {
+			return _s({"powershell", "-NoProfile", "-Command",
+			           "pip3 install jdtls; if ($LASTEXITCODE -ne 0) { pip install jdtls }"}),
+			       strings.clone("Installing jdtls via pip3 (requires Java 17+)...")
+		} else {
+			return _s({"sh", "-c",
+			           "pip3 install jdtls 2>&1 || pip install jdtls 2>&1; echo 'Note: Java 17+ must be on PATH'"}),
+			       strings.clone("Installing jdtls via pip3 (requires Java 17+)...")
+		}
+	case "lua-language-server":
+		when ODIN_OS == .Windows {
+			return _s({"powershell", "-NoProfile", "-Command",
+			           `$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
+			           `Invoke-WebRequest -Uri "https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-win32-x64.zip" -OutFile "$dir\luals.zip"; ` +
+			           `Expand-Archive -Force "$dir\luals.zip" "$dir\lua-language-server"; ` +
+			           `[Environment]::SetEnvironmentVariable("PATH","$dir\lua-language-server\bin;$env:PATH","User")`}),
+			       strings.clone("Downloading lua-language-server...")
+		} else {
+			return _s({"sh", "-c",
+			           `set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
+			           `OS=$(uname -s); ARCH=$(uname -m); ` +
+			           `if [ "$OS" = "Darwin" ]; then PLAT=darwin; else PLAT=linux; fi; ` +
+			           `if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then ARCH=arm64; else ARCH=x64; fi; ` +
+			           `URL="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-$PLAT-$ARCH.tar.gz"; ` +
+			           `TMP=$(mktemp -d); curl -fsSL "$URL" | tar -xz -C "$TMP"; ` +
+			           `cp "$TMP/bin/lua-language-server" "$DEST/lua-language-server"; ` +
+			           `chmod +x "$DEST/lua-language-server"; rm -rf "$TMP"; echo "Installed"`}),
+			       strings.clone("Downloading lua-language-server...")
+		}
+	case "zls":
+		when ODIN_OS == .Windows {
+			return _s({"powershell", "-NoProfile", "-Command",
+			           `$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
+			           `Invoke-WebRequest -Uri "https://github.com/zigtools/zls/releases/latest/download/zls-x86_64-windows.zip" -OutFile "$dir\zls.zip"; ` +
+			           `Expand-Archive -Force "$dir\zls.zip" "$dir\zls"; ` +
+			           `[Environment]::SetEnvironmentVariable("PATH","$dir\zls;$env:PATH","User")`}),
+			       strings.clone("Downloading zls (Zig Language Server)...")
+		} else {
+			return _s({"sh", "-c",
+			           `set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
+			           `ARCH=$(uname -m); OS=$(uname -s | tr A-Z a-z); ` +
+			           `if [ "$OS" = "darwin" ]; then OS=macos; fi; ` +
+			           `URL="https://github.com/zigtools/zls/releases/latest/download/zls-$ARCH-$OS.tar.xz"; ` +
+			           `curl -fsSL "$URL" | tar -xJ -C "$DEST" zls; ` +
+			           `chmod +x "$DEST/zls"; echo "Installed: $DEST/zls"`}),
+			       strings.clone("Downloading zls (Zig Language Server)...")
+		}
+	case "lemminx":
+		when ODIN_OS == .Windows {
+			return _s({"powershell", "-NoProfile", "-Command",
+			           `$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
+			           `Invoke-WebRequest -Uri "https://github.com/eclipse/lemminx/releases/latest/download/lemminx-win32.exe" -OutFile "$dir\lemminx.exe"; ` +
+			           `[Environment]::SetEnvironmentVariable("PATH","$dir;$env:PATH","User")`}),
+			       strings.clone("Downloading LemMinX (XML Language Server)...")
+		} else {
+			return _s({"sh", "-c",
+			           `set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
+			           `OS=$(uname -s); if [ "$OS" = "Darwin" ]; then SUFFIX=osx; else SUFFIX=linux; fi; ` +
+			           `URL="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-$SUFFIX"; ` +
+			           `curl -fsSL "$URL" -o "$DEST/lemminx" || wget -qO "$DEST/lemminx" "$URL"; ` +
+			           `chmod +x "$DEST/lemminx"; echo "Installed: $DEST/lemminx"`}),
+			       strings.clone("Downloading LemMinX (XML Language Server)...")
+		}
+	case "csharp-ls":
+		return _s({"dotnet", "tool", "install", "-g", "csharp-ls"}),
+		       strings.clone("Installing csharp-ls via dotnet tool...")
+	}
+	return nil, ""
 }
 
 lsp_destroy :: proc(e: ^Editor) {

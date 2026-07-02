@@ -186,7 +186,7 @@ _start_rooted_client :: proc(e: ^Client_Entry, root: string) -> ^Language_Client
 	// Build command — for jdtls, inject a unique -data dir per root
 	cmd := e.config.command
 	jdtls_extra: []string
-	if e.config.name == "jdtls" {
+	if len(e.config.command) > 0 && e.config.command[0] == "jdtls" {
 		hash := _simple_hash(root)
 		home := os.get_env("HOME", context.temp_allocator)
 		if home == "" { home = os.get_env("USERPROFILE", context.temp_allocator) }
@@ -291,8 +291,9 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 
 	// ---- Lua (lua-language-server) ----
 	{
+		lua_install: []string
 		when ODIN_OS == .Windows {
-			lua_install := _clone_strs({"powershell", "-NoProfile", "-Command",
+			lua_install = _clone_strs({"powershell", "-NoProfile", "-Command",
 				`$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
 				`$url="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-win32-x64.zip"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$dir\luals.zip"; ` +
@@ -300,7 +301,7 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 				`$bin="$dir\lua-language-server\bin"; ` +
 				`[Environment]::SetEnvironmentVariable("PATH","$bin;$env:PATH","User")`})
 		} else {
-			lua_install := _clone_strs({"sh", "-c",
+			lua_install = _clone_strs({"sh", "-c",
 				`set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
 				`OS=$(uname -s); ARCH=$(uname -m); ` +
 				`if [ "$OS" = "Darwin" ]; then PLAT=darwin; else PLAT=linux; fi; ` +
@@ -322,15 +323,16 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 
 	// ---- Zig (zls) ----
 	{
+		zls_install: []string
 		when ODIN_OS == .Windows {
-			zls_install := _clone_strs({"powershell", "-NoProfile", "-Command",
+			zls_install = _clone_strs({"powershell", "-NoProfile", "-Command",
 				`$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
 				`$url="https://github.com/zigtools/zls/releases/latest/download/zls-x86_64-windows.zip"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$dir\zls.zip"; ` +
 				`Expand-Archive -Force "$dir\zls.zip" "$dir\zls"; ` +
 				`[Environment]::SetEnvironmentVariable("PATH","$dir\zls;$env:PATH","User")`})
 		} else {
-			zls_install := _clone_strs({"sh", "-c",
+			zls_install = _clone_strs({"sh", "-c",
 				`set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
 				`ARCH=$(uname -m); OS=$(uname -s | tr A-Z a-z); ` +
 				`if [ "$OS" = "darwin" ]; then OS=macos; fi; ` +
@@ -358,8 +360,9 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 
 	// ---- XML / HTML (LemMinX) ----
 	{
+		lemminx_install: []string
 		when ODIN_OS == .Windows {
-			lemminx_install := _clone_strs({"powershell", "-NoProfile", "-Command",
+			lemminx_install = _clone_strs({"powershell", "-NoProfile", "-Command",
 				`$dir="$env:LOCALAPPDATA\editor"; ` +
 				`New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
 				`$url="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-win32.exe"; ` +
@@ -367,7 +370,7 @@ _register_defaults :: proc(m: ^LSP_Manager) {
 				`$old=$env:PATH; ` +
 				`[Environment]::SetEnvironmentVariable("PATH","$dir;$old","User")`})
 		} else {
-			lemminx_install := _clone_strs({"sh", "-c",
+			lemminx_install = _clone_strs({"sh", "-c",
 				`set -e; ` +
 				`DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
 				`OS=$(uname -s); ` +
@@ -480,12 +483,14 @@ _make_jdtls_config :: proc(root_path: string) -> Server_Config {
 
 	// Auto-install: `pip3 install jdtls` installs a Python wrapper that
 	// bundles the Eclipse JDT LS jar. Requires Java 17+ already on PATH.
+	// Declare before when-block — Odin when-blocks are scoped.
+	install: []string
 	when ODIN_OS == .Windows {
-		install := _clone_strs({"powershell", "-NoProfile", "-Command",
+		install = _clone_strs({"powershell", "-NoProfile", "-Command",
 			`pip3 install jdtls; ` +
 			`if ($LASTEXITCODE -ne 0) { pip install jdtls }`})
 	} else {
-		install := _clone_strs({"sh", "-c",
+		install = _clone_strs({"sh", "-c",
 			`pip3 install jdtls 2>&1 || pip install jdtls 2>&1; ` +
 			`echo "Note: Java 17+ must be on PATH for jdtls to start."`})
 	}
