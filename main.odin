@@ -14,7 +14,12 @@ FONT_PATHS :: []string{
 	"C:/Windows/Fonts/consola.ttf",
 }
 
+when ODIN_OS != .Windows {
+	platform_hide_console :: proc() {} // no-op on non-Windows
+}
+
 main :: proc() {
+	platform_hide_console() // hides console window on Windows (FreeConsole)
 	rl.SetTraceLogLevel(.WARNING)
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
