@@ -197,7 +197,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	// Layout constants
 	W        :: f32(740)
 	HDR_H    :: f32(36)
-	INFO_H   :: f32(148) // server + file + root + buttons + msg
+	INFO_H   :: f32(180) // server + file + root + buttons + install btn + msg
 	LOG_LN_H :: f32(22)
 	FOOT_H   :: f32(30)
 	SB_W     :: f32(6)   // scrollbar width
@@ -359,24 +359,26 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 		_, did_click       = _btn(font, "C  Copy log", bx, btn_y, BTN_H, BTN_PAD_X, has_client,           ACCENT, ACCENT, mouse, clicked, SUBDUED)
 		if did_click { _lspd_copy_log(d, c) }
 
-		// Install button — shown when server has auto-install and isn't running
+		ty += BTN_H + 6
+
+		// Install button — own row, shown when server has auto-install
 		if inst.has_install {
 			install_label_btn: string
 			install_col := GREEN
 			switch inst.state {
 			case .None:    install_label_btn = "I  Install"
 			case .Running: install_label_btn = "Installing..."; install_col = YELLOW
-			case .Done:    install_label_btn = "Installed ✓"; install_col = GREEN
-			case .Failed:  install_label_btn = "Retry Install"; install_col = RED
+			case .Done:    install_label_btn = "Installed"; install_col = GREEN
+			case .Failed:  install_label_btn = "I  Retry Install"; install_col = RED
 			}
-			bx2 := tx + 380 // right side of button row
-			_, did_click = _btn(font, install_label_btn, bx2, btn_y, BTN_H, BTN_PAD_X, can_install || inst.state == .Running, install_col, install_col, mouse, clicked, SUBDUED)
+			_, did_click = _btn(font, install_label_btn, tx, ty, BTN_H, BTN_PAD_X, can_install, install_col, install_col, mouse, clicked, SUBDUED)
 			if did_click && can_install {
 				_lspd_do_install(d, e, path, inst.server_name)
 			}
+			ty += BTN_H + 4
 		}
 
-		ty += BTN_H + 8
+		ty += 4
 
 		// Action / error message
 		if d.action_msg != "" {

@@ -835,7 +835,7 @@ lsp_manager_start_for_path :: proc(m: ^LSP_Manager, path: string) -> (ok: bool, 
 				case .Failed:
 					return false, fmt.tprintf("auto-install of '%s' failed — see LSP Control for output", e.config.name)
 				case .None:
-					return false, fmt.tprintf("'%s' not found on PATH — LSP Control (Ctrl+Shift+L) → Install", e.config.name)
+					return false, fmt.tprintf("'%s' not found - open LSP Control (Ctrl+Shift+L) and press I to install", e.config.name)
 				}
 			}
 			return true, ""
