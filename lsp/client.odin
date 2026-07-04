@@ -70,11 +70,17 @@ Server_Caps :: struct {
 	has_rename:            bool,
 	has_formatting:        bool,
 	has_range_formatting:  bool,
-	has_code_actions:      bool,
+	has_code_actions:        bool,
+	has_code_action_resolve: bool, // server wants codeAction/resolve before edit/command is usable
 	has_semantic_tokens:   bool,
 	has_inlay_hints:       bool,
 	has_code_lens:         bool,
 	has_workspace_symbols: bool,
+	has_implementation:    bool,
+	has_type_definition:   bool,
+	has_declaration:       bool,
+	has_document_highlight: bool,
+	has_document_symbol:   bool,
 	completion_triggers:   []string, // heap-owned
 	sig_help_triggers:     []string, // heap-owned
 	text_sync_kind:        int,      // 1 = full, 2 = incremental
@@ -369,7 +375,7 @@ _send_initialize :: proc(c: ^Language_Client) {
 	_client_log(c, .Info, fmt.tprintf("sending initialize pid=%d root=%s", pid, c.root_uri))
 
 	// Build params by concatenation — avoids fmt treating { as a format directive.
-	static_caps := `{"textDocument":{"synchronization":{"dynamicRegistration":true,"willSave":false,"didSave":true,"willSaveWaitUntil":false},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":false,"documentationFormat":["plaintext","markdown"],"deprecatedSupport":true,"preselectSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]}},"hover":{"dynamicRegistration":true,"contentFormat":["plaintext","markdown"]},"signatureHelp":{"dynamicRegistration":true,"signatureInformation":{"documentationFormat":["plaintext","markdown"],"parameterInformation":{"labelOffsetSupport":true}}},"definition":{"dynamicRegistration":true},"references":{"dynamicRegistration":true},"documentHighlight":{"dynamicRegistration":true},"documentSymbol":{"dynamicRegistration":true},"codeAction":{"dynamicRegistration":true},"codeLens":{"dynamicRegistration":true},"formatting":{"dynamicRegistration":true},"rename":{"dynamicRegistration":true},"publishDiagnostics":{"relatedInformation":true,"tagSupport":{"valueSet":[1,2]},"versionSupport":true},"semanticTokens":{"dynamicRegistration":true,"requests":{"full":true,"range":false},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false},"inlayHint":{"dynamicRegistration":true},"diagnostics":{"dynamicRegistration":true}},"workspace":{"applyEdit":true,"symbol":{"dynamicRegistration":true},"workspaceFolders":true,"fileOperations":{"didCreate":false,"willCreate":false,"didRename":false,"willRename":false,"didDelete":false,"willDelete":false}}}`
+	static_caps := `{"textDocument":{"synchronization":{"dynamicRegistration":false,"willSave":false,"didSave":true,"willSaveWaitUntil":false},"completion":{"dynamicRegistration":false,"completionItem":{"snippetSupport":false,"documentationFormat":["plaintext","markdown"],"deprecatedSupport":true,"preselectSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]}},"hover":{"dynamicRegistration":false,"contentFormat":["plaintext","markdown"]},"signatureHelp":{"dynamicRegistration":false,"signatureInformation":{"documentationFormat":["plaintext","markdown"],"parameterInformation":{"labelOffsetSupport":true}}},"definition":{"dynamicRegistration":false},"references":{"dynamicRegistration":false},"documentHighlight":{"dynamicRegistration":false},"documentSymbol":{"dynamicRegistration":false},"codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["","quickfix","refactor","refactor.extract","refactor.inline","refactor.rewrite","source","source.organizeImports"]}},"isPreferredSupport":true,"resolveSupport":{"properties":["edit"]},"dataSupport":true},"codeLens":{"dynamicRegistration":false},"formatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false},"publishDiagnostics":{"relatedInformation":true,"tagSupport":{"valueSet":[1,2]},"versionSupport":true},"semanticTokens":{"dynamicRegistration":false,"requests":{"full":true,"range":false},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false},"inlayHint":{"dynamicRegistration":false},"diagnostics":{"dynamicRegistration":false}},"workspace":{"applyEdit":true,"symbol":{"dynamicRegistration":false},"workspaceFolders":true,"fileOperations":{"didCreate":false,"willCreate":false,"didRename":false,"willRename":false,"didDelete":false,"willDelete":false}}}`
 
 	params := strings.concatenate({
 		`{"processId":`, pid_str,
@@ -488,6 +494,11 @@ _parse_server_caps :: proc(c: ^Language_Client, caps: json.Object) {
 
 	_, has_ca := caps["codeActionProvider"]
 	c.caps.has_code_actions = has_ca
+	if has_ca {
+		if ca_obj, ok := json_obj_obj(caps, "codeActionProvider"); ok {
+			if rp, ok2 := json_obj_bool(ca_obj, "resolveProvider"); ok2 { c.caps.has_code_action_resolve = rp }
+		}
+	}
 
 	_, has_st := caps["semanticTokensProvider"]
 	c.caps.has_semantic_tokens = has_st
@@ -500,6 +511,21 @@ _parse_server_caps :: proc(c: ^Language_Client, caps: json.Object) {
 
 	_, has_ws := caps["workspaceSymbolProvider"]
 	c.caps.has_workspace_symbols = has_ws
+
+	_, has_impl := caps["implementationProvider"]
+	c.caps.has_implementation = has_impl
+
+	_, has_tdef := caps["typeDefinitionProvider"]
+	c.caps.has_type_definition = has_tdef
+
+	_, has_decl := caps["declarationProvider"]
+	c.caps.has_declaration = has_decl
+
+	_, has_dh := caps["documentHighlightProvider"]
+	c.caps.has_document_highlight = has_dh
+
+	_, has_ds := caps["documentSymbolProvider"]
+	c.caps.has_document_symbol = has_ds
 }
 
 // ---------------------------------------------------------------------------

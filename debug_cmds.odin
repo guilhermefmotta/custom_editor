@@ -8,18 +8,18 @@ import dbg "./debug"
 // Called from palette_init to register all debug commands.
 register_debug_commands :: proc(p: ^Palette) {
 	append(&p.cmds,
-		Command{"Debug: Start",                   "Launch debug session for current file",          cmd_dbg_start},
-		Command{"Debug: Stop",                    "Stop current debug session",                     cmd_dbg_stop},
-		Command{"Debug: Restart",                 "Restart current debug session",                  cmd_dbg_restart},
-		Command{"Debug: Continue",                "Resume execution (F5)",                          cmd_dbg_continue},
-		Command{"Debug: Pause",                   "Pause running program",                          cmd_dbg_pause},
-		Command{"Debug: Step Over",               "Execute next line without entering calls (F10)", cmd_dbg_step_over},
-		Command{"Debug: Step Into",               "Step into function call (F11)",                  cmd_dbg_step_into},
-		Command{"Debug: Step Out",                "Step out of current function (Shift+F11)",       cmd_dbg_step_out},
-		Command{"Debug: Toggle Breakpoint",       "Add or remove breakpoint at current line (F9)",  cmd_dbg_toggle_bp},
-		Command{"Debug: Remove All Breakpoints",  "Clear every breakpoint",                         cmd_dbg_clear_bp},
-		Command{"Debug: Evaluate Expression",     "Evaluate selected text or type expression",      cmd_dbg_evaluate},
-		Command{"Debug: Attach Remote...",        "Connect to a remote DAP adapter via TCP",        cmd_dbg_attach_remote},
+		Command{"Debug: Start",                   "Launch debug session for current file",          cmd_dbg_start, nil},
+		Command{"Debug: Stop",                    "Stop current debug session",                     cmd_dbg_stop, nil},
+		Command{"Debug: Restart",                 "Restart current debug session",                  cmd_dbg_restart, nil},
+		Command{"Debug: Continue",                "Resume execution (F5)",                          cmd_dbg_continue, nil},
+		Command{"Debug: Pause",                   "Pause running program",                          cmd_dbg_pause, nil},
+		Command{"Debug: Step Over",               "Execute next line without entering calls (F10)", cmd_dbg_step_over, nil},
+		Command{"Debug: Step Into",               "Step into function call (F11)",                  cmd_dbg_step_into, nil},
+		Command{"Debug: Step Out",                "Step out of current function (Shift+F11)",       cmd_dbg_step_out, nil},
+		Command{"Debug: Toggle Breakpoint",       "Add or remove breakpoint at current line (F9)",  cmd_dbg_toggle_bp, nil},
+		Command{"Debug: Remove All Breakpoints",  "Clear every breakpoint",                         cmd_dbg_clear_bp, nil},
+		Command{"Debug: Evaluate Expression",     "Evaluate selected text or type expression",      cmd_dbg_evaluate, nil},
+		Command{"Debug: Attach Remote...",        "Connect to a remote DAP adapter via TCP",        cmd_dbg_attach_remote, nil},
 	)
 }
 

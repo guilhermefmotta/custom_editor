@@ -21,6 +21,14 @@ server_binary_exists :: proc(name: string) -> (found: bool, full_path: string) {
 			if os.exists(full) && !os.is_dir(full) { return true, strings.clone(full) }
 		}
 	}
+	// Editor-owned install dir (%LOCALAPPDATA%\editor\lsp\<name>\<name>.*)
+	// used by our own auto-installer.
+	home_dir := lsp_home_dir(name)
+	for ext in exts {
+		full := strings.concatenate({home_dir, "\\", name, ext}, context.temp_allocator)
+		if os.exists(full) && !os.is_dir(full) { return true, strings.clone(full) }
+	}
+
 	// Common npm/go/cargo locations
 	appdata := os.get_env("APPDATA", context.temp_allocator)
 	profile := os.get_env("USERPROFILE", context.temp_allocator)

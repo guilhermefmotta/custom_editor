@@ -83,125 +83,238 @@ _register_lsp_from_config :: proc(e: ^Editor) {
 }
 
 // Map well-known server IDs to install commands (cross-platform).
+//
+// Every server is downloaded/built directly into its own editor-owned
+// directory (lsp.lsp_home_dir(id) — ~/.config/editor/lsp/<id>/ on
+// Linux/macOS, %LOCALAPPDATA%\editor\lsp\<id>\ on Windows) and never
+// touches the user's global PATH, pip/npm/dotnet-tool/rustup install
+// locations, or a system package manager. lsp.manager resolves the
+// produced binary by absolute path (see server_binary_exists), so no
+// PATH mutation is ever required.
 _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 	_s :: proc(strs: []string) -> []string {
 		out := make([]string, len(strs))
 		for s, i in strs { out[i] = strings.clone(s) }
 		return out
 	}
+	// NOTE: install scripts are built with strings.concatenate, not fmt.tprintf —
+	// fmt.tprintf treats bare '{' as the start of a Python-style format spec
+	// (see core:fmt/doc.odin), which corrupts any script needing literal braces
+	// (e.g. jdtls's `{ ...; } > file` shell grouping). concatenate does no
+	// verb/brace parsing at all, so it's the only safe way to splice `dest` in.
 	switch id {
 	case "pylsp":
+		dest := lsp.lsp_home_dir("pylsp")
 		when ODIN_OS == .Windows {
-			return _s({"powershell", "-NoProfile", "-Command", "pip install python-lsp-server"}),
-			       strings.clone("Installing pylsp...")
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`python -m venv "$DEST\venv"; ` +
+				`& "$DEST\venv\Scripts\pip.exe" install python-lsp-server; ` +
+				`Copy-Item "$DEST\venv\Scripts\pylsp.exe" "$DEST\pylsp.exe" -Force`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Installing pylsp into editor-local venv...")
 		} else {
-			return _s({"sh", "-c",
-			           `set -e; ` +
-			           `if command -v pipx >/dev/null 2>&1; then ` +
-			           `  pipx install python-lsp-server 2>&1; ` +
-			           `else ` +
-			           `  pip3 install --break-system-packages python-lsp-server 2>&1 || ` +
-			           `  pip3 install --user python-lsp-server 2>&1; ` +
-			           `fi; echo "Done."`}),
-			       strings.clone("Installing pylsp...")
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`PY=python3; command -v python3 >/dev/null 2>&1 || PY=python; ` +
+				`"$PY" -m venv "$DEST/venv"; ` +
+				`"$DEST/venv/bin/pip" install --upgrade pip >/dev/null 2>&1 || true; ` +
+				`"$DEST/venv/bin/pip" install python-lsp-server; ` +
+				`ln -sf "$DEST/venv/bin/pylsp" "$DEST/pylsp"; ` +
+				`echo "Installed: $DEST/pylsp"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Installing pylsp into editor-local venv...")
 		}
 	case "gopls":
-		return _s({"go", "install", "golang.org/x/tools/gopls@latest"}),
-		       strings.clone("Installing gopls via go install...")
-	case "rust-analyzer":
-		return _s({"rustup", "component", "add", "rust-analyzer"}),
-		       strings.clone("Installing rust-analyzer via rustup...")
-	case "typescript-language-server":
+		dest := lsp.lsp_home_dir("gopls")
 		when ODIN_OS == .Windows {
-			return _s({"powershell", "-NoProfile", "-Command",
-			           "npm install -g typescript-language-server typescript"}),
-			       strings.clone("Installing typescript-language-server via npm...")
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`$env:GOBIN=$DEST; go install golang.org/x/tools/gopls@latest`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Installing gopls into editor-local dir...")
 		} else {
-			return _s({"sh", "-c", "npm install -g typescript-language-server typescript 2>&1"}),
-			       strings.clone("Installing typescript-language-server via npm...")
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`GOBIN="$DEST" go install golang.org/x/tools/gopls@latest; ` +
+				`echo "Installed: $DEST/gopls"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Installing gopls into editor-local dir...")
+		}
+	case "rust-analyzer":
+		dest := lsp.lsp_home_dir("rust-analyzer")
+		when ODIN_OS == .Windows {
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`$url="https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-pc-windows-msvc.gz"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$DEST\ra.gz"; ` +
+				`$in=New-Object System.IO.FileStream("$DEST\ra.gz",[IO.FileMode]::Open); ` +
+				`$out=New-Object System.IO.FileStream("$DEST\rust-analyzer.exe",[IO.FileMode]::Create); ` +
+				`$gz=New-Object System.IO.Compression.GZipStream($in,[IO.Compression.CompressionMode]::Decompress); ` +
+				`$gz.CopyTo($out); $gz.Close(); $out.Close(); $in.Close(); Remove-Item "$DEST\ra.gz"`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Downloading rust-analyzer into editor-local dir...")
+		} else {
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`OS=$(uname -s); ARCH=$(uname -m); ` +
+				`if [ "$OS" = "Darwin" ]; then ` +
+				`  if [ "$ARCH" = "arm64" ]; then TARGET=aarch64-apple-darwin; else TARGET=x86_64-apple-darwin; fi; ` +
+				`else ` +
+				`  if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then TARGET=aarch64-unknown-linux-gnu; else TARGET=x86_64-unknown-linux-gnu; fi; ` +
+				`fi; ` +
+				`URL="https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-$TARGET.gz"; ` +
+				`curl -fsSL "$URL" | gunzip -c > "$DEST/rust-analyzer"; ` +
+				`chmod +x "$DEST/rust-analyzer"; echo "Installed: $DEST/rust-analyzer"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Downloading rust-analyzer into editor-local dir...")
+		}
+	case "typescript-language-server":
+		dest := lsp.lsp_home_dir("typescript-language-server")
+		when ODIN_OS == .Windows {
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`npm install --prefix "$DEST" typescript-language-server typescript; ` +
+				`Copy-Item "$DEST\node_modules\.bin\typescript-language-server.cmd" "$DEST\typescript-language-server.cmd" -Force`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Installing typescript-language-server into editor-local dir...")
+		} else {
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`npm install --prefix "$DEST" typescript-language-server typescript; ` +
+				`ln -sf "$DEST/node_modules/.bin/typescript-language-server" "$DEST/typescript-language-server"; ` +
+				`echo "Installed: $DEST/typescript-language-server"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Installing typescript-language-server into editor-local dir...")
 		}
 	case "jdtls":
+		dest := lsp.lsp_home_dir("jdtls")
 		when ODIN_OS == .Windows {
-			return _s({"powershell", "-NoProfile", "-Command",
-			           `winget install --silent EclipseAdoptium.Temurin.21.JDK; ` +
-			           `$url="https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.9.0/jdt-language-server-1.9.0-202203031534.tar.gz"; ` +
-			           `$dir="$env:LOCALAPPDATA\jdtls"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
-			           `Invoke-WebRequest -Uri $url -OutFile "$dir\jdtls.tar.gz"`}),
-			       strings.clone("Installing jdtls (requires Java 17+)...")
+			cmd_str := strings.concatenate({
+				`winget install --silent EclipseAdoptium.Temurin.21.JDK; ` +
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`$url="https://www.eclipse.org/downloads/download.php?file=/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$DEST\jdtls.tar.gz"; ` +
+				`tar -xzf "$DEST\jdtls.tar.gz" -C "$DEST"; Remove-Item "$DEST\jdtls.tar.gz"; ` +
+				`$jar=(Get-ChildItem "$DEST\plugins\org.eclipse.equinox.launcher_*.jar" | Select-Object -First 1).FullName; ` +
+				`$launcher = 'java -Declipse.application=org.eclipse.jdt.ls.core.id1 -Dosgi.bundles.defaultStartLevel=4 -Declipse.product=org.eclipse.jdt.ls.core.product -Dlog.level=ALL -noverify -Xmx1G --add-modules=ALL-SYSTEM --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED -jar "{0}" -configuration "{1}\config_win" %*' -f $jar, $DEST; ` +
+				`Set-Content -Path "$DEST\jdtls.cmd" -Value $launcher`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Installing jdtls into editor-local dir (requires Java 17+)...")
 		} else {
-			// Try brew (linuxbrew/macOS), then apt, then snap.
-			// set -e exits non-zero if ALL methods fail.
-			return _s({"sh", "-c",
-			           `set -e; ` +
-			           `if command -v brew >/dev/null 2>&1; then ` +
-			           `  brew install jdtls 2>&1; ` +
-			           `elif command -v apt-get >/dev/null 2>&1; then ` +
-			           `  sudo apt-get install -y jdtls 2>&1; ` +
-			           `elif command -v snap >/dev/null 2>&1; then ` +
-			           `  sudo snap install jdtls 2>&1; ` +
-			           `else ` +
-			           `  echo "ERROR: no supported package manager found (brew/apt/snap)"; exit 1; ` +
-			           `fi; ` +
-			           `echo "Done. Java 17+ must be on PATH for jdtls to start."`}),
-			       strings.clone("Installing jdtls via brew (requires Java 17+)...")
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`URL="https://www.eclipse.org/downloads/download.php?file=/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
+				`curl -fsSL "$URL" -o "$DEST/jdtls.tar.gz"; ` +
+				`tar -xzf "$DEST/jdtls.tar.gz" -C "$DEST"; rm -f "$DEST/jdtls.tar.gz"; ` +
+				`CONF=config_linux; [ "$(uname -s)" = "Darwin" ] && CONF=config_mac; ` +
+				`JAR=$(ls "$DEST"/plugins/org.eclipse.equinox.launcher_*.jar | head -1); ` +
+				`{ echo '#!/bin/sh'; ` +
+				`  echo "exec java -Declipse.application=org.eclipse.jdt.ls.core.id1 -Dosgi.bundles.defaultStartLevel=4 -Declipse.product=org.eclipse.jdt.ls.core.product -Dlog.level=ALL -noverify -Xmx1G --add-modules=ALL-SYSTEM --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED -jar \"$JAR\" -configuration \"$DEST/$CONF\" \"\$@\""; ` +
+				`} > "$DEST/jdtls"; ` +
+				`chmod +x "$DEST/jdtls"; echo "Installed: $DEST/jdtls"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Installing jdtls into editor-local dir (requires Java 17+)...")
 		}
 	case "lua-language-server":
+		dest := lsp.lsp_home_dir("lua-language-server")
 		when ODIN_OS == .Windows {
-			return _s({"powershell", "-NoProfile", "-Command",
-			           `$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
-			           `Invoke-WebRequest -Uri "https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-win32-x64.zip" -OutFile "$dir\luals.zip"; ` +
-			           `Expand-Archive -Force "$dir\luals.zip" "$dir\lua-language-server"; ` +
-			           `[Environment]::SetEnvironmentVariable("PATH","$dir\lua-language-server\bin;$env:PATH","User")`}),
-			       strings.clone("Downloading lua-language-server...")
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`$url="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-win32-x64.zip"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$DEST\luals.zip"; ` +
+				`Expand-Archive -Force "$DEST\luals.zip" "$DEST\extracted"; ` +
+				`Copy-Item "$DEST\extracted\bin\lua-language-server.exe" "$DEST\lua-language-server.exe" -Force`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Downloading lua-language-server into editor-local dir...")
 		} else {
-			return _s({"sh", "-c",
-			           `set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
-			           `OS=$(uname -s); ARCH=$(uname -m); ` +
-			           `if [ "$OS" = "Darwin" ]; then PLAT=darwin; else PLAT=linux; fi; ` +
-			           `if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then ARCH=arm64; else ARCH=x64; fi; ` +
-			           `URL="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-$PLAT-$ARCH.tar.gz"; ` +
-			           `TMP=$(mktemp -d); curl -fsSL "$URL" | tar -xz -C "$TMP"; ` +
-			           `cp "$TMP/bin/lua-language-server" "$DEST/lua-language-server"; ` +
-			           `chmod +x "$DEST/lua-language-server"; rm -rf "$TMP"; echo "Installed"`}),
-			       strings.clone("Downloading lua-language-server...")
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`OS=$(uname -s); ARCH=$(uname -m); ` +
+				`if [ "$OS" = "Darwin" ]; then PLAT=darwin; else PLAT=linux; fi; ` +
+				`if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then ARCH=arm64; else ARCH=x64; fi; ` +
+				`URL="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-$PLAT-$ARCH.tar.gz"; ` +
+				`TMP=$(mktemp -d); curl -fsSL "$URL" | tar -xz -C "$TMP"; ` +
+				`cp "$TMP/bin/lua-language-server" "$DEST/lua-language-server"; ` +
+				`chmod +x "$DEST/lua-language-server"; rm -rf "$TMP"; echo "Installed: $DEST/lua-language-server"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Downloading lua-language-server into editor-local dir...")
 		}
 	case "zls":
+		dest := lsp.lsp_home_dir("zls")
 		when ODIN_OS == .Windows {
-			return _s({"powershell", "-NoProfile", "-Command",
-			           `$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
-			           `Invoke-WebRequest -Uri "https://github.com/zigtools/zls/releases/latest/download/zls-x86_64-windows.zip" -OutFile "$dir\zls.zip"; ` +
-			           `Expand-Archive -Force "$dir\zls.zip" "$dir\zls"; ` +
-			           `[Environment]::SetEnvironmentVariable("PATH","$dir\zls;$env:PATH","User")`}),
-			       strings.clone("Downloading zls (Zig Language Server)...")
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`$url="https://github.com/zigtools/zls/releases/latest/download/zls-x86_64-windows.zip"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$DEST\zls.zip"; ` +
+				`Expand-Archive -Force "$DEST\zls.zip" "$DEST\extracted"; ` +
+				`Copy-Item "$DEST\extracted\zls.exe" "$DEST\zls.exe" -Force`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Downloading zls into editor-local dir...")
 		} else {
-			return _s({"sh", "-c",
-			           `set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
-			           `ARCH=$(uname -m); OS=$(uname -s | tr A-Z a-z); ` +
-			           `if [ "$OS" = "darwin" ]; then OS=macos; fi; ` +
-			           `URL="https://github.com/zigtools/zls/releases/latest/download/zls-$ARCH-$OS.tar.xz"; ` +
-			           `curl -fsSL "$URL" | tar -xJ -C "$DEST" zls; ` +
-			           `chmod +x "$DEST/zls"; echo "Installed: $DEST/zls"`}),
-			       strings.clone("Downloading zls (Zig Language Server)...")
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`ARCH=$(uname -m); OS=$(uname -s | tr A-Z a-z); ` +
+				`if [ "$OS" = "darwin" ]; then OS=macos; fi; ` +
+				`URL="https://github.com/zigtools/zls/releases/latest/download/zls-$ARCH-$OS.tar.xz"; ` +
+				`curl -fsSL "$URL" | tar -xJ -C "$DEST" zls; ` +
+				`chmod +x "$DEST/zls"; echo "Installed: $DEST/zls"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Downloading zls into editor-local dir...")
 		}
 	case "lemminx":
+		dest := lsp.lsp_home_dir("lemminx")
 		when ODIN_OS == .Windows {
-			return _s({"powershell", "-NoProfile", "-Command",
-			           `$dir="$env:LOCALAPPDATA\editor"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; ` +
-			           `Invoke-WebRequest -Uri "https://github.com/eclipse/lemminx/releases/latest/download/lemminx-win32.exe" -OutFile "$dir\lemminx.exe"; ` +
-			           `[Environment]::SetEnvironmentVariable("PATH","$dir;$env:PATH","User")`}),
-			       strings.clone("Downloading LemMinX (XML Language Server)...")
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`$url="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-win32.exe"; ` +
+				`Invoke-WebRequest -Uri $url -OutFile "$DEST\lemminx.exe"`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Downloading LemMinX into editor-local dir...")
 		} else {
-			return _s({"sh", "-c",
-			           `set -e; DEST="$HOME/.local/bin"; mkdir -p "$DEST"; ` +
-			           `OS=$(uname -s); if [ "$OS" = "Darwin" ]; then SUFFIX=osx; else SUFFIX=linux; fi; ` +
-			           `URL="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-$SUFFIX"; ` +
-			           `curl -fsSL "$URL" -o "$DEST/lemminx" || wget -qO "$DEST/lemminx" "$URL"; ` +
-			           `chmod +x "$DEST/lemminx"; echo "Installed: $DEST/lemminx"`}),
-			       strings.clone("Downloading LemMinX (XML Language Server)...")
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`OS=$(uname -s); if [ "$OS" = "Darwin" ]; then SUFFIX=osx; else SUFFIX=linux; fi; ` +
+				`URL="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-$SUFFIX"; ` +
+				`curl -fsSL "$URL" -o "$DEST/lemminx" || wget -qO "$DEST/lemminx" "$URL"; ` +
+				`chmod +x "$DEST/lemminx"; echo "Installed: $DEST/lemminx"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Downloading LemMinX into editor-local dir...")
 		}
 	case "csharp-ls":
-		return _s({"dotnet", "tool", "install", "-g", "csharp-ls"}),
-		       strings.clone("Installing csharp-ls via dotnet tool...")
+		dest := lsp.lsp_home_dir("csharp-ls")
+		when ODIN_OS == .Windows {
+			cmd_str := strings.concatenate({
+				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
+				`dotnet tool install --tool-path "$DEST" csharp-ls`,
+			})
+			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			       strings.clone("Installing csharp-ls into editor-local dir...")
+		} else {
+			cmd_str := strings.concatenate({
+				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
+				`dotnet tool install --tool-path "$DEST" csharp-ls; ` +
+				`echo "Installed: $DEST/csharp-ls"`,
+			})
+			return _s({"sh", "-c", cmd_str}),
+			       strings.clone("Installing csharp-ls into editor-local dir...")
+		}
 	}
 	return nil, ""
 }
@@ -400,6 +513,13 @@ lsp_completion_accept :: proc(e: ^Editor, p: ^Pane) -> bool {
 	if insert_text == "" { insert_text = item.label }
 	if insert_text == "" { return false }
 
+	// additionalTextEdits (e.g. auto-import) target positions elsewhere in the
+	// document — apply them before the primary insertText so cursor-relative
+	// offsets below are computed against the post-import buffer state.
+	if len(item.additional_edits) > 0 {
+		_apply_additional_edits(p, item.additional_edits)
+	}
+
 	prefix := _word_before_cursor(p)
 	if len(prefix) > 0 { pane_delete_backward(p, len(prefix)) }
 	pane_insert_str(p, insert_text)
@@ -410,6 +530,35 @@ lsp_completion_accept :: proc(e: ^Editor, p: ^Pane) -> bool {
 	p.lsp.change_pending = true
 	p.lsp.change_timer   = 0
 	return true
+}
+
+// Apply additionalTextEdits from a completion item (e.g. jdtls's auto-import,
+// which adds the missing `import` line). These edits target lines elsewhere
+// in the document (typically the import section, above the cursor), so after
+// applying them we shift the cursor by their net byte delta to keep it at
+// the same logical spot the user was typing at.
+_apply_additional_edits :: proc(p: ^Pane, edits: []lsp.TextEdit) {
+	// Reverse order: keeps earlier edits' line/col positions valid, since
+	// applying a later (higher-offset) edit first can't shift anything before it.
+	for i := len(edits) - 1; i >= 0; i -= 1 {
+		ed := edits[i]
+		start_off := _lsp_pos_to_offset(p, ed.range.start.line, ed.range.start.character)
+		end_off   := _lsp_pos_to_offset(p, ed.range.end.line, ed.range.end.character)
+		if end_off < start_off { end_off = start_off }
+		end_off = min(end_off, buffer_len(&p.buf))
+
+		old_len := end_off - start_off
+		new_len := len(ed.new_text)
+
+		if end_off > start_off { buffer_delete(&p.buf, start_off, old_len) }
+		if new_len > 0 { buffer_insert_string(&p.buf, start_off, ed.new_text) }
+
+		if start_off <= p.cursor {
+			p.cursor    += new_len - old_len
+			p.sel_anchor = p.cursor
+		}
+	}
+	p.dirty = true
 }
 
 // LSP-aware Go To Definition. Falls back to local search if no server.
@@ -464,6 +613,428 @@ _navigate_to_lsp_location :: proc(e: ^Editor, result: json.Value) {
 		ap.scroll_anim = f32(ap.scroll)
 	case:
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Find References / Go to Implementation / Go to Type Definition /
+// Go to Declaration / Document Symbols / Workspace Symbols
+//
+// These all resolve to "a list of places" (Location | Location[] |
+// LocationLink[] | SymbolInformation[] | DocumentSymbol[]), so they share
+// one result path: _open_locations_or_navigate jumps straight to the file
+// when there's exactly one hit (same UX as Go to Definition), or opens the
+// palette's .Locations list when there's more than one.
+// ---------------------------------------------------------------------------
+
+// Prefers the language server's real references (accounts for scope, shadowing,
+// cross-file usage) — falls back to the local text-scan picker (goto_refs_do)
+// when no server is running, same pattern lsp_goto_definition already uses.
+lsp_find_references :: proc(e: ^Editor, p: ^Pane) {
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_references || p.filename == "" { goto_refs_do(e); return }
+	line, char := _cursor_lsp_pos(p)
+	lsp.manager_references(&e.lsp_mgr, p.filename, line, char, lsp.Response_Callback{
+		proc_ = _on_references_response, user = e,
+	})
+}
+
+_on_references_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	if error != nil { return }
+	e := cast(^Editor)user
+	items := _parse_locations(result, "reference")
+	_open_locations_or_navigate(e, items, fmt.tprintf("%d references", len(items)))
+}
+
+lsp_goto_implementation :: proc(e: ^Editor, p: ^Pane) {
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_implementation || p.filename == "" { return }
+	line, char := _cursor_lsp_pos(p)
+	lsp.manager_implementation(&e.lsp_mgr, p.filename, line, char, lsp.Response_Callback{
+		proc_ = _on_implementation_response, user = e,
+	})
+}
+
+_on_implementation_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	if error != nil { return }
+	e := cast(^Editor)user
+	items := _parse_locations(result, "implementation")
+	_open_locations_or_navigate(e, items, fmt.tprintf("%d implementations", len(items)))
+}
+
+lsp_goto_type_definition :: proc(e: ^Editor, p: ^Pane) {
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_type_definition || p.filename == "" { return }
+	line, char := _cursor_lsp_pos(p)
+	lsp.manager_type_definition(&e.lsp_mgr, p.filename, line, char, lsp.Response_Callback{
+		proc_ = _on_type_definition_response, user = e,
+	})
+}
+
+_on_type_definition_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	if error != nil { return }
+	e := cast(^Editor)user
+	items := _parse_locations(result, "type definition")
+	_open_locations_or_navigate(e, items, fmt.tprintf("%d type definitions", len(items)))
+}
+
+lsp_goto_declaration :: proc(e: ^Editor, p: ^Pane) {
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_declaration || p.filename == "" { return }
+	line, char := _cursor_lsp_pos(p)
+	lsp.manager_declaration(&e.lsp_mgr, p.filename, line, char, lsp.Response_Callback{
+		proc_ = _on_declaration_response, user = e,
+	})
+}
+
+_on_declaration_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	if error != nil { return }
+	e := cast(^Editor)user
+	items := _parse_locations(result, "declaration")
+	_open_locations_or_navigate(e, items, fmt.tprintf("%d declarations", len(items)))
+}
+
+lsp_document_symbols_open :: proc(e: ^Editor, p: ^Pane) {
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_document_symbol || p.filename == "" { return }
+	lsp.manager_document_symbol(&e.lsp_mgr, p.filename, lsp.Response_Callback{
+		proc_ = _on_document_symbol_response, user = e,
+	})
+}
+
+_on_document_symbol_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	if error != nil { return }
+	e := cast(^Editor)user
+	arr, is_arr := result.(json.Array)
+	if !is_arr { return }
+	ap := active_pane(e)
+	if ap.filename == "" { return }
+
+	items := make([dynamic]Location_Item)
+	_walk_doc_symbols(&items, arr, ap.filename, "")
+	_open_locations_or_navigate(e, items, fmt.tprintf("%d symbols", len(items)))
+}
+
+// DocumentSymbol[] is a tree (nested "children"); SymbolInformation[] (older
+// servers) is flat with a "location" object instead of "range". Handle both.
+_walk_doc_symbols :: proc(items: ^[dynamic]Location_Item, arr: json.Array, file: string, prefix: string) {
+	for item_v in arr {
+		obj, ok := item_v.(json.Object)
+		if !ok { continue }
+		name, _   := lsp.json_obj_str(obj, "name")
+		kind_n, _ := lsp.json_obj_int(obj, "kind")
+
+		range_obj, has_r := lsp.json_obj_obj(obj, "selectionRange")
+		if !has_r { range_obj, has_r = lsp.json_obj_obj(obj, "range") }
+		line, col := 1, 1
+		if has_r {
+			r := lsp.parse_range(range_obj)
+			line = r.start.line + 1
+			col  = r.start.character + 1
+		} else if loc_obj, has_loc := lsp.json_obj_obj(obj, "location"); has_loc {
+			if rr_obj, has_rr := lsp.json_obj_obj(loc_obj, "range"); has_rr {
+				r := lsp.parse_range(rr_obj)
+				line = r.start.line + 1
+				col  = r.start.character + 1
+			}
+		}
+
+		label := fmt.tprintf("%s.%s", prefix, name) if prefix != "" else name
+		append(items, Location_Item{
+			label  = strings.clone(label),
+			detail = strings.clone(_symbol_kind_name(kind_n)),
+			file   = strings.clone(file),
+			line   = line,
+			col    = col,
+		})
+
+		if children, has_c := lsp.json_obj_arr(obj, "children"); has_c {
+			_walk_doc_symbols(items, children, file, name)
+		}
+	}
+}
+
+lsp_workspace_symbols_open :: proc(e: ^Editor) {
+	palette_open_workspace_symbols(&e.palette)
+}
+
+_lsp_workspace_symbol_query :: proc(e: ^Editor, query: string) {
+	if query == "" { return }
+	ap := active_pane(e)
+	if ap.filename == "" { return }
+	lsp.manager_workspace_symbol(&e.lsp_mgr, ap.filename, query, lsp.Response_Callback{
+		proc_ = _on_workspace_symbol_response, user = e,
+	})
+}
+
+_on_workspace_symbol_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	if error != nil { return }
+	e := cast(^Editor)user
+	arr, is_arr := result.(json.Array)
+	if !is_arr { return }
+
+	items := make([dynamic]Location_Item)
+	for item_v in arr {
+		obj, ok := item_v.(json.Object)
+		if !ok { continue }
+		name, _      := lsp.json_obj_str(obj, "name")
+		kind_n, _    := lsp.json_obj_int(obj, "kind")
+		container, _ := lsp.json_obj_str(obj, "containerName")
+		loc_obj, has_loc := lsp.json_obj_obj(obj, "location")
+		if !has_loc { continue }
+		uri_str, has_uri := lsp.json_obj_str(loc_obj, "uri")
+		if !has_uri { continue }
+
+		line, col := 1, 1
+		if r_obj, has_r := lsp.json_obj_obj(loc_obj, "range"); has_r {
+			r := lsp.parse_range(r_obj)
+			line = r.start.line + 1
+			col  = r.start.character + 1
+		}
+
+		detail := _symbol_kind_name(kind_n)
+		if container != "" { detail = fmt.tprintf("%s  \xc2\xb7  %s", detail, container) }
+
+		append(&items, Location_Item{
+			label  = strings.clone(name),
+			detail = strings.clone(detail),
+			file   = strings.clone(lsp.uri_to_path(uri_str)),
+			line   = line,
+			col    = col,
+		})
+	}
+
+	palette_set_workspace_symbol_results(&e.palette, items)
+}
+
+// Parse a Location | Location[] | LocationLink[] result (LocationLink uses
+// targetUri/targetRange instead of uri/range) into display-ready items.
+_parse_locations :: proc(result: json.Value, label: string) -> [dynamic]Location_Item {
+	items := make([dynamic]Location_Item)
+
+	add_one :: proc(items: ^[dynamic]Location_Item, obj: json.Object, label: string) {
+		uri_str, has_uri := lsp.json_obj_str(obj, "uri")
+		if !has_uri { uri_str, has_uri = lsp.json_obj_str(obj, "targetUri") }
+		if !has_uri { return }
+
+		range_obj, has_r := lsp.json_obj_obj(obj, "range")
+		if !has_r { range_obj, has_r = lsp.json_obj_obj(obj, "targetSelectionRange") }
+		if !has_r { range_obj, has_r = lsp.json_obj_obj(obj, "targetRange") }
+
+		line, col := 1, 1
+		if has_r {
+			r := lsp.parse_range(range_obj)
+			line = r.start.line + 1
+			col  = r.start.character + 1
+		}
+
+		path := lsp.uri_to_path(uri_str)
+		append(items, Location_Item{
+			label  = strings.clone(label),
+			detail = strings.clone(path_basename(path)),
+			file   = strings.clone(path),
+			line   = line,
+			col    = col,
+		})
+	}
+
+	#partial switch v in result {
+	case json.Array:
+		for item_v in v {
+			if obj, ok := item_v.(json.Object); ok { add_one(&items, obj, label) }
+		}
+	case json.Object:
+		add_one(&items, v, label)
+	}
+	return items
+}
+
+// One result: jump straight there (same UX as Go to Definition). More than
+// one: hand off to the palette's shared .Locations list.
+_open_locations_or_navigate :: proc(e: ^Editor, items: [dynamic]Location_Item, title: string) {
+	if len(items) == 0 {
+		e.msg = fmt.tprintf("%s: no results", title)
+		delete(items)
+		return
+	}
+	if len(items) == 1 {
+		li := items[0]
+		location_jump(e, li)
+		for &it in items { location_item_destroy(&it) }
+		delete(items)
+		return
+	}
+	palette_open_locations(&e.palette, title, items)
+}
+
+// LSP SymbolKind (1-indexed) → short display label.
+_symbol_kind_name :: proc(kind: int) -> string {
+	switch kind {
+	case 1:  return "File"
+	case 2:  return "Module"
+	case 3:  return "Namespace"
+	case 4:  return "Package"
+	case 5:  return "Class"
+	case 6:  return "Method"
+	case 7:  return "Property"
+	case 8:  return "Field"
+	case 9:  return "Constructor"
+	case 10: return "Enum"
+	case 11: return "Interface"
+	case 12: return "Function"
+	case 13: return "Variable"
+	case 14: return "Constant"
+	case 20: return "Key"
+	case 22: return "Struct"
+	case 23: return "Event"
+	case 24: return "Operator"
+	case 25: return "TypeParameter"
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------------------
+// Command palette wiring — one cmd_* + availability gate per LSP feature.
+// The gate reads Language_Client.caps for the active pane's server, so a
+// command only appears when that specific server actually advertises
+// support for it (e.g. pylsp has no Go to Implementation, jdtls does).
+// ---------------------------------------------------------------------------
+
+cmd_lsp_goto_definition :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_goto_definition(e, active_pane(e))
+}
+_avail_definition :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_definition
+}
+
+cmd_lsp_references :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_find_references(e, active_pane(e))
+}
+_avail_references :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_references
+}
+
+cmd_lsp_goto_implementation :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_goto_implementation(e, active_pane(e))
+}
+_avail_implementation :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_implementation
+}
+
+cmd_lsp_goto_type_definition :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_goto_type_definition(e, active_pane(e))
+}
+_avail_type_definition :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_type_definition
+}
+
+cmd_lsp_goto_declaration :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_goto_declaration(e, active_pane(e))
+}
+_avail_declaration :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_declaration
+}
+
+cmd_lsp_document_symbols :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_document_symbols_open(e, active_pane(e))
+}
+_avail_document_symbol :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_document_symbol
+}
+
+// Doesn't close the palette — switches it into live-query mode instead,
+// same pattern cmd_switch_theme already uses for .Themes.
+cmd_lsp_workspace_symbols :: proc(e: ^Editor, p: ^Palette) {
+	lsp_workspace_symbols_open(e)
+}
+_avail_workspace_symbol :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_workspace_symbols
+}
+
+cmd_lsp_rename :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_rename_open(e)
+}
+_avail_rename :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_rename
+}
+
+cmd_lsp_format :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_format_document(e)
+}
+_avail_format :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_formatting
+}
+
+cmd_lsp_code_actions :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	lsp_code_actions_request(e)
+}
+_avail_code_actions :: proc(e: ^Editor) -> bool {
+	c := _get_client(e, active_pane(e)); return c != nil && c.caps.has_code_actions
+}
+
+// "Problems" — lists this file's diagnostics (errors/warnings/info/hints,
+// already pushed by the server via textDocument/publishDiagnostics and
+// stored per-client) through the same .Locations list used by References
+// etc. Doesn't need a capability check: diagnostics are server-pushed, not
+// request-gated, so it's available whenever a file with an LSP client is open.
+cmd_lsp_problems :: proc(e: ^Editor, p: ^Palette) {
+	ap := active_pane(e)
+	if ap.filename == "" { palette_close(p); return }
+
+	diags := lsp.manager_get_diags(&e.lsp_mgr, ap.filename)
+	if len(diags) == 0 {
+		palette_close(p)
+		e.msg = "No problems in this file"
+		return
+	}
+
+	items := make([dynamic]Location_Item)
+	for d in diags {
+		label  := fmt.tprintf("[%s] %s", _severity_label(d.severity), d.message)
+		detail := d.source
+		if d.code != "" { detail = fmt.tprintf("%s %s", detail, d.code) if detail != "" else d.code }
+		append(&items, Location_Item{
+			label  = strings.clone(label),
+			detail = strings.clone(detail),
+			file   = strings.clone(ap.filename),
+			line   = d.range.start.line + 1,
+			col    = d.range.start.character + 1,
+		})
+	}
+	palette_open_locations(p, fmt.tprintf("%d problems", len(items)), items)
+}
+_avail_problems :: proc(e: ^Editor) -> bool {
+	return active_pane(e).filename != ""
+}
+
+_severity_label :: proc(s: lsp.Diagnostic_Severity) -> string {
+	switch s {
+	case .Error:       return "Error"
+	case .Warning:     return "Warning"
+	case .Information: return "Info"
+	case .Hint:        return "Hint"
+	}
+	return "?"
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +1368,14 @@ _on_code_actions_response :: proc(c: ^lsp.Language_Client, result: json.Value, e
 			}
 		}
 
+		// Neither edit nor command present — server (e.g. jdtls, once
+		// codeActionLiteralSupport.resolveSupport is declared) expects
+		// codeAction/resolve on selection. Keep the original object to
+		// send back verbatim.
+		if !a.has_edit && !a.has_cmd {
+			a.raw_json = lsp.Deep_Clone_Value(item_v)
+		}
+
 		append(&d.actions, a)
 	}
 
@@ -846,10 +1425,67 @@ lsp_apply_code_action :: proc(e: ^Editor, idx: int) {
 		}
 	}
 
+	if !a.has_edit && !a.has_cmd && a.raw_json != nil {
+		p := active_pane(e)
+		c := _get_client(e, p)
+		if c != nil && c.caps.has_code_action_resolve {
+			params, merr := json.marshal(a.raw_json, allocator = context.temp_allocator)
+			if merr == nil {
+				e.msg = fmt.tprintf("Resolving: %s...", a.title)
+				lsp.client_send_request(c, "codeAction/resolve", string(params), lsp.Response_Callback{
+					proc_ = _on_code_action_resolve_response, user = e,
+				})
+				return
+			}
+		}
+		e.msg = fmt.tprintf("%s: nothing to apply (no edit/command)", a.title)
+		return
+	}
+
 	e.msg = fmt.tprintf("Applied: %s", a.title)
 }
 
 _on_execute_command :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
 	defer json.destroy_value(result)
 	defer json.destroy_value(error)
+}
+
+// Response to codeAction/resolve — same object we sent, now with edit
+// and/or command populated. Apply exactly like the direct (non-deferred) path.
+_on_code_action_resolve_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
+	defer json.destroy_value(result)
+	defer json.destroy_value(error)
+	e := cast(^Editor)user
+	if error != nil { e.msg = "Code action resolve failed"; return }
+
+	obj, is_obj := result.(json.Object)
+	if !is_obj { return }
+
+	title, _ := lsp.json_obj_str(obj, "title")
+
+	if edit_v, has_e := obj["edit"]; has_e {
+		if _, is_null := edit_v.(json.Null); !is_null {
+			apply_workspace_edit(e, edit_v)
+		}
+	}
+
+	if cmd_v, has_c := obj["command"]; has_c {
+		cmd_id := ""
+		#partial switch cv in cmd_v {
+		case json.Object: cmd_id, _ = lsp.json_obj_str(cv, "command")
+		case string:      cmd_id = cv
+		}
+		if cmd_id != "" {
+			p := active_pane(e)
+			cl := _get_client(e, p)
+			if cl != nil {
+				params := fmt.tprintf(`{"command":%s,"arguments":[]}`, lsp.json_str(cmd_id))
+				lsp.client_send_request(cl, "workspace/executeCommand", params, lsp.Response_Callback{
+					proc_ = _on_execute_command,
+				})
+			}
+		}
+	}
+
+	e.msg = fmt.tprintf("Applied: %s", title)
 }

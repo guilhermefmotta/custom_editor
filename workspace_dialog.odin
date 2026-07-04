@@ -388,8 +388,10 @@ _ws_refresh :: proc(d: ^Workspace_Dialog) {
 	_ws_sort(&dirs)
 	_ws_sort(&files)
 
-	// ".." entry at the top — only when not at filesystem root
-	if !_ws_is_root(dir) {
+	// ".." entry at the top — only when not at filesystem root and the user
+	// isn't mid-filter (otherwise it would always win index 0 / Tab-complete
+	// instead of the actual text match).
+	if !_ws_is_root(dir) && len(prefix) == 0 {
 		append(&d.entries, WS_Entry{ name = strings.clone(".."), is_dir = true })
 	}
 	for e in dirs  { append(&d.entries, e) }

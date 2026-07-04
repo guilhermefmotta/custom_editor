@@ -9,8 +9,8 @@ import rl "vendor:raylib"
 File_Tree_Mode :: enum { Browse, Rename, Confirm_Delete, Make_Dir }
 
 File_Tree_Node :: struct {
-	name:     string, // display name (heap)
-	path:     string, // full relative path (heap)
+	name:     string, // display name (heap) — may be a compacted chain like "java/com/example/demo"
+	path:     string, // full relative path to the real dir/file this row represents (heap)
 	is_dir:   bool,
 	depth:    int,
 	expanded: bool,
@@ -24,12 +24,20 @@ File_Tree :: struct {
 	mode:       File_Tree_Mode,
 	input_buf:  [dynamic]u8,
 	status_msg: string,
+
+	filter:  [dynamic]u8,          // recursive fuzzy-filter text
+	results: [dynamic]File_Tree_Node, // flat recursive matches; populated when len(filter) > 0
 }
+
+FT_SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
+                      ".cache", "build", "dist", ".next", "vendor"}
 
 file_tree_init :: proc() -> File_Tree {
 	ft: File_Tree
 	ft.nodes     = make([dynamic]File_Tree_Node)
 	ft.input_buf = make([dynamic]u8)
+	ft.filter    = make([dynamic]u8)
+	ft.results   = make([dynamic]File_Tree_Node)
 	return ft
 }
 
@@ -37,6 +45,9 @@ file_tree_destroy :: proc(ft: ^File_Tree) {
 	for n in ft.nodes { delete(n.name); delete(n.path) }
 	delete(ft.nodes)
 	delete(ft.input_buf)
+	delete(ft.filter)
+	for r in ft.results { delete(r.name); delete(r.path) }
+	delete(ft.results)
 	ft^ = {}
 }
 
@@ -46,6 +57,9 @@ file_tree_open :: proc(ft: ^File_Tree) {
 	ft.scroll     = 0
 	ft.mode       = .Browse
 	ft.status_msg = ""
+	clear(&ft.filter)
+	for r in ft.results { delete(r.name); delete(r.path) }
+	clear(&ft.results)
 	for n in ft.nodes { delete(n.name); delete(n.path) }
 	clear(&ft.nodes)
 	_ft_load_children(ft, ".", 0, 0)
@@ -59,10 +73,41 @@ file_tree_close :: proc(ft: ^File_Tree) {
 
 FT_MAX_CHILDREN :: 500  // max entries per directory expansion
 
-_ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_idx: int) -> int {
-	SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
-	                  ".cache", "build", "dist", ".next", "vendor"}
+// True when `name` should be hidden from both the tree and the recursive search.
+_ft_is_skipped :: proc(name: string) -> bool {
+	if len(name) > 0 && name[0] == '.' { return true }
+	for s in FT_SKIP { if name == s { return true } }
+	return false
+}
 
+// If `path` contains exactly one visible entry and that entry is itself a
+// directory, return its name. Used to collapse single-child folder chains
+// into one display row (e.g. "src/main/java/com/example/demo").
+_ft_single_subdir :: proc(path: string) -> (child_name: string, ok: bool) {
+	f, ferr := os.open(path)
+	if ferr != nil { return "", false }
+	defer os.close(f)
+
+	it := os.read_directory_iterator_create(f)
+	defer os.read_directory_iterator_destroy(&it)
+
+	count: int
+	name: string
+	only_dir := true
+	for {
+		fi, _, more := os.read_directory_iterator(&it)
+		if !more { break }
+		if _ft_is_skipped(fi.name) { continue }
+		count += 1
+		if count > 1 { return "", false }
+		if fi.type != .Directory { only_dir = false }
+		name = strings.clone(fi.name, context.temp_allocator)
+	}
+	if count == 1 && only_dir { return name, true }
+	return "", false
+}
+
+_ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_idx: int) -> int {
 	f, ferr := os.open(dir_path)
 	if ferr != nil { return 0 }
 	defer os.close(f)
@@ -82,19 +127,36 @@ _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_i
 
 		name   := fi.name
 		is_dir := fi.type == .Directory
+		if _ft_is_skipped(name) { continue }
 
-		skip := len(name) > 0 && name[0] == '.'
-		if !skip { for s in SKIP { if name == s { skip = true; break } } }
-		if skip { continue }
+		full, _ := filepath.join({dir_path, name}, context.temp_allocator)
 
-		full, _ := filepath.join({dir_path, name}, context.allocator)
-		node := File_Tree_Node{
-			name   = strings.clone(name),
-			path   = full,
-			is_dir = is_dir,
-			depth  = depth,
+		if is_dir {
+			// Collapse a chain of single-child directories into one row.
+			disp_name := name
+			real_path := full
+			for {
+				child, chain_ok := _ft_single_subdir(real_path)
+				if !chain_ok { break }
+				disp_name = strings.concatenate({disp_name, "/", child}, context.temp_allocator)
+				real_path, _ = filepath.join({real_path, child}, context.temp_allocator)
+			}
+			node := File_Tree_Node{
+				name   = strings.clone(disp_name),
+				path   = strings.clone(real_path),
+				is_dir = true,
+				depth  = depth,
+			}
+			append(&dirs, node)
+		} else {
+			node := File_Tree_Node{
+				name   = strings.clone(name),
+				path   = strings.clone(full),
+				is_dir = false,
+				depth  = depth,
+			}
+			append(&files, node)
 		}
-		if is_dir { append(&dirs, node) } else { append(&files, node) }
 		if len(dirs) + len(files) >= FT_MAX_CHILDREN { ft.status_msg = "Showing first 500 entries"; break }
 	}
 
@@ -135,6 +197,72 @@ _ft_toggle_dir :: proc(ft: ^File_Tree, idx: int) {
 	}
 }
 
+// ---- Recursive fuzzy filter ----
+
+FT_SEARCH_MAX_RESULTS :: 300
+FT_SEARCH_MAX_VISITED :: 20000
+
+_ft_search_walk :: proc(ft: ^File_Tree, dir_path: string, needle: string, visited: ^int) {
+	if len(ft.results) >= FT_SEARCH_MAX_RESULTS { return }
+	if visited^ >= FT_SEARCH_MAX_VISITED { return }
+
+	f, ferr := os.open(dir_path)
+	if ferr != nil { return }
+	defer os.close(f)
+
+	it := os.read_directory_iterator_create(f)
+	defer os.read_directory_iterator_destroy(&it)
+
+	for {
+		if len(ft.results) >= FT_SEARCH_MAX_RESULTS { break }
+		visited^ += 1
+		if visited^ >= FT_SEARCH_MAX_VISITED { break }
+
+		fi, _, ok := os.read_directory_iterator(&it)
+		if !ok { break }
+
+		name   := fi.name
+		is_dir := fi.type == .Directory
+		if _ft_is_skipped(name) { continue }
+
+		full, _ := filepath.join({dir_path, name}, context.temp_allocator)
+
+		name_low := strings.to_lower(name, context.temp_allocator)
+		if strings.contains(name_low, needle) {
+			append(&ft.results, File_Tree_Node{
+				name   = strings.clone(name),
+				path   = strings.clone(full),
+				is_dir = is_dir,
+			})
+		}
+		if is_dir {
+			_ft_search_walk(ft, full, needle, visited)
+		}
+	}
+}
+
+_ft_sort_results :: proc(ft: ^File_Tree) {
+	arr := &ft.results
+	for i in 1..<len(arr) {
+		key := arr[i]; j := i - 1
+		for j >= 0 && arr[j].path > key.path { arr[j+1] = arr[j]; j -= 1 }
+		arr[j+1] = key
+	}
+}
+
+_ft_rebuild_search :: proc(ft: ^File_Tree) {
+	for r in ft.results { delete(r.name); delete(r.path) }
+	clear(&ft.results)
+	ft.selected = 0
+	ft.scroll   = 0
+	if len(ft.filter) == 0 { return }
+
+	needle  := strings.to_lower(string(ft.filter[:]), context.temp_allocator)
+	visited := 0
+	_ft_search_walk(ft, ".", needle, &visited)
+	_ft_sort_results(ft)
+}
+
 // ---- Input ----
 
 FILE_TREE_MAX_VIS :: 24
@@ -149,9 +277,18 @@ file_tree_handle_input :: proc(ft: ^File_Tree, e: ^Editor) {
 }
 
 file_tree_browse_input :: proc(ft: ^File_Tree, e: ^Editor) {
-	if rl.IsKeyPressed(.ESCAPE) { file_tree_close(ft); return }
+	if rl.IsKeyPressed(.ESCAPE) {
+		if len(ft.filter) > 0 {
+			clear(&ft.filter)
+			_ft_rebuild_search(ft)
+			return
+		}
+		file_tree_close(ft)
+		return
+	}
 
-	n := len(ft.nodes)
+	searching := len(ft.filter) > 0
+	n := len(ft.results) if searching else len(ft.nodes)
 
 	if key_rep(.UP) {
 		if ft.selected > 0 {
@@ -169,65 +306,91 @@ file_tree_browse_input :: proc(ft: ^File_Tree, e: ^Editor) {
 		}
 		return
 	}
-	if rl.IsKeyPressed(.LEFT) {
-		if ft.selected < len(ft.nodes) {
-			nd := &ft.nodes[ft.selected]
-			if nd.is_dir && nd.expanded {
-				_ft_toggle_dir(ft, ft.selected)
-			} else {
-				d := nd.depth - 1
-				for i := ft.selected - 1; i >= 0; i -= 1 {
-					if ft.nodes[i].depth == d { ft.selected = i; break }
+
+	if searching {
+		if rl.IsKeyPressed(.ENTER) {
+			if ft.selected < len(ft.results) {
+				r := ft.results[ft.selected]
+				if !r.is_dir {
+					editor_open(e, r.path)
+					file_tree_close(ft)
 				}
 			}
+			return
 		}
-		return
-	}
-	if rl.IsKeyPressed(.RIGHT) {
-		if ft.selected < len(ft.nodes) {
-			nd := &ft.nodes[ft.selected]
-			if nd.is_dir && !nd.expanded { _ft_toggle_dir(ft, ft.selected) }
-		}
-		return
-	}
-	if rl.IsKeyPressed(.ENTER) {
-		if ft.selected < len(ft.nodes) {
-			nd := &ft.nodes[ft.selected]
-			if nd.is_dir {
-				_ft_toggle_dir(ft, ft.selected)
-			} else {
-				editor_open(e, nd.path)
-				file_tree_close(ft)
+	} else {
+		if rl.IsKeyPressed(.LEFT) {
+			if ft.selected < len(ft.nodes) {
+				nd := &ft.nodes[ft.selected]
+				if nd.is_dir && nd.expanded {
+					_ft_toggle_dir(ft, ft.selected)
+				} else {
+					d := nd.depth - 1
+					for i := ft.selected - 1; i >= 0; i -= 1 {
+						if ft.nodes[i].depth == d { ft.selected = i; break }
+					}
+				}
 			}
+			return
 		}
-		return
-	}
+		if rl.IsKeyPressed(.RIGHT) {
+			if ft.selected < len(ft.nodes) {
+				nd := &ft.nodes[ft.selected]
+				if nd.is_dir && !nd.expanded { _ft_toggle_dir(ft, ft.selected) }
+			}
+			return
+		}
+		if rl.IsKeyPressed(.ENTER) {
+			if ft.selected < len(ft.nodes) {
+				nd := &ft.nodes[ft.selected]
+				if nd.is_dir {
+					_ft_toggle_dir(ft, ft.selected)
+				} else {
+					editor_open(e, nd.path)
+					file_tree_close(ft)
+				}
+			}
+			return
+		}
 
-	if ctrl() && rl.IsKeyPressed(.R) {
-		if ft.selected < len(ft.nodes) {
+		if ctrl() && rl.IsKeyPressed(.R) {
+			if ft.selected < len(ft.nodes) {
+				clear(&ft.input_buf)
+				name := ft.nodes[ft.selected].name
+				for i in 0..<len(name) { append(&ft.input_buf, name[i]) }
+				ft.mode       = .Rename
+				ft.status_msg = ""
+			}
+			return
+		}
+
+		if ctrl() && rl.IsKeyPressed(.D) {
+			if ft.selected < len(ft.nodes) {
+				ft.mode       = .Confirm_Delete
+				ft.status_msg = ""
+			}
+			return
+		}
+
+		if ctrl() && rl.IsKeyPressed(.N) {
 			clear(&ft.input_buf)
-			name := ft.nodes[ft.selected].name
-			for i in 0..<len(name) { append(&ft.input_buf, name[i]) }
-			ft.mode       = .Rename
+			ft.mode       = .Make_Dir
 			ft.status_msg = ""
+			return
 		}
-		return
 	}
 
-	if ctrl() && rl.IsKeyPressed(.D) {
-		if ft.selected < len(ft.nodes) {
-			ft.mode       = .Confirm_Delete
-			ft.status_msg = ""
-		}
-		return
+	// Recursive filter typing (active in both browse and search views)
+	changed := false
+	if key_rep(.BACKSPACE) {
+		if len(ft.filter) > 0 { pop(&ft.filter); changed = true }
 	}
-
-	if ctrl() && rl.IsKeyPressed(.N) {
-		clear(&ft.input_buf)
-		ft.mode       = .Make_Dir
-		ft.status_msg = ""
-		return
+	for {
+		ch := rl.GetCharPressed()
+		if ch == 0 { break }
+		if ch >= 32 && ch < 128 { append(&ft.filter, u8(ch)); changed = true }
 	}
+	if changed { _ft_rebuild_search(ft) }
 }
 
 file_tree_text_input :: proc(ft: ^File_Tree, e: ^Editor, mode: File_Tree_Mode) {
@@ -315,6 +478,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 
 	PANEL_W  :: f32(360)
 	HEADER_H :: f32(36)
+	INPUT_H  :: f32(30)
 	ITEM_H   :: f32(24)
 	FOOTER_H :: f32(30)
 
@@ -328,8 +492,12 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	INPUT_BG := STATUS_BG
 	WARN_COL := MSG_COL
 
-	vis_count := min(len(ft.nodes), FILE_TREE_MAX_VIS)
-	panel_h   := HEADER_H + f32(vis_count)*ITEM_H + FOOTER_H
+	searching    := len(ft.filter) > 0
+	has_filt_row := ft.mode == .Browse
+	total        := len(ft.results) if searching else len(ft.nodes)
+	vis_count    := min(total, FILE_TREE_MAX_VIS)
+	filt_h       := INPUT_H if has_filt_row else f32(0)
+	panel_h      := HEADER_H + filt_h + f32(max(vis_count, (1 if searching && vis_count == 0 else 0)))*ITEM_H + FOOTER_H
 
 	panel_x := (sw - PANEL_W) * 0.5  // centered
 	panel_y := sh * 0.05
@@ -358,45 +526,94 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		rl.DrawRectangleV({tx, panel_y + 9}, {2, ref.y}, ACCENT)
 	}
 
+	// Filter input row (recursive fuzzy filter)
+	list_y := panel_y + HEADER_H
+	if has_filt_row {
+		iy := list_y
+		rl.DrawRectangleV({panel_x, iy}, {PANEL_W, INPUT_H}, INPUT_BG)
+		rl.DrawLineV({panel_x, iy + INPUT_H - 1}, {panel_x + PANEL_W, iy + INPUT_H - 1}, PANEL_BOR)
+		filter_str  := string(ft.filter[:])
+		placeholder := len(filter_str) == 0
+		display     := filter_str if !placeholder else "type to filter (recursive)…"
+		dcol        := TEXT if !placeholder else SUBDUED
+		rl.DrawTextEx(font, to_cstring(display), {panel_x + 10, iy + 6}, FONT_SIZE - 2, CHAR_SPACING, dcol)
+		if !placeholder {
+			fw := rl.MeasureTextEx(font, to_cstring(filter_str), FONT_SIZE - 2, CHAR_SPACING).x
+			rl.DrawRectangleV({panel_x + 10 + fw, iy + 6}, {2, ref.y}, ACCENT)
+		}
+		list_y += INPUT_H
+	}
+
 	// Clamp scroll
-	max_scroll := max(0, len(ft.nodes) - FILE_TREE_MAX_VIS)
+	max_scroll := max(0, total - FILE_TREE_MAX_VIS)
 	if ft.scroll > max_scroll { ft.scroll = max_scroll }
 
-	// Nodes
-	for vi in 0..<vis_count {
-		ni := ft.scroll + vi
-		if ni >= len(ft.nodes) { break }
-		nd := &ft.nodes[ni]
-		iy := panel_y + HEADER_H + f32(vi) * ITEM_H
-
-		if ni == ft.selected {
-			rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_C)
-			rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
+	if searching {
+		if total == 0 {
+			rl.DrawTextEx(font, "  no matches", {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 		}
+		for vi in 0..<vis_count {
+			ri := ft.scroll + vi
+			if ri >= len(ft.results) { break }
+			r  := &ft.results[ri]
+			iy := list_y + f32(vi) * ITEM_H
 
-		ix     := panel_x + 10 + f32(nd.depth) * 16
-		icon_h := f32(12)
-		iy_mid := iy + (ITEM_H - icon_h) * 0.5
-		_ = ch
-		if nd.is_dir {
-			// Folder icon: tab nub + body
-			fc := DIR_COL if nd.expanded else rl.Color{148, 226, 213, 255}
-			rl.DrawRectangleV({ix,     iy_mid + 3}, {icon_h,     icon_h - 3}, fc)
-			rl.DrawRectangleV({ix,     iy_mid},     {5,          3},           fc)
-			// +/- expand indicator
-			arr := "-" if nd.expanded else "+"
-			rl.DrawTextEx(font, to_cstring(arr), {ix + icon_h + 2, iy + 3}, FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
-			dlg_text(font, nd.name, ix + icon_h + 12, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
-		} else {
-			// File icon: rect with folded top-right corner
-			rl.DrawRectangleV({ix,            iy_mid},          {icon_h - 3, icon_h},     LINENUM)
-			rl.DrawRectangleV({ix + icon_h - 3, iy_mid + 3},   {3,          icon_h - 3}, LINENUM)
-			dlg_text(font, nd.name, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
+			if ri == ft.selected {
+				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_C)
+				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
+			}
+
+			ix     := panel_x + 10
+			icon_h := f32(12)
+			iy_mid := iy + (ITEM_H - icon_h) * 0.5
+			if r.is_dir {
+				fc := rl.Color{148, 226, 213, 255}
+				rl.DrawRectangleV({ix,     iy_mid + 3}, {icon_h,     icon_h - 3}, fc)
+				rl.DrawRectangleV({ix,     iy_mid},     {5,          3},           fc)
+				dlg_text(font, r.path, ix + icon_h + 8, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
+			} else {
+				rl.DrawRectangleV({ix,            iy_mid},        {icon_h - 3, icon_h},     LINENUM)
+				rl.DrawRectangleV({ix + icon_h - 3, iy_mid + 3}, {3,          icon_h - 3}, LINENUM)
+				dlg_text(font, r.path, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
+			}
+		}
+	} else {
+		for vi in 0..<vis_count {
+			ni := ft.scroll + vi
+			if ni >= len(ft.nodes) { break }
+			nd := &ft.nodes[ni]
+			iy := list_y + f32(vi) * ITEM_H
+
+			if ni == ft.selected {
+				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_C)
+				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
+			}
+
+			ix     := panel_x + 10 + f32(nd.depth) * 16
+			icon_h := f32(12)
+			iy_mid := iy + (ITEM_H - icon_h) * 0.5
+			_ = ch
+			if nd.is_dir {
+				// Folder icon: tab nub + body
+				fc := DIR_COL if nd.expanded else rl.Color{148, 226, 213, 255}
+				rl.DrawRectangleV({ix,     iy_mid + 3}, {icon_h,     icon_h - 3}, fc)
+				rl.DrawRectangleV({ix,     iy_mid},     {5,          3},           fc)
+				// +/- expand indicator
+				arr := "-" if nd.expanded else "+"
+				rl.DrawTextEx(font, to_cstring(arr), {ix + icon_h + 2, iy + 3}, FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
+				dlg_text(font, nd.name, ix + icon_h + 12, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
+			} else {
+				// File icon: rect with folded top-right corner
+				rl.DrawRectangleV({ix,            iy_mid},          {icon_h - 3, icon_h},     LINENUM)
+				rl.DrawRectangleV({ix + icon_h - 3, iy_mid + 3},   {3,          icon_h - 3}, LINENUM)
+				dlg_text(font, nd.name, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
+			}
 		}
 	}
 
 	// Footer
-	fy := panel_y + HEADER_H + f32(vis_count) * ITEM_H
+	fy := list_y + f32(vis_count) * ITEM_H
+	if searching && vis_count == 0 { fy += ITEM_H }
 	rl.DrawRectangleV({panel_x, fy}, {PANEL_W, FOOTER_H}, INPUT_BG)
 	rl.DrawRectangleLinesEx({panel_x, fy, PANEL_W, FOOTER_H}, 1, PANEL_BOR)
 
@@ -404,7 +621,13 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	col := SUBDUED
 	switch ft.mode {
 	case .Browse:
-		footer = ft.status_msg if ft.status_msg != "" else "Enter open  ←→ expand  Ctrl+R rename  Ctrl+D del  Ctrl+N dir  Esc"
+		if ft.status_msg != "" {
+			footer = ft.status_msg
+		} else if searching {
+			footer = "↑↓ navigate  Enter open  Esc clear filter"
+		} else {
+			footer = "Enter open  ←→ expand  Ctrl+R rename  Ctrl+D del  Ctrl+N dir  Esc"
+		}
 	case .Rename:   footer = "Type new name · Enter confirm · Esc cancel"
 	case .Make_Dir: footer = "Type directory name · Enter confirm · Esc cancel"
 	case .Confirm_Delete:

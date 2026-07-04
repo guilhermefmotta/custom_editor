@@ -152,19 +152,28 @@ render_suggest_widget :: proc(
 		icon_str := _kind_icon(item.kind)
 		rl.DrawTextEx(font, to_cstring(icon_str), {wx + 4, item_y + 3}, FONT_SIZE - 2, 0, kind_col)
 
+		// Measure detail first so the label can be truncated to leave room for
+		// it — otherwise long labels (e.g. "wait(long timeoutMillis, int nanos)")
+		// overlap the right-aligned detail text instead of being clipped.
+		detail: string
+		detail_w: f32 = 0
+		if item.detail != "" {
+			detail = _truncate_str(item.detail, font, 120, context.temp_allocator)
+			detail_w = rl.MeasureTextEx(font, to_cstring(detail), FONT_SIZE - 2, 0).x
+		}
+
 		// Label
 		label_col := SUGGEST_TEXT
 		if item.deprecated { label_col = SUGGEST_DETAIL }
 		label_x := wx + KIND_ICON_W + 4
-		max_label_w := WIDGET_W - KIND_ICON_W - 8
+		detail_gap := detail_w + 14 if detail_w > 0 else 0
+		max_label_w := WIDGET_W - KIND_ICON_W - 8 - detail_gap
 		label := _truncate_str(item.label, font, max_label_w, context.temp_allocator)
 		rl.DrawTextEx(font, to_cstring(label), {label_x, item_y + 3}, FONT_SIZE, 0, label_col)
 
 		// Detail (right-aligned, dimmed)
-		if item.detail != "" {
-			detail := _truncate_str(item.detail, font, 120, context.temp_allocator)
-			dw := rl.MeasureTextEx(font, to_cstring(detail), FONT_SIZE - 2, 0).x
-			rl.DrawTextEx(font, to_cstring(detail), {wx + WIDGET_W - dw - 6, item_y + 4}, FONT_SIZE - 2, 0, SUGGEST_DETAIL)
+		if detail != "" {
+			rl.DrawTextEx(font, to_cstring(detail), {wx + WIDGET_W - detail_w - 6, item_y + 4}, FONT_SIZE - 2, 0, SUGGEST_DETAIL)
 		}
 	}
 
@@ -212,7 +221,10 @@ render_hover_popup :: proc(
 	_draw_border(px, py, max_w, popup_h, HOVER_BORDER)
 
 	for i in 0..<n_lines {
-		line := lines[i]
+		// Long lines (e.g. markdown source links) must be clipped to the box —
+		// the box width itself is capped at ow*0.6 above, but without this the
+		// text would overflow straight past the border into the code beneath.
+		line := _truncate_str(lines[i], font, max_w - 16, context.temp_allocator)
 		rl.DrawTextEx(font, to_cstring(line), {px + 8, py + 4 + f32(i) * (FONT_SIZE + 2)}, FONT_SIZE - 1, 0, SUGGEST_TEXT)
 	}
 }
@@ -384,20 +396,24 @@ _draw_text_at :: proc(font: rl.Font, text: string, x: ^f32, y: f32, col: rl.Colo
 	x^ += rl.MeasureTextEx(font, cs, FONT_SIZE, 0).x
 }
 
+// NOTE: uses "..." (three ASCII periods), not the "…" ellipsis codepoint —
+// the bundled font's loaded codepoint set (main.odin) doesn't include U+2026,
+// so it fell back to a missing-glyph replacement with an inaccurate measured
+// width, which let text overflow past its intended truncation point.
 _truncate_str :: proc(s: string, font: rl.Font, max_w: f32, allocator := context.allocator) -> string {
 	if rl.MeasureTextEx(font, to_cstring(s), FONT_SIZE, 0).x <= max_w { return s }
 	// Binary search for fitting length
 	lo, hi := 0, len(s)
 	for lo + 1 < hi {
 		mid := (lo + hi) / 2
-		candidate := fmt.tprintf("%s…", s[:mid])
+		candidate := fmt.tprintf("%s...", s[:mid])
 		if rl.MeasureTextEx(font, to_cstring(candidate), FONT_SIZE, 0).x <= max_w {
 			lo = mid
 		} else {
 			hi = mid
 		}
 	}
-	return fmt.aprintf("%s…", s[:lo], allocator = allocator)
+	return fmt.aprintf("%s...", s[:lo], allocator = allocator)
 }
 
 _kind_color :: proc(kind: lsp.Completion_Item_Kind) -> rl.Color {

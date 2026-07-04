@@ -21,9 +21,12 @@ server_binary_exists :: proc(name: string) -> (found: bool, full_path: string) {
 			return true, strings.clone(full)
 		}
 	}
-	// Also check common non-PATH install locations
+	// Also check common non-PATH install locations, including the
+	// editor-owned install dir (~/.config/editor/lsp/<name>/<name>)
+	// used by our own auto-installer.
 	home := os.get_env("HOME", context.temp_allocator)
 	extras := []string{
+		strings.concatenate({lsp_home_dir(name), "/", name}, context.temp_allocator),
 		strings.concatenate({home, "/.local/bin/", name}, context.temp_allocator),
 		strings.concatenate({home, "/go/bin/", name}, context.temp_allocator),
 		strings.concatenate({home, "/.cargo/bin/", name}, context.temp_allocator),

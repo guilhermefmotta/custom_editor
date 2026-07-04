@@ -1,0 +1,44 @@
+!SESSION 2026-07-02 10:17:48.627 -----------------------------------------------
+eclipse.buildId=unknown
+java.version=21.0.2
+java.vendor=Oracle Corporation
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=en_US
+Framework arguments:  --version
+Command-line arguments:  --version
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 10:17:50.879
+!MESSAGE class org.eclipse.jdt.ls.core.internal.JavaLanguageServerPlugin is started
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 10:17:50.931
+!MESSAGE Started org.eclipse.buildship.core 34ms
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 10:17:50.932
+!MESSAGE Started org.eclipse.m2e.core 0ms
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 10:17:51.081
+!MESSAGE Main thread is waiting
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 10:17:51.957
+!MESSAGE ProjectRegistryRefreshJob finished 1024ms
+!SESSION 2026-07-02 23:27:59.404 -----------------------------------------------
+eclipse.buildId=unknown
+java.version=21.0.2
+java.vendor=Oracle Corporation
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=en_US
+Framework arguments:  --version
+Command-line arguments:  --version
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 23:28:00.437
+!MESSAGE class org.eclipse.jdt.ls.core.internal.JavaLanguageServerPlugin is started
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 23:28:00.473
+!MESSAGE Started org.eclipse.buildship.core 25ms
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 23:28:00.474
+!MESSAGE Started org.eclipse.m2e.core 0ms
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 23:28:00.551
+!MESSAGE Main thread is waiting
+
+!ENTRY org.eclipse.jdt.ls.core 1 0 2026-07-02 23:28:00.985
+!MESSAGE ProjectRegistryRefreshJob finished 510ms

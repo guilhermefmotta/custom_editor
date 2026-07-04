@@ -158,9 +158,11 @@ _start_rooted_client :: proc(e: ^Client_Entry, root: string) -> ^Language_Client
 	if e.install_state == .Running { return nil }
 	if e.install_state == .Failed  { return nil }
 
-	// Check binary exists on PATH; auto-install if missing
+	// Check binary exists on PATH (or editor-owned install dir); auto-install if missing
+	resolved_path: string
 	if len(e.config.command) > 0 {
-		exists, _ := server_binary_exists(e.config.command[0])
+		exists, full := server_binary_exists(e.config.command[0])
+		resolved_path = full
 		if !exists {
 			if e.install_state == .None && len(e.config.install_cmd) > 0 {
 				label := e.config.install_label if e.config.install_label != "" else fmt.tprintf("Installing %s...", e.config.name)
@@ -197,6 +199,15 @@ _start_rooted_client :: proc(e: ^Client_Entry, root: string) -> ^Language_Client
 		jdtls_extra[len(cmd)+1] = ddir
 		cmd = jdtls_extra
 	}
+	// Exec must use the resolved full path, not the bare name — binaries living
+	// in the editor-owned install dir (~/.config/editor/lsp/<id>) are never on
+	// PATH, so execvp's own PATH search would fail even though we found them.
+	if resolved_path != "" {
+		cmd_resolved := make([]string, len(cmd), context.temp_allocator)
+		copy(cmd_resolved, cmd)
+		cmd_resolved[0] = resolved_path
+		cmd = cmd_resolved
+	}
 	c := client_create(root)
 	if !client_start(c, cmd) { client_destroy(c); return nil }
 	append(&e.clients, Rooted_Client{root = strings.clone(root), client = c})
@@ -212,6 +223,23 @@ _clone_strs :: proc(strs: []string) -> []string {
 	out := make([]string, len(strs))
 	for s, i in strs { out[i] = strings.clone(s) }
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Editor-owned install directory — every auto-installed LSP server lands
+// under here (never the user's global PATH / package-manager locations).
+//   Linux/macOS: ~/.config/editor/lsp/<id>/
+//   Windows:     %LOCALAPPDATA%\editor\lsp\<id>\
+// ---------------------------------------------------------------------------
+
+lsp_home_dir :: proc(id: string) -> string {
+	when ODIN_OS == .Windows {
+		base := os.get_env("LOCALAPPDATA", context.temp_allocator)
+		return fmt.tprintf("%s\\editor\\lsp\\%s", base, id)
+	} else {
+		home := os.get_env("HOME", context.temp_allocator)
+		return fmt.tprintf("%s/.config/editor/lsp/%s", home, id)
+	}
 }
 
 _register_defaults :: proc(m: ^LSP_Manager) {
@@ -751,6 +779,52 @@ manager_references :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: R
 		`},"context":{"includeDeclaration":true}}`,
 	}, context.temp_allocator)
 	client_send_request(c, "textDocument/references", params, cb)
+}
+
+manager_implementation :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
+	c := lsp_manager_find_client_for_path(m, path)
+	if c == nil || !c.caps.has_implementation { return }
+	params := td_pos_params(path_to_uri(path), {line, char})
+	client_send_request(c, "textDocument/implementation", params, cb)
+}
+
+manager_type_definition :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
+	c := lsp_manager_find_client_for_path(m, path)
+	if c == nil || !c.caps.has_type_definition { return }
+	params := td_pos_params(path_to_uri(path), {line, char})
+	client_send_request(c, "textDocument/typeDefinition", params, cb)
+}
+
+manager_declaration :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
+	c := lsp_manager_find_client_for_path(m, path)
+	if c == nil || !c.caps.has_declaration { return }
+	params := td_pos_params(path_to_uri(path), {line, char})
+	client_send_request(c, "textDocument/declaration", params, cb)
+}
+
+manager_document_highlight :: proc(m: ^LSP_Manager, path: string, line, char: int, cb: Response_Callback) {
+	c := lsp_manager_find_client_for_path(m, path)
+	if c == nil || !c.caps.has_document_highlight { return }
+	params := td_pos_params(path_to_uri(path), {line, char})
+	client_send_request(c, "textDocument/documentHighlight", params, cb)
+}
+
+manager_document_symbol :: proc(m: ^LSP_Manager, path: string, cb: Response_Callback) {
+	c := lsp_manager_find_client_for_path(m, path)
+	if c == nil || !c.caps.has_document_symbol { return }
+	params := strings.concatenate({
+		`{"textDocument":{"uri":`, json_str(path_to_uri(path)), `}}`,
+	}, context.temp_allocator)
+	client_send_request(c, "textDocument/documentSymbol", params, cb)
+}
+
+// Workspace symbols aren't tied to a specific file — use the client already
+// running for whichever path is currently active (caller picks one).
+manager_workspace_symbol :: proc(m: ^LSP_Manager, path: string, query: string, cb: Response_Callback) {
+	c := lsp_manager_find_client_for_path(m, path)
+	if c == nil || !c.caps.has_workspace_symbols { return }
+	params := strings.concatenate({`{"query":`, json_str(query), `}`}, context.temp_allocator)
+	client_send_request(c, "workspace/symbol", params, cb)
 }
 
 manager_rename :: proc(m: ^LSP_Manager, path: string, line, char: int, new_name: string, cb: Response_Callback) {

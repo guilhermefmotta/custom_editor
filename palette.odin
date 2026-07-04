@@ -14,11 +14,38 @@ Command :: struct {
 	name:    string,
 	desc:    string,
 	execute: proc(e: ^Editor, p: ^Palette),
+	// Optional capability gate — nil means "always show". Used for LSP
+	// commands (Find References, Go to Implementation, ...) so the palette
+	// only lists what the active file's language server actually supports,
+	// per Language_Client.caps, instead of hardcoding a fixed feature set.
+	available: proc(e: ^Editor) -> bool,
+}
+
+// ---- Location list — shared result UI for LSP navigation commands ----
+//
+// References, Go to Implementation, Go to Type Definition, Go to
+// Declaration, and Document Symbols all resolve to "a list of places in the
+// workspace" — same shape, same UI. One result opens the file directly
+// (see _open_locations_or_navigate in lsp_integration.odin); multiple
+// results list here for the user to pick.
+
+Location_Item :: struct {
+	label:  string, // heap — display name (symbol name / reference line)
+	detail: string, // heap — secondary text (kind, container, file)
+	file:   string, // heap — absolute path
+	line:   int,    // 1-based
+	col:    int,    // 1-based
+}
+
+location_item_destroy :: proc(li: ^Location_Item) {
+	delete(li.label)
+	delete(li.detail)
+	delete(li.file)
 }
 
 // ---- Palette state ----
 
-Palette_Mode :: enum { Commands, Files, Search, Marks, Themes }
+Palette_Mode :: enum { Commands, Files, Search, Marks, Themes, Locations, Workspace_Symbols }
 
 Palette :: struct {
 	open:         bool,
@@ -34,6 +61,8 @@ Palette :: struct {
 	search:       Search_State,
 	search_timer: f32,
 	marks:        ^[dynamic]Mark, // pointer into Editor.marks
+	locations:    [dynamic]Location_Item, // .Locations and .Workspace_Symbols results
+	loc_title:    string,                 // heap — e.g. "12 references"
 }
 
 // ---- Lifecycle ----
@@ -43,31 +72,43 @@ palette_init :: proc() -> Palette {
 	p.query  = make([dynamic]u8)
 	p.files  = make([dynamic]string)
 	p.themes = make([dynamic]string)
-	p.cmds   = make([dynamic]Command)
-	p.search = search_state_init()
+	p.cmds      = make([dynamic]Command)
+	p.locations = make([dynamic]Location_Item)
+	p.search    = search_state_init()
 
 	append(&p.cmds,
-		Command{"Open Workspace",            "Open a folder and set it as the workspace root",    cmd_open_workspace},
-		Command{"Find File in Workspace",   "Open any file in current directory by name",        cmd_find_file},
-		Command{"Search in Workspace",      "Search text across all files (case-insensitive)",   cmd_search_workspace},
-		Command{"Mark Line",                "Bookmark the current line with a description",       cmd_mark_line},
-		Command{"List Marks",               "Browse and jump to all bookmarked lines",            cmd_list_marks},
-		Command{"Outline",                  "Browse symbols in current file",                    cmd_outline},
-		Command{"Go to Line",               "Jump to a specific line number",                    cmd_goto_line},
-		Command{"New File",                 "Create an empty buffer",                            cmd_new_file},
-		Command{"New Directory",            "Create a new directory in the workspace",           cmd_new_directory},
-		Command{"Save File",                "Save current file to disk",                        cmd_save_file},
-		Command{"Close File",               "Close current file and clear buffer",              cmd_close_file},
-		Command{"Rename File",              "Rename the current file on disk",                  cmd_rename_file},
-		Command{"Delete File",              "Delete the current file from disk",                cmd_delete_file},
-		Command{"Split Vertical",           "Split editor into two side-by-side panes",         cmd_split_vertical},
-		Command{"Split Horizontal",         "Split editor into two stacked panes",              cmd_split_horizontal},
-		Command{"Close Split",              "Close active pane, return to single pane",         cmd_close_split},
-		Command{"Exit",                     "Quit the editor",                                  cmd_exit},
-		Command{"LSP Control",              "Open LSP server control panel",                    cmd_lsp_control},
-		Command{"Git",                      "Open Git panel (stage, commit, diff)",             cmd_git_panel},
-		Command{"Switch Theme",             "Browse and apply editor color themes",             cmd_switch_theme},
-		Command{"Toggle Line Numbers",      "Show or hide line numbers in the active pane",     cmd_toggle_line_numbers},
+		Command{"Open Workspace",            "Open a folder and set it as the workspace root",    cmd_open_workspace, nil},
+		Command{"Find File in Workspace",   "Open any file in current directory by name",        cmd_find_file, nil},
+		Command{"Search in Workspace",      "Search text across all files (case-insensitive)",   cmd_search_workspace, nil},
+		Command{"Mark Line",                "Bookmark the current line with a description",       cmd_mark_line, nil},
+		Command{"List Marks",               "Browse and jump to all bookmarked lines",            cmd_list_marks, nil},
+		Command{"Outline",                  "Browse symbols in current file",                    cmd_outline, nil},
+		Command{"Go to Line",               "Jump to a specific line number",                    cmd_goto_line, nil},
+		Command{"New File",                 "Create an empty buffer",                            cmd_new_file, nil},
+		Command{"New Directory",            "Create a new directory in the workspace",           cmd_new_directory, nil},
+		Command{"Save File",                "Save current file to disk",                        cmd_save_file, nil},
+		Command{"Close File",               "Close current file and clear buffer",              cmd_close_file, nil},
+		Command{"Rename File",              "Rename the current file on disk",                  cmd_rename_file, nil},
+		Command{"Delete File",              "Delete the current file from disk",                cmd_delete_file, nil},
+		Command{"Split Vertical",           "Split editor into two side-by-side panes",         cmd_split_vertical, nil},
+		Command{"Split Horizontal",         "Split editor into two stacked panes",              cmd_split_horizontal, nil},
+		Command{"Close Split",              "Close active pane, return to single pane",         cmd_close_split, nil},
+		Command{"Exit",                     "Quit the editor",                                  cmd_exit, nil},
+		Command{"LSP Control",              "Open LSP server control panel",                    cmd_lsp_control, nil},
+		Command{"Go to Definition",         "Jump to where the symbol under cursor is defined", cmd_lsp_goto_definition,     _avail_definition},
+		Command{"Find References",         "List all usages of the symbol under cursor",       cmd_lsp_references,          _avail_references},
+		Command{"Go to Implementation",    "Jump to the implementation of an interface/method",cmd_lsp_goto_implementation, _avail_implementation},
+		Command{"Go to Type Definition",   "Jump to the type of the symbol under cursor",      cmd_lsp_goto_type_definition,_avail_type_definition},
+		Command{"Go to Declaration",       "Jump to the declaration of the symbol under cursor",cmd_lsp_goto_declaration,   _avail_declaration},
+		Command{"Go to Symbol in File",    "Jump to a function/class/variable in this file",   cmd_lsp_document_symbols,    _avail_document_symbol},
+		Command{"Go to Symbol in Workspace","Jump to a symbol anywhere in the workspace",       cmd_lsp_workspace_symbols,   _avail_workspace_symbol},
+		Command{"Rename Symbol",           "Rename the symbol under cursor across the project",cmd_lsp_rename,              _avail_rename},
+		Command{"Format Document",         "Reformat the current file via its language server",cmd_lsp_format,              _avail_format},
+		Command{"Code Actions",            "Show quick fixes / refactorings at the cursor",    cmd_lsp_code_actions,        _avail_code_actions},
+		Command{"Problems",                "List errors/warnings in the current file",         cmd_lsp_problems,            _avail_problems},
+		Command{"Git",                      "Open Git panel (stage, commit, diff)",             cmd_git_panel, nil},
+		Command{"Switch Theme",             "Browse and apply editor color themes",             cmd_switch_theme, nil},
+		Command{"Toggle Line Numbers",      "Show or hide line numbers in the active pane",     cmd_toggle_line_numbers, nil},
 	)
 	register_debug_commands(&p)
 
@@ -82,8 +123,53 @@ palette_destroy :: proc(p: ^Palette) {
 	delete(p.cmds)
 	for f in p.files  { delete(f) }; delete(p.files)
 	for t in p.themes { delete(t) }; delete(p.themes)
+	for &li in p.locations { location_item_destroy(&li) }; delete(p.locations)
+	if p.loc_title != "" { delete(p.loc_title) }
 	if p.cwd != "" { delete(p.cwd) }
 	p^ = {}
+}
+
+// Open the shared location-list mode with a fresh result set (takes
+// ownership of items — caller must not use or free it afterward).
+palette_open_locations :: proc(p: ^Palette, title: string, items: [dynamic]Location_Item) {
+	for &li in p.locations { location_item_destroy(&li) }
+	delete(p.locations)
+	p.locations = items
+	if p.loc_title != "" { delete(p.loc_title) }
+	p.loc_title = strings.clone(title)
+	p.open     = true
+	p.mode     = .Locations
+	p.selected = 0
+	p.scroll   = 0
+	p.sel_all  = false
+	clear(&p.query)
+}
+
+// Open live workspace-symbol search — results arrive asynchronously via
+// palette_set_workspace_symbol_results as the user types (debounced).
+palette_open_workspace_symbols :: proc(p: ^Palette) {
+	for &li in p.locations { location_item_destroy(&li) }
+	clear(&p.locations)
+	p.open         = true
+	p.mode         = .Workspace_Symbols
+	p.selected     = 0
+	p.scroll       = 0
+	p.sel_all      = false
+	p.search_timer = 0
+	clear(&p.query)
+}
+
+// Called by the workspace/symbol response handler. Ignored if the user has
+// since closed the palette or switched modes (response arrived too late).
+palette_set_workspace_symbol_results :: proc(p: ^Palette, items: [dynamic]Location_Item) {
+	if p.mode != .Workspace_Symbols {
+		for &li in items { location_item_destroy(&li) }
+		delete(items)
+		return
+	}
+	for &li in p.locations { location_item_destroy(&li) }
+	delete(p.locations)
+	p.locations = items
 }
 
 palette_open :: proc(p: ^Palette) {
@@ -127,12 +213,16 @@ palette_open_themes :: proc(p: ^Palette, reg: ^conf.Registry) {
 PALETTE_MAX_VIS :: 8
 
 palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
-	// Advance search debounce timer
-	if p.mode == .Search && p.search_timer > 0 {
+	// Advance search / workspace-symbol debounce timer
+	if (p.mode == .Search || p.mode == .Workspace_Symbols) && p.search_timer > 0 {
 		p.search_timer -= rl.GetFrameTime()
 		if p.search_timer <= 0 {
 			p.search_timer = 0
-			search_start(&p.search, string(p.query[:]))
+			if p.mode == .Search {
+				search_start(&p.search, string(p.query[:]))
+			} else {
+				_lsp_workspace_symbol_query(e, string(p.query[:]))
+			}
 		}
 	}
 
@@ -143,11 +233,11 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 			clear(&p.query)
 			p.sel_all = false
 			palette_reset_selection(p)
-			if p.mode == .Search { p.search_timer = 0.35 }
+			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
 		} else if len(p.query) > 0 {
 			pop(&p.query)
 			palette_reset_selection(p)
-			if p.mode == .Search { p.search_timer = 0.35 }
+			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
 		}
 		return
 	}
@@ -170,7 +260,7 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 				if b >= 32 && b < 128 { append(&p.query, u8(b)) }
 			}
 			palette_reset_selection(p)
-			if p.mode == .Search { p.search_timer = 0.35 }
+			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
 		}
 		return
 	}
@@ -186,7 +276,7 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 
 	if rl.IsKeyPressed(.DOWN) {
 		p.sel_all = false
-		n := palette_count(p, string(p.query[:]))
+		n := palette_count(p, e, string(p.query[:]))
 		if p.selected < n - 1 {
 			p.selected += 1
 			if p.selected >= p.scroll + PALETTE_MAX_VIS {
@@ -213,7 +303,7 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 					delete(p.marks^[i].filename)
 					delete(p.marks^[i].desc)
 					ordered_remove(p.marks, i)
-					n := palette_count(p, q)
+					n := palette_count(p, e, q)
 					if p.selected >= n && p.selected > 0 { p.selected -= 1 }
 					break
 				}
@@ -231,7 +321,7 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 			if p.sel_all { clear(&p.query); p.sel_all = false }
 			append(&p.query, u8(ch))
 			palette_reset_selection(p)
-			if p.mode == .Search { p.search_timer = 0.35 }
+			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
 		}
 	}
 }
@@ -250,8 +340,33 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 		vis := 0
 		for &cmd in p.cmds {
 			if !pal_match(cmd.name, q) { continue }
+			if cmd.available != nil && !cmd.available(e) { continue }
 			if vis == p.selected { cmd.execute(e, p); return }
 			vis += 1
+		}
+
+	case .Locations:
+		vis := 0
+		for li in p.locations {
+			if !pal_match(li.label, q) { continue }
+			if vis == p.selected {
+				location_jump(e, li)
+				// Full label (untruncated by the list's fixed row width) plus
+				// detail — e.g. for Problems this is the complete diagnostic
+				// message, not just what fit on one line.
+				e.msg = fmt.tprintf("%s  \xc2\xb7  %s", li.label, li.detail) if li.detail != "" else li.label
+				palette_close(p)
+				return
+			}
+			vis += 1
+		}
+
+	case .Workspace_Symbols:
+		if p.selected >= 0 && p.selected < len(p.locations) {
+			li := p.locations[p.selected]
+			location_jump(e, li)
+			e.msg = fmt.tprintf("%s  \xc2\xb7  %s", li.label, li.detail) if li.detail != "" else li.label
+			palette_close(p)
 		}
 
 	case .Files:
@@ -327,6 +442,24 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 	}
 }
 
+location_jump :: proc(e: ^Editor, li: Location_Item) {
+	nav_push(&e.nav_hist, e)
+	p := active_pane(e)
+	if p.filename != li.file {
+		editor_open(e, li.file)
+		p = active_pane(e)
+	}
+	target := max(0, li.line - 1)
+	total  := buffer_line_count(&p.buf)
+	if target >= total { target = total - 1 }
+	ls := buffer_line_start(&p.buf, target)
+	ll := buffer_line_length(&p.buf, target)
+	p.cursor      = ls + min(max(0, li.col - 1), ll)
+	p.sel_anchor  = p.cursor
+	p.scroll      = max(0, target - 10)
+	p.scroll_anim = f32(p.scroll)
+}
+
 search_jump :: proc(e: ^Editor, r: ^Search_Result) {
 	p := active_pane(e)
 	if p.filename != r.file {
@@ -376,12 +509,22 @@ palette_scan_files :: proc(p: ^Palette) {
 
 // ---- Count filtered items ----
 
-palette_count :: proc(p: ^Palette, q: string) -> int {
+palette_count :: proc(p: ^Palette, e: ^Editor, q: string) -> int {
 	switch p.mode {
 	case .Commands:
 		n := 0
-		for cmd in p.cmds { if pal_match(cmd.name, q) { n += 1 } }
+		for cmd in p.cmds {
+			if !pal_match(cmd.name, q) { continue }
+			if cmd.available != nil && !cmd.available(e) { continue }
+			n += 1
+		}
 		return n
+	case .Locations:
+		n := 0
+		for li in p.locations { if pal_match(li.label, q) { n += 1 } }
+		return n
+	case .Workspace_Symbols:
+		return len(p.locations) // already server-filtered by query
 	case .Files:
 		n := 0
 		for f in p.files { if pal_match(f, q) { n += 1 } }
@@ -439,7 +582,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	}
 
 	q       := string(p.query[:])
-	n_items := palette_count(p, q)
+	n_items := palette_count(p, e, q)
 	vis     := min(n_items, PALETTE_MAX_VIS)
 	panel_h := QUERY_H + f32(vis)*ITEM_H + FOOTER_H
 
@@ -471,11 +614,13 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		}
 	} else {
 		ph_map := #partial [Palette_Mode]string{
-			.Commands = "Type a command...",
-			.Files    = "Type filename...",
-			.Search   = "Type to search... (Enter to run)",
-			.Marks    = "Filter marks...",
-			.Themes   = "Filter themes...",
+			.Commands          = "Type a command...",
+			.Files             = "Type filename...",
+			.Search            = "Type to search... (Enter to run)",
+			.Marks             = "Filter marks...",
+			.Themes            = "Filter themes...",
+			.Locations         = "Filter results...",
+			.Workspace_Symbols = "Type a symbol name...",
 		}
 		placeholder := ph_map[p.mode]
 		rl.DrawTextEx(font, to_cstring(placeholder), {panel_x + 14 + cw + 10, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
@@ -492,6 +637,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	case .Commands:
 		for cmd in p.cmds {
 			if !pal_match(cmd.name, q) { continue }
+			if cmd.available != nil && !cmd.available(e) { continue }
 			if data_i < p.scroll { data_i += 1; continue }
 			if draw_i >= PALETTE_MAX_VIS { break }
 			iy := item_y + f32(draw_i) * ITEM_H
@@ -502,6 +648,31 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			dlg_text(font, cmd.name, panel_x + 16, iy + 7,      FONT_SIZE,     CHAR_SPACING, TEXT,    txt_max, 0)
 			dlg_text(font, cmd.desc, panel_x + 16, iy + 7 + ch, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
 			rl.DrawTextEx(font, to_cstring(">"), {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			draw_i += 1; data_i += 1
+		}
+
+	case .Locations, .Workspace_Symbols:
+		for data_i < len(p.locations) {
+			li := p.locations[data_i]
+			if p.mode == .Locations && !pal_match(li.label, q) { data_i += 1; continue }
+			if data_i < p.scroll { data_i += 1; continue }
+			if draw_i >= PALETTE_MAX_VIS { break }
+
+			iy := item_y + f32(draw_i) * ITEM_H
+			if data_i == p.selected {
+				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
+				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
+			}
+
+			bname   := path_basename(li.file)
+			rel     := path_rel(li.file, p.cwd)
+			loc_str := fmt.tprintf(":%d:%d", li.line, li.col)
+			top_str := fmt.tprintf("%s  %s%s", li.label, bname, loc_str)
+			dlg_text(font, top_str, panel_x + 16, iy + 5, FONT_SIZE - 2, CHAR_SPACING, MATCH_COL, txt_max, 0)
+
+			bottom := li.detail if li.detail != "" else rel
+			dlg_text(font, bottom, panel_x + 16, iy + 5 + ch - 2, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
+
 			draw_i += 1; data_i += 1
 		}
 
@@ -643,6 +814,11 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		footer_text = fmt.tprintf("%d marks  |  Enter jump  |  Del remove  |  Esc close", n_m)
 	case .Themes:
 		footer_text = fmt.tprintf("%d themes  |  Enter apply  |  Esc close", len(p.themes))
+	case .Locations:
+		title := p.loc_title if p.loc_title != "" else "results"
+		footer_text = fmt.tprintf("%s  |  Enter jump  |  Esc close", title)
+	case .Workspace_Symbols:
+		footer_text = fmt.tprintf("%d symbols  |  Enter jump  |  Esc close", len(p.locations))
 	}
 	rl.DrawTextEx(font, to_cstring(footer_text), {panel_x + 12, fy + 8}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 	dlg_end()

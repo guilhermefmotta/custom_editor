@@ -1,6 +1,7 @@
 package editor
 
 import "core:fmt"
+import "core:encoding/json"
 import rl "vendor:raylib"
 
 Code_Action :: struct {
@@ -12,6 +13,12 @@ Code_Action :: struct {
 	cmd_id:       string, // heap-owned command identifier
 	cmd_args:     string, // heap-owned raw JSON args array or ""
 	is_preferred: bool,
+	// Deep-cloned copy of the original CodeAction object as sent by the
+	// server. Some servers (e.g. jdtls, once the client declares
+	// codeActionLiteralSupport.resolveSupport) omit `edit`/`command` up
+	// front and expect the client to send this back verbatim via
+	// codeAction/resolve to get them. nil once resolved/unneeded.
+	raw_json:     json.Value,
 }
 
 code_action_destroy :: proc(a: ^Code_Action) {
@@ -20,6 +27,7 @@ code_action_destroy :: proc(a: ^Code_Action) {
 	delete(a.edit_json)
 	delete(a.cmd_id)
 	delete(a.cmd_args)
+	if a.raw_json != nil { json.destroy_value(a.raw_json) }
 }
 
 Code_Action_Dialog :: struct {

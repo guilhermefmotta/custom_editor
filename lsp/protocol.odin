@@ -349,5 +349,21 @@ parse_completion_item :: proc(obj: json.Object) -> Completion_Item {
 	if item.sort_text == "" && item.label != "" {
 		item.sort_text = strings.clone(item.label)
 	}
+
+	// additionalTextEdits — e.g. jdtls's auto-import: inserting an unimported
+	// type adds the missing `import` line here alongside the primary insertText.
+	if arr, ok := json_obj_arr(obj, "additionalTextEdits"); ok {
+		edits := make([dynamic]TextEdit)
+		for edit_v in arr {
+			edit_obj, is_obj := edit_v.(json.Object)
+			if !is_obj { continue }
+			r, has_r := json_obj_obj(edit_obj, "range")
+			if !has_r { continue }
+			new_text, _ := json_obj_str(edit_obj, "newText")
+			append(&edits, TextEdit{range = parse_range(r), new_text = strings.clone(new_text)})
+		}
+		item.additional_edits = edits[:]
+	}
+
 	return item
 }

@@ -144,8 +144,11 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		return
 	}
 
-	// Ctrl+. → code actions
-	if ctrl() && rl.IsKeyPressed(.PERIOD) {
+	// Ctrl+. / Alt+Enter → code actions (quick fixes, e.g. "Assign statement
+	// to new local variable", "Add missing import", "Add cast", ...).
+	// Alt+Enter must be checked before the plain-Enter handler below —
+	// otherwise it would also insert a newline.
+	if (ctrl() && rl.IsKeyPressed(.PERIOD)) || (alt() && rl.IsKeyPressed(.ENTER)) {
 		lsp_code_actions_request(e)
 		return
 	}
@@ -184,9 +187,20 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 
 	// Go to Definition / Find References / Navigation history
 	if rl.IsKeyPressed(.F12)                     { lsp_goto_definition(e, active_pane(e)); return }
-	if ctrl() && rl.IsKeyPressed(.I)             { goto_refs_do(e); return }
+	if ctrl() && rl.IsKeyPressed(.I)             { lsp_find_references(e, active_pane(e)); return }
 	if ctrl() && rl.IsKeyPressed(.LEFT_BRACKET)  { nav_go_back(&e.nav_hist, e); return }
 	if ctrl() && rl.IsKeyPressed(.RIGHT_BRACKET) { nav_go_forward(&e.nav_hist, e); return }
+
+	// Ctrl+F12 → Go to Implementation ; Ctrl+Shift+F12 → Go to Type Definition
+	if ctrl() && rl.IsKeyPressed(.F12) {
+		if shift() { lsp_goto_type_definition(e, active_pane(e)) } else { lsp_goto_implementation(e, active_pane(e)) }
+		return
+	}
+	// Ctrl+Shift+O → Go to Symbol in File ; Ctrl+T → Go to Symbol in Workspace
+	if ctrl() && shift() && rl.IsKeyPressed(.O) { lsp_document_symbols_open(e, active_pane(e)); return }
+	if ctrl() && rl.IsKeyPressed(.T)            { lsp_workspace_symbols_open(e); return }
+	// Ctrl+Shift+M → Problems (errors/warnings in current file)
+	if ctrl() && shift() && rl.IsKeyPressed(.M) { cmd_lsp_problems(e, &e.palette); return }
 
 	// Ctrl+; open file tree
 	if ctrl() && rl.IsKeyPressed(.SEMICOLON) {
