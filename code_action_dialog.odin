@@ -123,7 +123,7 @@ render_code_action_dialog :: proc(d: ^Code_Action_Dialog, font: rl.Font, sw, sh:
 	py := sh * 0.2
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(px, py, CA_W, panel_h, PANEL_BG, BORDER)
+	px, py = dlg_begin(px, py, CA_W, panel_h, PANEL_BG, BORDER)
 
 	// Header
 	rl.DrawRectangleV({px, py}, {CA_W, CA_HDR_H}, HDR_BG)

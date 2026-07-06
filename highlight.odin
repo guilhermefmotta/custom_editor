@@ -110,14 +110,21 @@ tokenize_line :: proc(line: string, lang: Lang) -> []Span {
 			continue
 		}
 
-		// Odin attribute  @tag or @(...)
-		if ch == '@' && lang == .Odin {
+		// Attribute / annotation: Odin's @tag / @(private="file"), Java's
+		// @Override / @GetMapping("/x") / @SuppressWarnings({"a","b"}).
+		// Name is optional (Odin's anonymous @(...) form); a following
+		// (...) is consumed as a depth-tracked group so nested parens
+		// don't cut the span short.
+		if ch == '@' && (lang == .Odin || lang == .Java) {
 			start := i; i += 1
+			for i < n && (is_alpha(line[i]) || is_digit(line[i]) || line[i] == '_' || line[i] == '.') { i += 1 }
 			if i < n && line[i] == '(' {
-				for i < n && line[i] != ')' { i += 1 }
-				if i < n { i += 1 }
-			} else {
-				for i < n && (is_alpha(line[i]) || line[i] == '_') { i += 1 }
+				depth := 0
+				for i < n {
+					if line[i] == '(' { depth += 1 }
+					if line[i] == ')' { depth -= 1; if depth == 0 { i += 1; break } }
+					i += 1
+				}
 			}
 			append(&spans, Span{start, i - start, .Attribute})
 			continue
@@ -487,6 +494,68 @@ draw_highlighted_line :: proc(font: rl.Font, line: []u8, x, y: f32, lang: Lang) 
 		draw_seg(font, string(line[prev:]), cur_x, y, TEXT)
 	}
 }
+
+// --- Bracket matching ---
+//
+// When the cursor sits right at or right after a bracket, highlight both it
+// and its partner so nested { ( [ blocks are easy to trace visually. Plain
+// byte scan (doesn't special-case brackets inside strings/comments) — good
+// enough for "where does this close", not a full re-tokenize per keystroke.
+
+_bracket_partner :: proc(b: u8) -> u8 {
+	switch b {
+	case '(': return ')'
+	case '{': return '}'
+	case '[': return ']'
+	case ')': return '('
+	case '}': return '{'
+	case ']': return '['
+	}
+	return 0
+}
+_is_open_bracket  :: proc(b: u8) -> bool { return b == '(' || b == '{' || b == '[' }
+_is_close_bracket :: proc(b: u8) -> bool { return b == ')' || b == '}' || b == ']' }
+
+// find_matching_bracket looks at the buffer byte at the cursor, then the one
+// just before it, for a bracket; if found, scans for its depth-matched
+// partner. Returns the two buffer positions and whether a pair was found.
+find_matching_bracket :: proc(p: ^Pane) -> (a, b: int, ok: bool) {
+	blen := buffer_len(&p.buf)
+
+	at := -1
+	if p.cursor < blen && _is_bracket(buffer_get_byte(&p.buf, p.cursor)) {
+		at = p.cursor
+	} else if p.cursor > 0 && _is_bracket(buffer_get_byte(&p.buf, p.cursor - 1)) {
+		at = p.cursor - 1
+	}
+	if at < 0 { return 0, 0, false }
+
+	ch      := buffer_get_byte(&p.buf, at)
+	partner := _bracket_partner(ch)
+
+	if _is_open_bracket(ch) {
+		depth := 1
+		for i := at + 1; i < blen; i += 1 {
+			c := buffer_get_byte(&p.buf, i)
+			if c == ch { depth += 1 } else if c == partner {
+				depth -= 1
+				if depth == 0 { return at, i, true }
+			}
+		}
+	} else {
+		depth := 1
+		for i := at - 1; i >= 0; i -= 1 {
+			c := buffer_get_byte(&p.buf, i)
+			if c == ch { depth += 1 } else if c == partner {
+				depth -= 1
+				if depth == 0 { return i, at, true }
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+_is_bracket :: proc(b: u8) -> bool { return _is_open_bracket(b) || _is_close_bracket(b) }
 
 // --- Char class helpers ---
 

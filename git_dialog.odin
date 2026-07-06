@@ -42,6 +42,7 @@ Git_Dialog :: struct {
 	scroll:     int,
 	diff_scroll: int,
 	commit_buf: [dynamic]u8,
+	commit_sel_all: bool,
 	msg:        string, // heap
 	msg_ok:     bool,
 	merge:      Merge_State,
@@ -51,6 +52,7 @@ Git_Dialog :: struct {
 	bp_selected: int,
 	bp_scroll:   int,
 	bp_filter:   [dynamic]u8,
+	bp_filter_sel_all: bool,
 }
 
 // Layout
@@ -112,7 +114,8 @@ git_dialog_open :: proc(d: ^Git_Dialog) {
 	d.focus       = .Files
 	d.selected    = 0
 	d.scroll      = 0
-	d.diff_scroll = 0
+	d.diff_scroll   = 0
+	d.commit_sel_all = false
 	_rep_key = .KEY_NULL
 }
 
@@ -138,6 +141,7 @@ _bp_open :: proc(d: ^Git_Dialog, m: ^git.Git_Manager) {
 	d.bp_selected = 0
 	d.bp_scroll   = 0
 	clear(&d.bp_filter)
+	d.bp_filter_sel_all = false
 	d.bp_open     = true
 }
 
@@ -393,12 +397,7 @@ git_dialog_handle_input :: proc(d: ^Git_Dialog, e: ^Editor) {
 			} else { _gitd_set_msg(d, false, err); delete(err) }
 			return
 		}
-		if key_rep(.BACKSPACE) && len(d.commit_buf) > 0 { pop(&d.commit_buf); return }
-		ch := rl.GetCharPressed()
-		for ch != 0 {
-			if ch >= 32 && ch < 127 { append(&d.commit_buf, u8(ch)) }
-			ch = rl.GetCharPressed()
-		}
+		text_input_handle(&d.commit_buf, &d.commit_sel_all)
 		return
 	}
 
@@ -519,19 +518,9 @@ _git_bp_input :: proc(d: ^Git_Dialog, m: ^git.Git_Manager) {
 		if d.bp_selected < d.bp_scroll { d.bp_scroll = d.bp_selected }
 	}
 
-	if key_rep(.BACKSPACE) && len(d.bp_filter) > 0 {
-		pop(&d.bp_filter)
+	if text_input_handle(&d.bp_filter, &d.bp_filter_sel_all) {
 		d.bp_selected = 0; d.bp_scroll = 0
-		return
 	}
-
-	ch := rl.GetCharPressed()
-	filter_changed := false
-	for ch != 0 {
-		if ch >= 32 && ch < 127 { append(&d.bp_filter, u8(ch)); filter_changed = true }
-		ch = rl.GetCharPressed()
-	}
-	if filter_changed { d.bp_selected = 0; d.bp_scroll = 0 }
 
 	if rl.IsKeyPressed(.ENTER) && n > 0 {
 		branch_idx := filtered[d.bp_selected]
@@ -591,7 +580,7 @@ _gitd_draw_status :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw
 	px := (sw - GITD_W) * 0.5
 	py := (sh - panel_h) * 0.5
 
-	dlg_begin(px, py, GITD_W, panel_h, GITD_BG, GITD_BORDER)
+	px, py = dlg_begin(px, py, GITD_W, panel_h, GITD_BG, GITD_BORDER)
 
 	// Header
 	merging := git.git_merge_in_progress(m)
@@ -710,7 +699,7 @@ _gitd_draw_diff :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw, 
 	px := (sw - GITD_W) * 0.5
 	py := (sh - panel_h) * 0.5
 
-	dlg_begin(px, py, GITD_W, panel_h, GITD_BG, GITD_BORDER)
+	px, py = dlg_begin(px, py, GITD_W, panel_h, GITD_BG, GITD_BORDER)
 
 	// Header
 	rl.DrawRectangleV({px, py}, {GITD_W, GITD_HEADER_H}, GITD_HEADER)
@@ -784,7 +773,7 @@ _gitd_draw_merge :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw,
 	px := (sw - GITD_MERGE_W) * 0.5
 	py := (sh - panel_h) * 0.5
 
-	dlg_begin(px, py, GITD_MERGE_W, panel_h, GITD_BG, GITD_BORDER)
+	px, py = dlg_begin(px, py, GITD_MERGE_W, panel_h, GITD_BG, GITD_BORDER)
 
 	// Header
 	rl.DrawRectangleV({px, py}, {GITD_MERGE_W, GITD_HEADER_H}, GITD_HEADER)
@@ -890,7 +879,7 @@ _gitd_draw_branch_picker :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.F
 	// Dim everything behind
 	rl.DrawRectangleV({0, 0}, {sw, sh}, rl.Color{0, 0, 0, 120})
 
-	dlg_begin(px, py, GITD_BP_W, panel_h, GITD_BG, GITD_BORDER)
+	px, py = dlg_begin(px, py, GITD_BP_W, panel_h, GITD_BG, GITD_BORDER)
 
 	// Header
 	rl.DrawRectangleV({px, py}, {GITD_BP_W, GITD_HEADER_H}, GITD_HEADER)

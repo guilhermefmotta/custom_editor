@@ -16,6 +16,7 @@ Outline_Dialog :: struct {
 	open:     bool,
 	symbols:  [dynamic]Outline_Symbol,
 	filter:   [dynamic]u8,
+	sel_all:  bool,
 	filtered: [dynamic]int, // indices into symbols[]
 	sel:      int,          // index into filtered[]
 	scroll:   int,
@@ -349,7 +350,8 @@ _outline_rebuild_filter :: proc(od: ^Outline_Dialog) {
 // ---- Open / Close -------------------------------------------------------
 
 outline_open :: proc(od: ^Outline_Dialog, p: ^Pane) {
-	od.open = true
+	od.open    = true
+	od.sel_all = false
 	clear(&od.filter)
 	outline_scan(od, p)
 }
@@ -385,16 +387,7 @@ outline_handle_input :: proc(od: ^Outline_Dialog, p: ^Pane) {
 	}
 
 	// Filter typing
-	changed := false
-	if key_rep(.BACKSPACE) {
-		if len(od.filter) > 0 { pop(&od.filter); changed = true }
-	}
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch >= 32 { append(&od.filter, u8(ch)); changed = true }
-	}
-	if changed { _outline_rebuild_filter(od) }
+	if text_input_handle(&od.filter, &od.sel_all) { _outline_rebuild_filter(od) }
 }
 
 outline_jump :: proc(od: ^Outline_Dialog, p: ^Pane) {
@@ -442,7 +435,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	panel_y := sh * 0.05
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, BORDER)
+	panel_x, panel_y = dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, BORDER)
 
 	// Header: filename
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, HEADER_H}, INPUT_BG)

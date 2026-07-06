@@ -2,9 +2,11 @@ package git
 
 import "core:fmt"
 import "core:os"
+import "core:strconv"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "core:time"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,6 +19,15 @@ Hunk :: struct {
 	new_count: int, // lines in new file  (0 = deletion)
 	old_count: int, // lines in old file  (0 = insertion)
 	kind:      Hunk_Kind,
+}
+
+// Blame_Line describes the last commit that touched one line of a file, as
+// reported by `git blame --porcelain`. hash == "0000000000000000000000000000000000000000"
+// means the line is uncommitted (working-tree change).
+Blame_Line :: struct {
+	hash:   string, // heap, 40 hex chars
+	author: string, // heap
+	date:   string, // heap, "DD/MM/YYYY"
 }
 
 Status_Entry :: struct {
@@ -45,6 +56,8 @@ Git_Manager :: struct {
 
 	refresh_thread: ^thread.Thread,
 	timer:          f32,
+
+	blame_cache: map[string][dynamic]Blame_Line, // abs path → per-line blame (main thread, lazy)
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +68,7 @@ git_manager_init :: proc(m: ^Git_Manager, root: string) {
 	m.root            = strings.clone(root)
 	m.current.entries = make([dynamic]Status_Entry)
 	m.current.hunks   = make(map[string][dynamic]Hunk)
+	m.blame_cache     = make(map[string][dynamic]Blame_Line)
 	m.timer           = 0 // refresh immediately on first update
 }
 
@@ -68,6 +82,8 @@ git_manager_destroy :: proc(m: ^Git_Manager) {
 	_free_state(&m.current)
 	_free_state(&m.pending)
 	if m.diff_text != "" { delete(m.diff_text); m.diff_text = "" }
+	for k, &v in m.blame_cache { delete(k); _free_blame_lines(&v) }
+	delete(m.blame_cache)
 }
 
 // git_manager_update: call once per frame from main thread.
@@ -198,6 +214,53 @@ git_diff_file :: proc(m: ^Git_Manager, rel_path: string) -> string {
 	if ok2 { return out2 }
 	delete(out2)
 	return ""
+}
+
+// git_blame_get returns per-line blame for abs_path, computing and caching it
+// on first request. Cache is invalidated by git_blame_invalidate (call after
+// save) or git_blame_refresh (force recompute regardless of cache).
+git_blame_get :: proc(m: ^Git_Manager, abs_path: string) -> [dynamic]Blame_Line {
+	if cached, ok := m.blame_cache[abs_path]; ok { return cached }
+	return git_blame_refresh(m, abs_path)
+}
+
+// git_blame_refresh recomputes blame for abs_path and replaces the cache entry.
+git_blame_refresh :: proc(m: ^Git_Manager, abs_path: string) -> [dynamic]Blame_Line {
+	rel := abs_path
+	if strings.has_prefix(abs_path, m.root) {
+		rel = strings.trim_prefix(abs_path[len(m.root):], "/")
+	}
+	lines := make([dynamic]Blame_Line)
+	out, ok := git_run(m.root, {"blame", "--porcelain", "--", rel})
+	if ok {
+		_parse_blame(out, &lines)
+		delete(out)
+	}
+	if old, has := m.blame_cache[abs_path]; has {
+		_free_blame_lines(&old)
+		delete(old)
+		m.blame_cache[abs_path] = lines
+	} else {
+		m.blame_cache[strings.clone(abs_path)] = lines
+	}
+	return lines
+}
+
+git_blame_invalidate :: proc(m: ^Git_Manager, abs_path: string) {
+	found_key := ""
+	for k, v in m.blame_cache {
+		if k == abs_path {
+			vv := v
+			_free_blame_lines(&vv)
+			delete(vv)
+			found_key = k
+			break
+		}
+	}
+	if found_key != "" {
+		delete_key(&m.blame_cache, found_key)
+		delete(found_key)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +403,76 @@ _parse_hunk_line :: proc(line: string) -> (h: Hunk, ok: bool) {
 	if old_count == 0 { h.kind = .Added } else if new_count == 0 { h.kind = .Deleted } else { h.kind = .Modified }
 	ok = true
 	return
+}
+
+// _parse_blame parses `git blame --porcelain` output. Per-commit metadata
+// (author, author-time, ...) is only emitted the first time a hash appears
+// in the stream, so we cache it by hash as we go and reuse it for the
+// abbreviated repeat blocks.
+_parse_blame :: proc(output: string, lines: ^[dynamic]Blame_Line) {
+	Blame_Info :: struct { author: string, date: string }
+	info_cache := make(map[string]Blame_Info, context.temp_allocator)
+
+	s := output
+	for len(s) > 0 {
+		header: string
+		if nl := strings.index_byte(s, '\n'); nl >= 0 { header = s[:nl]; s = s[nl+1:] } else { header = s; s = "" }
+		if len(header) < 40 { continue }
+		hash := header[:40]
+
+		rest := strings.trim_left_space(header[40:])
+		_, rest2, ok1 := _parse_uint(rest)
+		if !ok1 { continue }
+		rest2 = strings.trim_left_space(rest2)
+		final_line, _, ok2 := _parse_uint(rest2)
+		if !ok2 { continue }
+
+		info, has_info := info_cache[hash]
+		for len(s) > 0 {
+			lnl := strings.index_byte(s, '\n')
+			line: string
+			if lnl >= 0 { line = s[:lnl]; s = s[lnl+1:] } else { line = s; s = "" }
+			if len(line) > 0 && line[0] == '\t' { break } // content line — end of this block
+
+			if strings.has_prefix(line, "author ") {
+				info.author = strings.trim_space(line[len("author "):])
+				has_info = true
+			} else if strings.has_prefix(line, "author-time ") {
+				ts_str := strings.trim_space(line[len("author-time "):])
+				if ts, pok := strconv.parse_i64(ts_str); pok {
+					info.date = _format_epoch_date(ts)
+				}
+				has_info = true
+			}
+		}
+		if !has_info {
+			info = Blame_Info{author = "unknown", date = ""}
+		}
+		info_cache[hash] = info
+
+		if final_line > 0 {
+			for len(lines^) < final_line { append(lines, Blame_Line{}) }
+			lines[final_line-1] = Blame_Line{
+				hash   = strings.clone(hash),
+				author = strings.clone(info.author),
+				date   = strings.clone(info.date),
+			}
+		}
+	}
+}
+
+_format_epoch_date :: proc(sec: i64) -> string {
+	t := time.unix(sec, 0)
+	year, month, day := time.date(t)
+	return fmt.aprintf("%02d/%02d/%04d", day, int(month), year)
+}
+
+_free_blame_lines :: proc(lines: ^[dynamic]Blame_Line) {
+	for &l in lines {
+		if l.hash != ""   { delete(l.hash) }
+		if l.author != "" { delete(l.author) }
+		if l.date != ""   { delete(l.date) }
+	}
 }
 
 _parse_uint :: proc(s: string) -> (n: int, rest: string, ok: bool) {

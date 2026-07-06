@@ -13,9 +13,10 @@ Split_Dir :: enum { None, Vertical, Horizontal }
 DIVIDER_W :: f32(1)
 
 Save_Dialog :: struct {
-	open:   bool,
-	rename: bool,
-	input:  [dynamic]u8,
+	open:    bool,
+	rename:  bool,
+	input:   [dynamic]u8,
+	sel_all: bool,
 }
 
 Mark :: struct {
@@ -25,13 +26,15 @@ Mark :: struct {
 }
 
 Mark_Dialog :: struct {
-	open:  bool,
-	input: [dynamic]u8,
+	open:    bool,
+	input:   [dynamic]u8,
+	sel_all: bool,
 }
 
 Goto_Dialog :: struct {
-	open:  bool,
-	input: [dynamic]u8,
+	open:    bool,
+	input:   [dynamic]u8,
+	sel_all: bool,
 }
 
 Find_Replace :: struct {
@@ -81,8 +84,10 @@ Editor :: struct {
 	cfg:             conf.Config,
 	registry:        conf.Registry,
 	debug_mgr:       dbg.Debug_Manager,
+	debug_panel:     Debug_Panel,
 	debug_eval:      Debug_Eval_Dialog,
 	debug_attach:    Debug_Attach_Dialog,
+	blame_enabled:   bool, // Git Blame gutter toggle (palette command)
 }
 
 editor_init :: proc() -> Editor {
@@ -111,6 +116,7 @@ editor_init :: proc() -> Editor {
 	e.cfg      = conf.load_config(conf.default_config_paths())
 	e.registry = conf.registry_build(&e.cfg, "languages", "themes")
 	dbg.manager_init(&e.debug_mgr)
+	debug_panel_init(&e.debug_panel)
 	debug_eval_init(&e.debug_eval)
 	debug_attach_init(&e.debug_attach)
 	return e
@@ -151,6 +157,7 @@ editor_destroy :: proc(e: ^Editor) {
 	code_action_dialog_destroy(&e.code_action_dlg)
 	editor_lsp_destroy(e)
 	dbg.manager_destroy(&e.debug_mgr)
+	debug_panel_destroy(&e.debug_panel)
 	debug_eval_destroy(&e.debug_eval)
 	debug_attach_destroy(&e.debug_attach)
 	conf.registry_destroy(&e.registry)
@@ -196,6 +203,7 @@ editor_save :: proc(e: ^Editor) -> bool {
 	}
 	ok, msg := pane_save(p)
 	e.msg = msg
+	if ok { git.git_blame_invalidate(&e.git_mgr, p.filename) }
 	return ok
 }
 
@@ -223,16 +231,18 @@ editor_close_split :: proc(e: ^Editor) {
 // ---- Save As dialog ----
 
 save_dialog_open :: proc(e: ^Editor) {
-	e.save_dlg.open   = true
-	e.save_dlg.rename = false
+	e.save_dlg.open    = true
+	e.save_dlg.rename  = false
+	e.save_dlg.sel_all = false
 	clear(&e.save_dlg.input)
 	s := "untitled.txt"
 	for i in 0 ..< len(s) { append(&e.save_dlg.input, s[i]) }
 }
 
 save_dialog_close :: proc(e: ^Editor) {
-	e.save_dlg.open   = false
-	e.save_dlg.rename = false
+	e.save_dlg.open    = false
+	e.save_dlg.rename  = false
+	e.save_dlg.sel_all = false
 	clear(&e.save_dlg.input)
 }
 
@@ -266,8 +276,9 @@ rename_file_open :: proc(e: ^Editor) {
 	if p.filename == "" { e.msg = "No filename - Save As first"; return }
 	clear(&e.save_dlg.input)
 	for i in 0..<len(p.filename) { append(&e.save_dlg.input, p.filename[i]) }
-	e.save_dlg.rename = true
-	e.save_dlg.open   = true
+	e.save_dlg.rename  = true
+	e.save_dlg.open    = true
+	e.save_dlg.sel_all = false
 }
 
 delete_file_open :: proc(e: ^Editor) {
@@ -320,11 +331,13 @@ mark_dialog_open :: proc(e: ^Editor) {
 		start += 1
 	}
 	for i in start ..< ls + ll { append(&e.mark_dlg.input, buffer_get_byte(&ap.buf, i)) }
-	e.mark_dlg.open = true
+	e.mark_dlg.open    = true
+	e.mark_dlg.sel_all = false
 }
 
 mark_dialog_close :: proc(e: ^Editor) {
-	e.mark_dlg.open = false
+	e.mark_dlg.open    = false
+	e.mark_dlg.sel_all = false
 	clear(&e.mark_dlg.input)
 }
 
@@ -346,11 +359,13 @@ mark_dialog_confirm :: proc(e: ^Editor) {
 
 goto_dialog_open :: proc(e: ^Editor) {
 	clear(&e.goto_dlg.input)
-	e.goto_dlg.open = true
+	e.goto_dlg.open    = true
+	e.goto_dlg.sel_all = false
 }
 
 goto_dialog_close :: proc(e: ^Editor) {
-	e.goto_dlg.open = false
+	e.goto_dlg.open    = false
+	e.goto_dlg.sel_all = false
 	clear(&e.goto_dlg.input)
 }
 

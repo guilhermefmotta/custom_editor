@@ -13,13 +13,16 @@ Debug_Attach_Dialog :: struct {
 	open:      bool,
 	host_buf:  [dynamic]u8,
 	port_buf:  [dynamic]u8,
-	focus:     int,    // 0 = host, 1 = port
+	focus:     int,    // 0 = host, 1 = port, 2 = protocol
+	sel_all:   bool,   // applies to whichever field is focused
+	protocol:  dbg.Protocol_Kind, // JDWP by default: the common raw-TCP-attach target is a JVM's -agentlib:jdwp socket, not a DAP adapter
 	error_msg: string, // heap; cleared on next open
 }
 
 debug_attach_init :: proc(d: ^Debug_Attach_Dialog) {
 	d.host_buf = make([dynamic]u8)
 	d.port_buf = make([dynamic]u8)
+	d.protocol = .JDWP
 	// Default host
 	for b in transmute([]u8)string("localhost") {
 		append(&d.host_buf, b)
@@ -33,8 +36,9 @@ debug_attach_destroy :: proc(d: ^Debug_Attach_Dialog) {
 }
 
 debug_attach_open :: proc(d: ^Debug_Attach_Dialog) {
-	d.open  = true
-	d.focus = 1 // start focus on port (host is usually localhost)
+	d.open    = true
+	d.focus   = 1 // start focus on port (host is usually localhost)
+	d.sel_all = false
 	delete(d.error_msg)
 	d.error_msg = ""
 	// Keep whatever was typed before — user may re-open with same settings
@@ -53,9 +57,10 @@ debug_attach_handle_input :: proc(e: ^Editor, d: ^Debug_Attach_Dialog) {
 
 	if rl.IsKeyPressed(.ESCAPE) { debug_attach_close(d); return }
 
-	// Tab switches focus between host and port
+	// Tab cycles focus: host -> port -> protocol -> host
 	if rl.IsKeyPressed(.TAB) {
-		d.focus = 1 - d.focus
+		d.focus = (d.focus + 1) % 3
+		d.sel_all = false
 		return
 	}
 
@@ -65,22 +70,15 @@ debug_attach_handle_input :: proc(e: ^Editor, d: ^Debug_Attach_Dialog) {
 		return
 	}
 
-	// Backspace on focused field
-	if rl.IsKeyPressed(.BACKSPACE) {
-		buf := _attach_focused_buf(d)
-		if len(buf^) > 0 { pop(buf) }
+	// Left/Right toggle protocol when that row is focused
+	if d.focus == 2 {
+		if rl.IsKeyPressed(.LEFT) || rl.IsKeyPressed(.RIGHT) {
+			d.protocol = .DAP if d.protocol == .JDWP else .JDWP
+		}
 		return
 	}
 
-	// Typed characters into focused field
-	ch := rl.GetCharPressed()
-	for ch != 0 {
-		buf := _attach_focused_buf(d)
-		if ch >= 32 && ch < 127 {
-			append(buf, u8(ch))
-		}
-		ch = rl.GetCharPressed()
-	}
+	text_input_handle(_attach_focused_buf(d), &d.sel_all)
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +92,7 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 	HEADER_H :: f32(36)
 	ROW_H    :: f32(42)
 	FOOTER_H :: f32(50)
-	panel_h  := HEADER_H + ROW_H*2 + FOOTER_H
+	panel_h  := HEADER_H + ROW_H*3 + FOOTER_H
 
 	BLUE    :: rl.Color{137, 180, 250, 255}
 	BG      :: rl.Color{30,  30,  46,  255}
@@ -109,7 +107,7 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 	py := sh * 0.30
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(px, py, PANEL_W, panel_h, BG, BORDER)
+	px, py = dlg_begin(px, py, PANEL_W, panel_h, BG, BORDER)
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 	cy  := py
@@ -133,6 +131,21 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 		d.focus == 1, BLUE, TEXT, SUBDUED, BORDER, HDR_BG)
 	cy += ROW_H
 
+	// Protocol row
+	{
+		proto_label := "JDWP (attach to JVM)" if d.protocol == .JDWP else "DAP (attach to adapter)"
+		rl.DrawRectangleV({px, cy}, {PANEL_W, ROW_H}, HDR_BG)
+		rl.DrawLineV({px, cy + ROW_H - 1}, {px + PANEL_W, cy + ROW_H - 1}, BORDER)
+		rl.DrawTextEx(font, "Protocol", {px+12, cy + (ROW_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, SUBDUED)
+		bdr := BLUE if d.focus == 2 else BORDER
+		lbl_w := rl.MeasureTextEx(font, to_cstring("Protocol"), FONT_SIZE-2, CHAR_SPACING).x + 8
+		bx := px + 12 + lbl_w + 10
+		bw := PANEL_W - bx + px - 12
+		rl.DrawRectangleLinesEx({bx, cy + 7, bw, ROW_H - 14}, 1, bdr)
+		dlg_text(font, proto_label, bx+6, cy + (ROW_H-ref.y)*0.5, FONT_SIZE, CHAR_SPACING, TEXT, bx+bw, 6)
+	}
+	cy += ROW_H
+
 	// Footer
 	rl.DrawRectangleV({px, cy}, {PANEL_W, FOOTER_H}, HDR_BG)
 	rl.DrawLineV({px, cy}, {px+PANEL_W, cy}, BORDER)
@@ -141,7 +154,7 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 		dlg_text(font, d.error_msg, px+12, cy+8, FONT_SIZE-2, CHAR_SPACING, RED, px+PANEL_W, 10)
 	}
 
-	hint := "Tab switch field  Enter connect  Esc cancel"
+	hint := "Tab switch field  Left/Right toggle protocol  Enter connect  Esc cancel"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE-3, CHAR_SPACING).x
 	rl.DrawTextEx(font, to_cstring(hint),
 		{px + PANEL_W - hw - 10, cy + FOOTER_H - ref.y - 7},
@@ -178,7 +191,7 @@ _do_attach :: proc(e: ^Editor, d: ^Debug_Attach_Dialog) {
 		return
 	}
 
-	err := dbg.session_attach_tcp(&e.debug_mgr, host, port)
+	err := dbg.session_attach_tcp(&e.debug_mgr, host, port, d.protocol)
 	if err != "" {
 		_attach_set_err(d, err)
 		return

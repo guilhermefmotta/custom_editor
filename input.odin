@@ -37,54 +37,58 @@ key_rep :: proc(key: rl.KeyboardKey) -> bool {
 }
 
 // --- Top-level dispatcher ---
+//
+// Input pipeline, in order:
+//   Global shortcuts -> Debug shortcuts -> Modal dialogs -> Panels ->
+//   LSP shortcuts -> Navigation -> Mouse -> Edit shortcuts ->
+//   Cursor movement -> Text editing -> Character insertion
+//
+// Each phase either fully handles the frame's input and returns `true`
+// (caller stops immediately, matching the original early-`return`s), or
+// returns `false` and the next phase gets a turn. Order matches the
+// original monolithic function exactly, so behavior is unchanged.
 
 handle_input :: proc(e: ^Editor, font: rl.Font) {
+	if handle_global_shortcuts(e)      { return }
+	if handle_debug_shortcuts(e)       { return }
+	if handle_dialogs(e)               { return }
+	if handle_panels(e)                { return }
+	if handle_lsp_shortcuts(e)         { return }
+	if handle_navigation(e)            { return }
+
+	handle_mouse(e, font)
+	p := active_pane(e)
+
+	if handle_edit_shortcuts(e, p)     { return }
+
+	cursor_before := p.cursor
+	handle_cursor_movement(p)
+
+	text_changed := false
+	text_changed |= handle_text_editing(p)
+	text_changed |= handle_character_input(p)
+
+	if p.cursor != cursor_before { lsp_on_cursor_moved(e, p) }
+	if text_changed { lsp_on_text_changed(e, p) }
+}
+
+// -----------------------------------------------------
+// Global shortcuts
+// -----------------------------------------------------
+
+handle_global_shortcuts :: proc(e: ^Editor) -> bool {
 	// Ctrl+Q always quits, regardless of any open dialog
-	if ctrl() && rl.IsKeyPressed(.Q) { e.should_quit = true; return }
+	if ctrl() && rl.IsKeyPressed(.Q) { e.should_quit = true; return true }
+	return false
+}
 
-	// Priority: delete_confirm > lsp_dialog > recents > workspace_dlg > save_dlg > file_tree > outline > find_rep > mark_dlg > goto_dlg > palette > normal
-	if e.delete_confirm       { delete_confirm_handle_input(e); return }
-	if e.git_dialog.visible   { git_dialog_handle_input(&e.git_dialog, e); return }
-	if e.lsp_dialog.visible   { lsp_dialog_handle_input(&e.lsp_dialog, e); return }
-	if e.recents.open         { recents_handle_input(&e.recents, e); return }
-	if e.workspace_dlg.open   { workspace_dialog_handle_input(&e.workspace_dlg, e); return }
-	if e.save_dlg.open        { save_dialog_handle_input(e); return }
-	if e.file_tree.open       { file_tree_handle_input(&e.file_tree, e); return }
-	if e.outline.open    { outline_handle_input(&e.outline, active_pane(e)); return }
-	if e.find_rep.open  { find_replace_handle_input(e); return }
-	if e.mark_dlg.open  { mark_dialog_handle_input(e); return }
-	if e.goto_dlg.open   { goto_dialog_handle_input(e); return }
-	if e.def_picker.open { goto_def_picker_handle_input(e); return }
+// -----------------------------------------------------
+// Debug shortcuts
+// -----------------------------------------------------
 
-	// Rename dialog (F2)
-	if e.rename_dlg.open {
-		new_name, confirmed := rename_dialog_handle_input(&e.rename_dlg)
-		if confirmed { lsp_rename_confirm(e, new_name) }
-		return
-	}
-
-	// Code action dialog (Ctrl+.)
-	if e.code_action_dlg.open {
-		_, sel := code_action_dialog_handle_input(&e.code_action_dlg)
-		if sel >= 0 { lsp_apply_code_action(e, sel) }
-		return
-	}
-
-	// Debug dialogs — high priority, before other key bindings
-	if e.debug_attach.open { debug_attach_handle_input(e, &e.debug_attach); return }
-	if e.debug_eval.open   { debug_eval_handle_input(e, &e.debug_eval); return }
-
-	if e.palette.open {
-		palette_handle_input(&e.palette, e)
-		return
-	}
-
-	if ctrl() && shift() && rl.IsKeyPressed(.P) {
-		palette_open(&e.palette)
-		return
-	}
-
-	// ── Debug shortcuts ──────────────────────────────────────────
+handle_debug_shortcuts :: proc(e: ^Editor) -> bool {
+	// ── Debug stepping shortcuts — global, work even with the debug panel
+	// or another dialog open, so you can keep it visible while stepping ──
 	// F9 → toggle breakpoint at current line
 	if rl.IsKeyPressed(.F9) {
 		p := active_pane(e)
@@ -92,56 +96,146 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 			line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)
 			_dbg_bp_toggle(e, p.filename, line + 1)
 		}
-		return
+		return true
 	}
 	// F5 → start or continue
 	if rl.IsKeyPressed(.F5) {
 		import_dbg_start_or_continue(e)
-		return
+		return true
 	}
 	// Shift+F5 → stop
 	if shift() && rl.IsKeyPressed(.F5) {
 		import_dbg_stop(e)
-		return
+		return true
 	}
 	// F10 → step over
 	if rl.IsKeyPressed(.F10) {
 		import_dbg_next(e)
-		return
+		return true
 	}
 	// F11 → step into
 	if rl.IsKeyPressed(.F11) && !shift() {
 		import_dbg_step_in(e)
-		return
+		return true
 	}
 	// Shift+F11 → step out
 	if shift() && rl.IsKeyPressed(.F11) {
 		import_dbg_step_out(e)
-		return
+		return true
 	}
-	// Ctrl+E → evaluate selected text
+
+	// Debug panel is a persistent (non-modal) dock, not a dialog: it only eats
+	// keyboard input while focused. Clicking inside its rect focuses it;
+	// clicking elsewhere (e.g. back in the editor) releases focus so normal
+	// editing keeps working while the panel stays visible. ESC closes it even
+	// when unfocused, since there'd otherwise be no way to dismiss it without
+	// clicking back into it first.
+	if e.debug_panel.visible {
+		if rl.IsMouseButtonPressed(.LEFT) {
+			mp := rl.GetMousePosition()
+			panel_top := f32(rl.GetScreenHeight()) - MSG_LINE_H - DEBUG_PANEL_H
+			e.debug_panel.focused = mp.y >= panel_top && mp.y < panel_top+DEBUG_PANEL_H
+		}
+		// Skip when a modal debug dialog is open on top — that should eat ESC
+		// first (handled later, in handle_panels/handle_dialogs), not this
+		// panel underneath it.
+		if !e.debug_panel.focused && !e.debug_eval.open && !e.debug_attach.open && rl.IsKeyPressed(.ESCAPE) {
+			debug_panel_close(e, &e.debug_panel)
+			return true
+		}
+	}
+
+	return false
+}
+
+// -----------------------------------------------------
+// Modal dialogs
+// -----------------------------------------------------
+
+handle_dialogs :: proc(e: ^Editor) -> bool {
+	// Priority: delete_confirm > lsp_dialog > recents > workspace_dlg > save_dlg > file_tree > outline > find_rep > mark_dlg > goto_dlg > palette > normal
+	if e.delete_confirm       { delete_confirm_handle_input(e); return true }
+	if e.git_dialog.visible   { git_dialog_handle_input(&e.git_dialog, e); return true }
+	if e.lsp_dialog.visible   { lsp_dialog_handle_input(&e.lsp_dialog, e); return true }
+	if e.recents.open         { recents_handle_input(&e.recents, e); return true }
+	if e.workspace_dlg.open   { workspace_dialog_handle_input(&e.workspace_dlg, e); return true }
+	if e.save_dlg.open        { save_dialog_handle_input(e); return true }
+	if e.file_tree.open       { file_tree_handle_input(&e.file_tree, e); return true }
+	if e.outline.open    { outline_handle_input(&e.outline, active_pane(e)); return true }
+	if e.find_rep.open  { find_replace_handle_input(e); return true }
+	if e.mark_dlg.open  { mark_dialog_handle_input(e); return true }
+	if e.goto_dlg.open   { goto_dialog_handle_input(e); return true }
+	if e.def_picker.open { goto_def_picker_handle_input(e); return true }
+
+	// Rename dialog (F2)
+	if e.rename_dlg.open {
+		new_name, confirmed := rename_dialog_handle_input(&e.rename_dlg)
+		if confirmed { lsp_rename_confirm(e, new_name) }
+		return true
+	}
+
+	// Code action dialog (Ctrl+.)
+	if e.code_action_dlg.open {
+		_, sel := code_action_dialog_handle_input(&e.code_action_dlg)
+		if sel >= 0 { lsp_apply_code_action(e, sel) }
+		return true
+	}
+
+	// Debug dialogs — high priority, before other key bindings
+	if e.debug_attach.open  { debug_attach_handle_input(e, &e.debug_attach); return true }
+	if e.debug_eval.open    { debug_eval_handle_input(e, &e.debug_eval); return true }
+	if e.debug_panel.visible && e.debug_panel.focused { debug_panel_handle_input(e, &e.debug_panel); return true }
+
+	return false
+}
+
+// -----------------------------------------------------
+// Panels (palette, debug panel/eval openers)
+// -----------------------------------------------------
+
+handle_panels :: proc(e: ^Editor) -> bool {
+	if e.palette.open {
+		palette_handle_input(&e.palette, e)
+		return true
+	}
+
+	if ctrl() && shift() && rl.IsKeyPressed(.P) {
+		palette_open(&e.palette)
+		return true
+	}
+
+	// Ctrl+E (with or without Shift) → open the evaluate-expression dialog
+	// (modal popup, IntelliJ-style) with selected text pre-filled.
 	if ctrl() && rl.IsKeyPressed(.E) {
 		sel := _get_selected_text(active_pane(e))
 		debug_eval_open(&e.debug_eval, sel)
-		return
+		return true
 	}
 
+	return false
+}
+
+// -----------------------------------------------------
+// LSP shortcuts
+// -----------------------------------------------------
+
+handle_lsp_shortcuts :: proc(e: ^Editor) -> bool {
 	// LSP manual completion
 	if ctrl() && rl.IsKeyPressed(.SPACE) {
 		lsp_trigger_completion_manual(e, active_pane(e))
-		return
+		return true
 	}
 
 	// Ctrl+Shift+I → format document
 	if ctrl() && shift() && rl.IsKeyPressed(.I) {
 		lsp_format_document(e)
-		return
+		return true
 	}
 
 	// F2 → rename symbol
 	if rl.IsKeyPressed(.F2) {
 		lsp_rename_open(e)
-		return
+		return true
 	}
 
 	// Ctrl+. / Alt+Enter → code actions (quick fixes, e.g. "Assign statement
@@ -150,79 +244,96 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	// otherwise it would also insert a newline.
 	if (ctrl() && rl.IsKeyPressed(.PERIOD)) || (alt() && rl.IsKeyPressed(.ENTER)) {
 		lsp_code_actions_request(e)
-		return
+		return true
 	}
 
+	return false
+}
+
+// -----------------------------------------------------
+// Navigation
+// -----------------------------------------------------
+
+handle_navigation :: proc(e: ^Editor) -> bool {
 	// Alt+Z → toggle word wrap
 	if alt() && rl.IsKeyPressed(.Z) {
 		p := active_pane(e)
 		p.word_wrap = !p.word_wrap
 		e.msg = "Word wrap: on" if p.word_wrap else "Word wrap: off"
-		return
+		return true
 	}
 
 	// Ctrl+W → close current tab
-	if ctrl() && rl.IsKeyPressed(.W) {
-		pane_close_tab(active_pane(e))
-		lsp_on_open(e, active_pane(e))
-		return
-	}
+//	if ctrl() && rl.IsKeyPressed(.W) {
+//		pane_close_tab(active_pane(e))
+//		lsp_on_open(e, active_pane(e))
+//		return true
+//	}
 
 	// Ctrl+PageUp → previous tab; Ctrl+PageDown → next tab
 	if ctrl() && rl.IsKeyPressed(.PAGE_UP) {
 		pane_tab_prev(active_pane(e))
 		lsp_on_open(e, active_pane(e))
-		return
+		return true
 	}
 	if ctrl() && rl.IsKeyPressed(.PAGE_DOWN) {
 		pane_tab_next(active_pane(e))
 		lsp_on_open(e, active_pane(e))
-		return
+		return true
 	}
 
 	// Suggest widget intercepts keys when visible
 	if active_pane(e).suggest.visible {
-		if suggest_handle_input(e, active_pane(e)) { return }
+		if suggest_handle_input(e, active_pane(e)) { return true }
 	}
 
 	// Go to Definition / Find References / Navigation history
-	if rl.IsKeyPressed(.F12)                     { lsp_goto_definition(e, active_pane(e)); return }
-	if ctrl() && rl.IsKeyPressed(.I)             { lsp_find_references(e, active_pane(e)); return }
-	if ctrl() && rl.IsKeyPressed(.LEFT_BRACKET)  { nav_go_back(&e.nav_hist, e); return }
-	if ctrl() && rl.IsKeyPressed(.RIGHT_BRACKET) { nav_go_forward(&e.nav_hist, e); return }
+	if rl.IsKeyPressed(.F12)                     { lsp_goto_definition(e, active_pane(e)); return true }
+	if ctrl() && rl.IsKeyPressed(.I)             { lsp_find_references(e, active_pane(e)); return true }
+	if ctrl() && rl.IsKeyPressed(.LEFT_BRACKET)  { nav_go_back(&e.nav_hist, e); return true }
+	if ctrl() && rl.IsKeyPressed(.RIGHT_BRACKET) { nav_go_forward(&e.nav_hist, e); return true }
 
 	// Ctrl+F12 → Go to Implementation ; Ctrl+Shift+F12 → Go to Type Definition
 	if ctrl() && rl.IsKeyPressed(.F12) {
 		if shift() { lsp_goto_type_definition(e, active_pane(e)) } else { lsp_goto_implementation(e, active_pane(e)) }
-		return
+		return true
 	}
 	// Ctrl+Shift+O → Go to Symbol in File ; Ctrl+T → Go to Symbol in Workspace
-	if ctrl() && shift() && rl.IsKeyPressed(.O) { lsp_document_symbols_open(e, active_pane(e)); return }
-	if ctrl() && rl.IsKeyPressed(.T)            { lsp_workspace_symbols_open(e); return }
+	if ctrl() && shift() && rl.IsKeyPressed(.O) { lsp_document_symbols_open(e, active_pane(e)); return true }
+	if ctrl() && rl.IsKeyPressed(.T)            { lsp_workspace_symbols_open(e); return true }
 	// Ctrl+Shift+M → Problems (errors/warnings in current file)
-	if ctrl() && shift() && rl.IsKeyPressed(.M) { cmd_lsp_problems(e, &e.palette); return }
+	if ctrl() && shift() && rl.IsKeyPressed(.M) { cmd_lsp_problems(e, &e.palette); return true }
 
 	// Ctrl+; open file tree
 	if ctrl() && rl.IsKeyPressed(.SEMICOLON) {
 		file_tree_open(&e.file_tree)
-		return
+		return true
 	}
 
-	if ctrl() && shift() && rl.IsKeyPressed(.W) { editor_close_split(e); return }
-	if ctrl() && shift() && rl.IsKeyPressed(.F) { palette_open_search(&e.palette, e); return }
+	if ctrl() && shift() && rl.IsKeyPressed(.W) { editor_close_split(e); return true }
+	if ctrl() && shift() && rl.IsKeyPressed(.F) { palette_open_search(&e.palette, e); return true }
 	if ctrl() && shift() && rl.IsKeyPressed(.L) {
 		e.panes[e.active].show_line_numbers = !e.panes[e.active].show_line_numbers
-		return
+		return true
 	}
 
 	// Ctrl+O cycle active pane
 	if ctrl() && rl.IsKeyPressed(.O) {
 		if len(e.panes) > 1 { e.active = (e.active + 1) % len(e.panes) }
-		return
+		return true
 	}
 
+	return false
+}
+
+// -----------------------------------------------------
+// Mouse input
+// -----------------------------------------------------
+
+handle_mouse :: proc(e: ^Editor, font: rl.Font) {
 	sw := f32(rl.GetScreenWidth())
 	sh := f32(rl.GetScreenHeight()) - MSG_LINE_H
+	if e.debug_panel.visible { sh -= DEBUG_PANEL_H }
 
 	// Mouse click: switch active pane / position cursor / alt+click adds extra cursor
 	if rl.IsMouseButtonPressed(.LEFT) {
@@ -277,9 +388,13 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		px, py, _, _ := get_pane_rect(e, e.active, sw, sh)
 		p.cursor      = mouse_to_cursor(p, font, rl.GetMousePosition(), px, py)
 	}
+}
 
-	p := active_pane(e)
+// -----------------------------------------------------
+// Edit shortcuts (multi-cursor, clipboard, splits, zoom)
+// -----------------------------------------------------
 
+handle_edit_shortcuts :: proc(e: ^Editor, p: ^Pane) -> bool {
 	// Alt combos — multi-cursor add, word jump, line move
 	// Alt+Down/Up:       add cursor (plain Alt only; Ctrl+Alt does nothing)
 	// Alt+Right/Left:    word jump/select on all cursors
@@ -288,47 +403,54 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		s := shift()
 		if !s {
 			// Only plain Alt adds cursors; Ctrl+Alt is consumed so it won't fall through.
-			if key_rep(.DOWN)  { if !ctrl() { mc_add_below(p) };                          return }
-			if key_rep(.UP)    { if !ctrl() { mc_add_above(p) };                          return }
-			if key_rep(.RIGHT) { if mc_has_extras(p) { mc_word_right_all(p, false) } else { move_word_right(p, false) }; return }
-			if key_rep(.LEFT)  { if mc_has_extras(p) { mc_word_left_all(p,  false) } else { move_word_left(p,  false) }; return }
+			if key_rep(.DOWN)  { if !ctrl() { mc_add_below(p) };                          return true }
+			if key_rep(.UP)    { if !ctrl() { mc_add_above(p) };                          return true }
+			if key_rep(.RIGHT) { if mc_has_extras(p) { mc_word_right_all(p, false) } else { move_word_right(p, false) }; return true }
+			if key_rep(.LEFT)  { if mc_has_extras(p) { mc_word_left_all(p,  false) } else { move_word_left(p,  false) }; return true }
 		} else if !ctrl() {
 			// Shift+Alt: move lines / word-select
-			if key_rep(.DOWN)  { do_move_lines_down(p); lsp_on_text_changed(e, p); return }
-			if key_rep(.UP)    { do_move_lines_up(p);   lsp_on_text_changed(e, p); return }
-			if key_rep(.RIGHT) { if mc_has_extras(p) { mc_word_right_all(p, true) } else { move_word_right(p, true) }; return }
-			if key_rep(.LEFT)  { if mc_has_extras(p) { mc_word_left_all(p,  true) } else { move_word_left(p,  true) }; return }
+			if key_rep(.DOWN)  { do_move_lines_down(p); lsp_on_text_changed(e, p); return true }
+			if key_rep(.UP)    { do_move_lines_up(p);   lsp_on_text_changed(e, p); return true }
+			if key_rep(.RIGHT) { if mc_has_extras(p) { mc_word_right_all(p, true) } else { move_word_right(p, true) }; return true }
+			if key_rep(.LEFT)  { if mc_has_extras(p) { mc_word_left_all(p,  true) } else { move_word_left(p,  true) }; return true }
 		}
 	}
 
 	// Escape collapses multi-cursor to primary
-	if rl.IsKeyPressed(.ESCAPE) && mc_has_extras(p) { mc_clear(p); return }
+	if rl.IsKeyPressed(.ESCAPE) && mc_has_extras(p) { mc_clear(p); return true }
 
 	if ctrl() {
-		if rl.IsKeyPressed(.S) { editor_save(e); lsp_on_save(e, active_pane(e)); return }
-		if rl.IsKeyPressed(.Z) { pane_undo(p); lsp_on_text_changed(e, p); return }
-		if rl.IsKeyPressed(.D) { do_kill_line(p); lsp_on_text_changed(e, p); return }
-		if rl.IsKeyPressed(.A) { mc_clear(p); sel_all(p); return }
-		if rl.IsKeyPressed(.C) { copy_sel(p);              return }
-		if rl.IsKeyPressed(.W) { editor_split(e, .Vertical); return }
-		if rl.IsKeyPressed(.X) { cut_sel(p); lsp_on_text_changed(e, p); return }
-		if rl.IsKeyPressed(.V) { paste(p); lsp_on_text_changed(e, p); return }
-		if rl.IsKeyPressed(.F) { find_replace_open(e); return }
-		if rl.IsKeyPressed(.G) { goto_dialog_open(e); return }
-		if rl.IsKeyPressed(.N) { cmd_new_file(e, &e.palette); return }
-		if rl.IsKeyPressed(.P) { palette_open_files(&e.palette, e); return }
-		if rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return }
-		if rl.IsKeyPressed(.Q)   { e.should_quit = true; return }
-		if rl.IsKeyPressed(.SLASH) { do_comment_toggle(p); lsp_on_text_changed(e, p); return }
-		if rl.IsKeyPressed(.EQUAL) { FONT_SIZE = clamp(FONT_SIZE + 2, 8, 72); return }
-		if rl.IsKeyPressed(.MINUS) { FONT_SIZE = clamp(FONT_SIZE - 2, 8, 72); return }
-		if key_rep(.LEFT)      { mc_clear(p); move_word_left(p,  shift()); return }
-		if key_rep(.RIGHT)     { mc_clear(p); move_word_right(p, shift()); return }
-		if rl.IsKeyPressed(.HOME) { mc_clear(p); move_doc_start(p, shift()); return }
-		if rl.IsKeyPressed(.END)  { mc_clear(p); move_doc_end(p,   shift()); return }
+		if rl.IsKeyPressed(.S) { editor_save(e); lsp_on_save(e, active_pane(e)); return true }
+		if rl.IsKeyPressed(.Z) { pane_undo(p); lsp_on_text_changed(e, p); return true }
+		if rl.IsKeyPressed(.D) { do_kill_line(p); lsp_on_text_changed(e, p); return true }
+		if rl.IsKeyPressed(.A) { mc_clear(p); sel_all(p); return true }
+		if rl.IsKeyPressed(.C) { copy_sel(p);              return true }
+		if rl.IsKeyPressed(.W) { editor_split(e, .Vertical); return true }
+		if rl.IsKeyPressed(.X) { cut_sel(p); lsp_on_text_changed(e, p); return true }
+		if rl.IsKeyPressed(.V) { paste(p); lsp_on_text_changed(e, p); return true }
+		if rl.IsKeyPressed(.F) { find_replace_open(e); return true }
+		if rl.IsKeyPressed(.G) { goto_dialog_open(e); return true }
+		if rl.IsKeyPressed(.N) { cmd_new_file(e, &e.palette); return true }
+		if rl.IsKeyPressed(.P) { palette_open_files(&e.palette, e); return true }
+		if rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return true }
+		if rl.IsKeyPressed(.Q)   { e.should_quit = true; return true }
+		if rl.IsKeyPressed(.SLASH) { do_comment_toggle(p); lsp_on_text_changed(e, p); return true }
+		if rl.IsKeyPressed(.EQUAL) { FONT_SIZE = clamp(FONT_SIZE + 2, 8, 72); return true }
+		if rl.IsKeyPressed(.MINUS) { FONT_SIZE = clamp(FONT_SIZE - 2, 8, 72); return true }
+		if key_rep(.LEFT)      { mc_clear(p); move_word_left(p,  shift()); return true }
+		if key_rep(.RIGHT)     { mc_clear(p); move_word_right(p, shift()); return true }
+		if rl.IsKeyPressed(.HOME) { mc_clear(p); move_doc_start(p, shift()); return true }
+		if rl.IsKeyPressed(.END)  { mc_clear(p); move_doc_end(p,   shift()); return true }
 	}
 
-	cursor_before := p.cursor
+	return false
+}
+
+// -----------------------------------------------------
+// Cursor movement
+// -----------------------------------------------------
+
+handle_cursor_movement :: proc(p: ^Pane) {
 	if key_rep(.LEFT)      { if mc_has_extras(p) { mc_move_all_left(p,  shift()) } else { move_left(p,  shift()) } }
 	if key_rep(.RIGHT)     { if mc_has_extras(p) { mc_move_all_right(p, shift()) } else { move_right(p, shift()) } }
 	if key_rep(.UP) {
@@ -341,7 +463,13 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	if key_rep(.END)       { mc_clear(p); move_eol(p,   shift()) }
 	if key_rep(.PAGE_UP)   { mc_clear(p); move_page(p, -1, shift()) }
 	if key_rep(.PAGE_DOWN) { mc_clear(p); move_page(p,  1, shift()) }
+}
 
+// -----------------------------------------------------
+// Text editing (backspace, delete, enter, tab/indent)
+// -----------------------------------------------------
+
+handle_text_editing :: proc(p: ^Pane) -> bool {
 	text_changed := false
 
 	if key_rep(.BACKSPACE) {
@@ -388,7 +516,16 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		}
 	}
 
-	// Printable chars
+	return text_changed
+}
+
+// -----------------------------------------------------
+// Character insertion
+// -----------------------------------------------------
+
+handle_character_input :: proc(p: ^Pane) -> bool {
+	text_changed := false
+
 	for {
 		ch := rl.GetCharPressed()
 		if ch == 0 { break }
@@ -461,8 +598,7 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 		text_changed = true
 	}
 
-	if p.cursor != cursor_before { lsp_on_cursor_moved(e, p) }
-	if text_changed { lsp_on_text_changed(e, p) }
+	return text_changed
 }
 
 // --- Delete confirm ---
@@ -478,34 +614,21 @@ save_dialog_handle_input :: proc(e: ^Editor) {
 	dlg := &e.save_dlg
 	if rl.IsKeyPressed(.ESCAPE) { save_dialog_close(e); return }
 	if rl.IsKeyPressed(.ENTER)  { save_dialog_confirm(e); return }
-	if key_rep(.BACKSPACE) && len(dlg.input) > 0 { pop(&dlg.input); return }
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 do break
-		if ch >= 32 && ch < 128 { append(&dlg.input, u8(ch)) }
-	}
+	text_input_handle(&dlg.input, &dlg.sel_all)
 }
 
 mark_dialog_handle_input :: proc(e: ^Editor) {
+	dlg := &e.mark_dlg
 	if rl.IsKeyPressed(.ESCAPE) { mark_dialog_close(e); return }
 	if rl.IsKeyPressed(.ENTER)  { mark_dialog_confirm(e); return }
-	if key_rep(.BACKSPACE) && len(e.mark_dlg.input) > 0 { pop(&e.mark_dlg.input) }
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch >= 32 { append(&e.mark_dlg.input, u8(ch)) }
-	}
+	text_input_handle(&dlg.input, &dlg.sel_all)
 }
 
 goto_dialog_handle_input :: proc(e: ^Editor) {
+	dlg := &e.goto_dlg
 	if rl.IsKeyPressed(.ESCAPE) { goto_dialog_close(e); return }
 	if rl.IsKeyPressed(.ENTER)  { goto_dialog_confirm(e); return }
-	if key_rep(.BACKSPACE) && len(e.goto_dlg.input) > 0 { pop(&e.goto_dlg.input) }
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch >= '0' && ch <= '9' { append(&e.goto_dlg.input, u8(ch)) }
-	}
+	text_input_handle(&dlg.input, &dlg.sel_all, accept_digit)
 }
 
 // --- Cursor movement (all take ^Pane) ---
@@ -1122,11 +1245,8 @@ find_replace_handle_input :: proc(e: ^Editor) {
 
 	if rl.IsKeyPressed(.TAB) { fr.focus = 1 - fr.focus; fr.all_sel = false; return }
 
-	// Ctrl+A — select all in focused input
-	if ctrl() && rl.IsKeyPressed(.A) { fr.all_sel = true; return }
-
 	if fr.focus == 0 {
-		if rl.IsKeyPressed(.DOWN) || rl.IsKeyPressed(.ENTER) {
+		if key_rep(.DOWN) || rl.IsKeyPressed(.ENTER) {
 			if fr.needs_scan { find_replace_scan(fr, p) }
 			if len(fr.matches) > 0 {
 				fr.current = (fr.current + 1) % len(fr.matches)
@@ -1134,7 +1254,7 @@ find_replace_handle_input :: proc(e: ^Editor) {
 			}
 			return
 		}
-		if rl.IsKeyPressed(.UP) {
+		if key_rep(.UP) {
 			if fr.needs_scan { find_replace_scan(fr, p) }
 			if len(fr.matches) > 0 {
 				fr.current = (fr.current - 1 + len(fr.matches)) % len(fr.matches)
@@ -1153,37 +1273,9 @@ find_replace_handle_input :: proc(e: ^Editor) {
 		return
 	}
 
-	if key_rep(.BACKSPACE) {
-		if fr.all_sel {
-			// Clear entire input
-			if fr.focus == 0 { clear(&fr.search_buf); fr.needs_scan = true }
-			else             { clear(&fr.replace_buf) }
-			fr.all_sel = false
-		} else {
-			if fr.focus == 0 && len(fr.search_buf) > 0 { pop(&fr.search_buf); fr.needs_scan = true }
-			else if fr.focus == 1 && len(fr.replace_buf) > 0 { pop(&fr.replace_buf) }
-		}
-		return
-	}
-
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch < 32 { continue }
-		// If all selected, clear first
-		if fr.all_sel {
-			if fr.focus == 0 { clear(&fr.search_buf); fr.needs_scan = true }
-			else             { clear(&fr.replace_buf) }
-			fr.all_sel = false
-		}
-		var: [4]u8
-		nn := rune_encode(ch, &var)
-		if fr.focus == 0 {
-			for i in 0 ..< nn { append(&fr.search_buf,  var[i]) }
-			fr.needs_scan = true
-		} else {
-			for i in 0 ..< nn { append(&fr.replace_buf, var[i]) }
-		}
+	buf := &fr.search_buf if fr.focus == 0 else &fr.replace_buf
+	if text_input_handle(buf, &fr.all_sel) && fr.focus == 0 {
+		fr.needs_scan = true
 	}
 
 	if fr.needs_scan { find_replace_scan(fr, p) }

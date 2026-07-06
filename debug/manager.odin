@@ -66,10 +66,11 @@ variable_destroy :: proc(v: ^Variable) {
 // ---------------------------------------------------------------------------
 
 Eval_Result :: struct {
-	expr:   string, // heap
-	result: string, // heap (value or error message)
-	type_:  string, // heap
-	ok:     bool,   // false = adapter returned error
+	expr:          string, // heap
+	result:        string, // heap (value or error message)
+	type_:         string, // heap
+	ok:            bool,   // false = adapter returned error
+	variables_ref: int,    // >0 = result is an object/array; expandable via manager_expand_variable
 }
 
 eval_result_destroy :: proc(r: ^Eval_Result) {
@@ -190,6 +191,81 @@ Debug_Manager :: struct {
 	_attach_mode:            bool,
 	// PID for local process attach
 	_attach_pid:             int,
+
+	// Expandable-variable tree (evaluate results + nested Threads&Variables
+	// nodes): keyed by variables_ref (DAP) / objectID (JDWP, cast to int).
+	// Populated lazily by manager_expand_variable; survives until the next
+	// stop, since a fresh stop invalidates every previously-live reference.
+	var_children:   map[int][]Variable,
+	expanding_ref:  int, // ref currently being fetched, 0 = none in flight
+
+	// ---- JDWP-only state (transport.protocol == .JDWP) ----
+	id_sizes:       Id_Sizes,
+	jdwp_pending:     [dynamic]JDWP_Pending,
+	jdwp_classes:     [dynamic]JDWP_Class,
+	jdwp_frame_ext:   [dynamic]JDWP_Frame_Ext, // parallel to `frames`, extra JDWP handles
+	jdwp_locals_meta: [dynamic]JDWP_Local_Meta, // working set for the in-flight locals fetch
+	jdwp_expand_field_meta: map[int][]JDWP_Field_Meta, // working set for the in-flight expand-fields fetch, keyed by objectID
+}
+
+// Name/signature for one instance field, kept alongside the async
+// ReferenceType.Fields → ObjectReference.GetValues round trip (the GetValues
+// reply carries only bare values, in request order — no names).
+JDWP_Field_Meta :: struct {
+	name:      string, // heap
+	signature: string, // heap
+}
+
+// Name/signature/slot for one local variable, kept alongside the async
+// VariableTable → GetValues round trip so the reply can be turned back into
+// named Variables (StackFrame.GetValues replies carry only bare values, in
+// request order — no names).
+JDWP_Local_Meta :: struct {
+	name:      string, // heap
+	signature: string, // heap
+	slot:      int,
+}
+
+// A loaded class, cached as ClassPrepare events (or the initial AllClasses
+// scan) arrive — used to resolve file:line breakpoints against a referenceTypeID.
+JDWP_Class :: struct {
+	ref_type:  u64,
+	signature: string, // heap, e.g. "Lcom/example/demo/DemoApplication;"
+}
+
+JDWP_Frame_Ext :: struct {
+	thread_id:  u64,
+	frame_id:   u64,
+	ref_type:   u64,
+	method_id:  u64,
+	code_index: u64,
+}
+
+// Pending JDWP request — routes a reply back to the operation that sent it.
+// Not every field applies to every `kind`; unused ones are zero.
+JDWP_Pending :: struct {
+	id:            int,
+	kind:          string, // heap
+	ref_type:      u64,
+	method_id:     u64,
+	thread_id:     u64,
+	frame_id:      u64,
+	code_index:    u64,
+	file:          string, // heap
+	line:          int,
+	reason:        string, // heap: "breakpoint" | "step" | "pause"
+	sig:           string, // heap: JNI type signature of the value being evaluated (eval_vartable -> eval_getvalue passthrough)
+	methods_queue: []u64,  // heap: remaining method IDs to probe for a line match, in the current class
+	class_queue:   []u64,  // heap: remaining candidate classes (outer + nested/lambda) to try after methods_queue is exhausted
+}
+
+jdwp_pending_destroy :: proc(p: ^JDWP_Pending) {
+	delete(p.kind)
+	delete(p.file)
+	delete(p.reason)
+	delete(p.sig)
+	delete(p.methods_queue)
+	delete(p.class_queue)
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +280,28 @@ manager_init :: proc(m: ^Debug_Manager) {
 	m.variables   = make([dynamic]Variable)
 	m.console     = make([dynamic]Console_Line)
 	m.pending     = make([dynamic]Pending_Req)
+
+	m.jdwp_pending     = make([dynamic]JDWP_Pending)
+	m.jdwp_classes     = make([dynamic]JDWP_Class)
+	m.jdwp_frame_ext   = make([dynamic]JDWP_Frame_Ext)
+	m.jdwp_locals_meta = make([dynamic]JDWP_Local_Meta)
+	m.id_sizes         = id_sizes_default()
+	m.var_children     = make(map[int][]Variable)
+	m.jdwp_expand_field_meta = make(map[int][]JDWP_Field_Meta)
+}
+
+_var_children_clear :: proc(m: ^Debug_Manager) {
+	for _, children in m.var_children {
+		for v in children { vv := v; variable_destroy(&vv) }
+		delete(children)
+	}
+	clear(&m.var_children)
+	for _, metas in m.jdwp_expand_field_meta {
+		for me in metas { mm := me; delete(mm.name); delete(mm.signature) }
+		delete(metas)
+	}
+	clear(&m.jdwp_expand_field_meta)
+	m.expanding_ref = 0
 }
 
 manager_destroy :: proc(m: ^Debug_Manager) {
@@ -229,6 +327,18 @@ manager_destroy :: proc(m: ^Debug_Manager) {
 
 	for &p in m.pending { delete(p.command) }
 	delete(m.pending)
+
+	for &p in m.jdwp_pending { jdwp_pending_destroy(&p) }
+	delete(m.jdwp_pending)
+	for &c in m.jdwp_classes { delete(c.signature) }
+	delete(m.jdwp_classes)
+	delete(m.jdwp_frame_ext)
+	for &lm in m.jdwp_locals_meta { delete(lm.name); delete(lm.signature) }
+	delete(m.jdwp_locals_meta)
+
+	_var_children_clear(m)
+	delete(m.var_children)
+	delete(m.jdwp_expand_field_meta)
 
 	eval_result_destroy(&m.eval_result)
 	delete(m.stop_file)
@@ -270,9 +380,19 @@ bp_toggle :: proc(m: ^Debug_Manager, file: string, line: int) {
 	for i := 0; i < len(m.breakpoints); i += 1 {
 		b := &m.breakpoints[i]
 		if b.file == file && b.line == line {
+			req_id := b.adapter_id
 			ordered_remove(&m.breakpoints, i)
 			// Sync with adapter if running
-			if m.state != .Idle { _sync_breakpoints_locked(m, file) }
+			if m.state != .Idle {
+				if m.transport.protocol == .JDWP {
+					if req_id != -1 {
+						msg, _ := build_clear_event(JDWP_EK_BREAKPOINT, req_id)
+						_jdwp_send(m, msg)
+					}
+				} else {
+					_sync_breakpoints_locked(m, file)
+				}
+			}
 			return
 		}
 	}
@@ -283,7 +403,13 @@ bp_toggle :: proc(m: ^Debug_Manager, file: string, line: int) {
 		enabled    = true,
 		adapter_id = -1,
 	})
-	if m.state != .Idle { _sync_breakpoints_locked(m, file) }
+	if m.state != .Idle {
+		if m.transport.protocol == .JDWP {
+			_jdwp_try_resolve_bp(m, len(m.breakpoints)-1)
+		} else {
+			_sync_breakpoints_locked(m, file)
+		}
+	}
 }
 
 bp_has :: proc(m: ^Debug_Manager, file: string, line: int) -> bool {
@@ -298,17 +424,26 @@ bp_has :: proc(m: ^Debug_Manager, file: string, line: int) -> bool {
 bp_clear_all :: proc(m: ^Debug_Manager) {
 	sync.mutex_lock(&m.mu)
 	defer sync.mutex_unlock(&m.mu)
-	// Collect unique files for adapter sync
+	// Collect unique files for adapter sync (DAP), and request IDs (JDWP)
 	files := make([dynamic]string, context.temp_allocator)
+	req_ids := make([dynamic]int, context.temp_allocator)
 	for &b in m.breakpoints {
 		found := false
 		for f in files { if f == b.file { found = true; break } }
 		if !found { append(&files, b.file) }
+		if b.adapter_id != -1 { append(&req_ids, b.adapter_id) }
 	}
 	for &b in m.breakpoints { bp_destroy(&b) }
 	clear(&m.breakpoints)
 	if m.state != .Idle {
-		for f in files { _sync_breakpoints_locked(m, f) }
+		if m.transport.protocol == .JDWP {
+			for rid in req_ids {
+				msg, _ := build_clear_event(JDWP_EK_BREAKPOINT, rid)
+				_jdwp_send(m, msg)
+			}
+		} else {
+			for f in files { _sync_breakpoints_locked(m, f) }
+		}
 	}
 }
 
@@ -358,8 +493,23 @@ session_attach_pid :: proc(m: ^Debug_Manager, pid: int) -> bool {
 // Connect to an adapter already listening on host:port (remote/attach workflow).
 // After connection: sends initialize, then on initialized event sends attach + configurationDone.
 // Returns "" on success, error message on failure.
-session_attach_tcp :: proc(m: ^Debug_Manager, host: string, port: int) -> string {
+session_attach_tcp :: proc(m: ^Debug_Manager, host: string, port: int, protocol: Protocol_Kind = .DAP) -> string {
 	if m.state != .Idle { return "already in a debug session" }
+
+	if protocol == .JDWP {
+		ok, err := transport_start_tcp_jdwp(&m.transport, host, port)
+		if !ok { return err }
+
+		m.state = .Starting
+		_clear_session_state(m)
+		_push_console(m, fmt.tprintf("JDWP handshake OK with %s:%d, negotiating...", host, port), "console")
+
+		msg, id := build_id_sizes()
+		_jdwp_register(m, id, JDWP_Pending{kind = "idsizes"})
+		_jdwp_send(m, msg)
+		m._attach_mode = true
+		return ""
+	}
 
 	ok, err := transport_start_tcp(&m.transport, host, port)
 	if !ok { return err }
@@ -397,6 +547,7 @@ session_restart :: proc(m: ^Debug_Manager) {
 
 debug_continue :: proc(m: ^Debug_Manager) {
 	if m.state != .Paused { return }
+	if m.transport.protocol == .JDWP { _jdwp_continue(m); return }
 	msg := build_continue(m.active_thread)
 	seq := _extract_seq(msg)
 	_register_pending(m, seq, "continue")
@@ -405,24 +556,28 @@ debug_continue :: proc(m: ^Debug_Manager) {
 
 debug_pause :: proc(m: ^Debug_Manager) {
 	if m.state != .Running { return }
+	if m.transport.protocol == .JDWP { _jdwp_pause(m); return }
 	msg := build_pause(m.active_thread)
 	transport_send(&m.transport, msg)
 }
 
 debug_next :: proc(m: ^Debug_Manager) {
 	if m.state != .Paused { return }
+	if m.transport.protocol == .JDWP { _jdwp_step(m, JDWP_STEP_OVER); return }
 	msg := build_next(m.active_thread)
 	transport_send(&m.transport, msg)
 }
 
 debug_step_in :: proc(m: ^Debug_Manager) {
 	if m.state != .Paused { return }
+	if m.transport.protocol == .JDWP { _jdwp_step(m, JDWP_STEP_INTO); return }
 	msg := build_step_in(m.active_thread)
 	transport_send(&m.transport, msg)
 }
 
 debug_step_out :: proc(m: ^Debug_Manager) {
 	if m.state != .Paused { return }
+	if m.transport.protocol == .JDWP { _jdwp_step(m, JDWP_STEP_OUT); return }
 	msg := build_step_out(m.active_thread)
 	transport_send(&m.transport, msg)
 }
@@ -433,6 +588,7 @@ debug_step_out :: proc(m: ^Debug_Manager) {
 
 debug_evaluate :: proc(m: ^Debug_Manager, expr: string) {
 	if m.state == .Idle { return }
+	if m.transport.protocol == .JDWP { _jdwp_evaluate(m, expr); return }
 	frame_id := 0
 	if len(m.frames) > 0 && m.active_frame < len(m.frames) {
 		frame_id = m.frames[m.active_frame].id
@@ -456,7 +612,11 @@ debug_tick :: proc(m: ^Debug_Manager) {
 	transport_drain(&m.transport, &inbox)
 
 	for &msg in inbox {
-		_process_message(m, msg.body)
+		if m.transport.protocol == .JDWP {
+			_jdwp_process_message(m, msg.body)
+		} else {
+			_process_message(m, msg.body)
+		}
 		delete(msg.body)
 	}
 
@@ -475,6 +635,16 @@ debug_tick :: proc(m: ^Debug_Manager) {
 manager_get_state :: proc(m: ^Debug_Manager) -> Debug_State { return m.state }
 manager_get_frames :: proc(m: ^Debug_Manager) -> []Stack_Frame { return m.frames[:] }
 manager_get_variables :: proc(m: ^Debug_Manager) -> []Variable { return m.variables[:] }
+
+// Change which stack frame is "active" (used for locals + evaluate scoping)
+// and, for JDWP, re-fetch that frame's locals. The DAP path doesn't refresh
+// scopes on a bare frame switch today (only on a fresh stop event) — same
+// as before this proc existed, just centralized here for the UI to call.
+manager_set_active_frame :: proc(m: ^Debug_Manager, idx: int) {
+	if idx < 0 || idx >= len(m.frames) { return }
+	m.active_frame = idx
+	if m.transport.protocol == .JDWP { _jdwp_fetch_locals(m) }
+}
 manager_get_threads :: proc(m: ^Debug_Manager) -> []Thread_Info { return m.threads[:] }
 manager_get_console :: proc(m: ^Debug_Manager) -> []Console_Line { return m.console[:] }
 
@@ -485,8 +655,18 @@ manager_get_console :: proc(m: ^Debug_Manager) -> []Console_Line { return m.cons
 _session_stop :: proc(m: ^Debug_Manager, terminate: bool) {
 	if m.state == .Idle { return }
 	if m.transport.running {
-		msg := build_disconnect(terminate)
-		transport_send(&m.transport, msg)
+		if m.transport.protocol == .JDWP {
+			// Always a clean detach: JDWP attach sessions target an
+			// already-running JVM, so a "stop debugging" action must never
+			// kill it (unlike DAP's terminateDebuggee, there's no per-call
+			// choice here — VirtualMachine.Exit is the only way to actually
+			// kill the target and we never send it from a plain stop).
+			msg, _ := build_vm_dispose()
+			_jdwp_send(m, msg)
+		} else {
+			msg := build_disconnect(terminate)
+			transport_send(&m.transport, msg)
+		}
 	}
 	m.state = .Stopping
 	transport_stop(&m.transport)
@@ -500,11 +680,21 @@ _clear_session_state :: proc(m: ^Debug_Manager) {
 	for &f in m.frames  { delete(f.name); delete(f.source) }; clear(&m.frames)
 	for &s in m.scopes  { delete(s.name) }; clear(&m.scopes)
 	for &v in m.variables { variable_destroy(&v) }; clear(&m.variables)
+	clear(&m.jdwp_frame_ext)
 	m.active_thread = 0
 	m.active_frame  = 0
 	m.did_stop      = false
 	delete(m.stop_file); m.stop_file = ""
 	m.stop_line = 0
+
+	for &p in m.jdwp_pending { jdwp_pending_destroy(&p) }
+	clear(&m.jdwp_pending)
+	for &c in m.jdwp_classes { delete(c.signature) }
+	clear(&m.jdwp_classes)
+	for &lm in m.jdwp_locals_meta { delete(lm.name); delete(lm.signature) }
+	clear(&m.jdwp_locals_meta)
+
+	_var_children_clear(m)
 }
 
 _push_console :: proc(m: ^Debug_Manager, text, category: string) {
@@ -738,6 +928,7 @@ _handle_response :: proc(m: ^Debug_Manager, env: ^DAP_Envelope, body: []u8) {
 		body_obj, _ := _json_path_obj(obj, "body")
 		frames_arr, _ := _json_arr(body_obj, "stackFrames")
 
+		_var_children_clear(m)
 		for &f in m.frames { delete(f.name); delete(f.source) }
 		clear(&m.frames)
 
@@ -858,16 +1049,81 @@ _handle_response :: proc(m: ^Debug_Manager, env: ^DAP_Envelope, body: []u8) {
 		body_obj, _ := _json_path_obj(obj, "body")
 		result, _ := _json_str(body_obj, "result")
 		type_, _  := _json_str(body_obj, "type")
+		vref, _   := _json_int(body_obj, "variablesReference")
 
 		eval_result_destroy(&m.eval_result)
 		m.eval_result = Eval_Result{
-			expr   = strings.clone(m.eval_result.expr),
-			result = strings.clone(result),
-			type_  = strings.clone(type_),
-			ok     = true,
+			expr          = strings.clone(m.eval_result.expr),
+			result        = strings.clone(result),
+			type_         = strings.clone(type_),
+			ok            = true,
+			variables_ref = vref,
 		}
 		m.eval_pending = false
+
+	case "var_children":
+		val, err := json.parse(body, allocator = context.temp_allocator)
+		if err != nil { return }
+		defer json.destroy_value(val, context.temp_allocator)
+		obj, _ := val.(json.Object)
+		body_obj, _ := _json_path_obj(obj, "body")
+		vars_arr, _ := _json_arr(body_obj, "variables")
+
+		built := make([]Variable, len(vars_arr))
+		i := 0
+		for var_v in vars_arr {
+			vobj, is_o := var_v.(json.Object)
+			if !is_o { continue }
+			name, _  := _json_str(vobj, "name")
+			value, _ := _json_str(vobj, "value")
+			type_, _ := _json_str(vobj, "type")
+			vref2, _ := _json_int(vobj, "variablesReference")
+			built[i] = Variable{
+				name          = strings.clone(name),
+				value         = strings.clone(value),
+				type_         = strings.clone(type_),
+				variables_ref = vref2,
+			}
+			i += 1
+		}
+		if m.expanding_ref > 0 { m.var_children[m.expanding_ref] = built[:i] }
+		m.expanding_ref = 0
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Expandable variable tree
+// ---------------------------------------------------------------------------
+
+// Returns the cached children for `ref` (a Variable.variables_ref or
+// Eval_Result.variables_ref) and whether they've been fetched yet. Call
+// manager_expand_variable first to kick off the fetch if not loaded.
+manager_get_children :: proc(m: ^Debug_Manager, ref: int) -> ([]Variable, bool) {
+	if ref <= 0 { return nil, false }
+	v, ok := m.var_children[ref]
+	return v, ok
+}
+
+manager_is_expanding :: proc(m: ^Debug_Manager, ref: int) -> bool {
+	return ref > 0 && m.expanding_ref == ref
+}
+
+// Lazily fetches the children of an expandable variable/eval-result node.
+// No-op if already cached or already in flight (single fetch at a time is
+// fine — the UI serializes expand clicks).
+manager_expand_variable :: proc(m: ^Debug_Manager, ref: int) {
+	if ref <= 0 { return }
+	if _, cached := m.var_children[ref]; cached { return }
+	if m.expanding_ref == ref { return }
+	m.expanding_ref = ref
+	if m.transport.protocol == .JDWP {
+		_jdwp_expand_variable(m, u64(ref))
+		return
+	}
+	msg := build_variables(ref, 0, 100)
+	seq := _extract_seq(msg)
+	_register_pending(m, seq, "var_children")
+	transport_send(&m.transport, msg)
 }
 
 // ---------------------------------------------------------------------------

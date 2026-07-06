@@ -107,6 +107,7 @@ palette_init :: proc() -> Palette {
 		Command{"Code Actions",            "Show quick fixes / refactorings at the cursor",    cmd_lsp_code_actions,        _avail_code_actions},
 		Command{"Problems",                "List errors/warnings in the current file",         cmd_lsp_problems,            _avail_problems},
 		Command{"Git",                      "Open Git panel (stage, commit, diff)",             cmd_git_panel, nil},
+		Command{"Git Blame: Toggle",        "Show/hide date + author gutter for the active file", cmd_git_blame_toggle, nil},
 		Command{"Switch Theme",             "Browse and apply editor color themes",             cmd_switch_theme, nil},
 		Command{"Toggle Line Numbers",      "Show or hide line numbers in the active pane",     cmd_toggle_line_numbers, nil},
 	)
@@ -177,11 +178,13 @@ palette_open :: proc(p: ^Palette) {
 	p.mode     = .Commands
 	p.selected = 0
 	p.scroll   = 0
+	p.sel_all  = false
 	clear(&p.query)
 }
 
 palette_close :: proc(p: ^Palette) {
-	p.open = false
+	p.open    = false
+	p.sel_all = false
 }
 
 palette_open_files :: proc(p: ^Palette, e: ^Editor) {
@@ -205,6 +208,7 @@ palette_open_themes :: proc(p: ^Palette, reg: ^conf.Registry) {
 	p.mode     = .Themes
 	p.selected = 0
 	p.scroll   = 0
+	p.sel_all  = false
 	clear(&p.query)
 }
 
@@ -228,44 +232,7 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 
 	if rl.IsKeyPressed(.ESCAPE) { p.sel_all = false; palette_close(p); return }
 
-	if rl.IsKeyPressed(.BACKSPACE) {
-		if p.sel_all {
-			clear(&p.query)
-			p.sel_all = false
-			palette_reset_selection(p)
-			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
-		} else if len(p.query) > 0 {
-			pop(&p.query)
-			palette_reset_selection(p)
-			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
-		}
-		return
-	}
-
-	// Ctrl+A: select all in query
-	if ctrl() && rl.IsKeyPressed(.A) { p.sel_all = true; return }
-
-	// Ctrl+C: copy query to clipboard
-	if ctrl() && rl.IsKeyPressed(.C) {
-		if len(p.query) > 0 { rl.SetClipboardText(to_cstring(string(p.query[:]))) }
-		return
-	}
-
-	// Ctrl+V: paste from clipboard (replaces if sel_all)
-	if ctrl() && rl.IsKeyPressed(.V) {
-		raw := rl.GetClipboardText()
-		if raw != nil {
-			if p.sel_all { clear(&p.query); p.sel_all = false }
-			for b in string(raw) {
-				if b >= 32 && b < 128 { append(&p.query, u8(b)) }
-			}
-			palette_reset_selection(p)
-			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
-		}
-		return
-	}
-
-	if rl.IsKeyPressed(.UP) {
+	if key_rep(.UP) {
 		p.sel_all = false
 		if p.selected > 0 {
 			p.selected -= 1
@@ -274,7 +241,7 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 		return
 	}
 
-	if rl.IsKeyPressed(.DOWN) {
+	if key_rep(.DOWN) {
 		p.sel_all = false
 		n := palette_count(p, e, string(p.query[:]))
 		if p.selected < n - 1 {
@@ -313,16 +280,9 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 		return
 	}
 
-	// Text input
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 do break
-		if ch >= 32 && ch < 128 {
-			if p.sel_all { clear(&p.query); p.sel_all = false }
-			append(&p.query, u8(ch))
-			palette_reset_selection(p)
-			if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
-		}
+	if text_input_handle(&p.query, &p.sel_all) {
+		palette_reset_selection(p)
+		if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
 	}
 }
 
@@ -592,7 +552,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	if n_items > 0 && p.selected >= n_items { p.selected = n_items - 1 }
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
+	panel_x, panel_y = dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// Search box
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, QUERY_H}, INPUT_BG)

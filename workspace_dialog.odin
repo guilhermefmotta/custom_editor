@@ -18,6 +18,7 @@ WS_Entry :: struct {
 Workspace_Dialog :: struct {
 	open:        bool,
 	input:       [dynamic]u8,       // full path the user is typing
+	sel_all:     bool,
 	entries:     [dynamic]WS_Entry, // visible directory entries
 	selected:    int,
 	scroll:      int,
@@ -57,6 +58,7 @@ workspace_dialog_open :: proc(d: ^Workspace_Dialog) {
 	d.selected  = 0
 	d.scroll    = 0
 	d.error_msg = ""
+	d.sel_all   = false
 	clear(&d.input)
 
 	// Pre-fill with cwd + trailing slash so listing starts immediately
@@ -175,23 +177,9 @@ workspace_dialog_handle_input :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 		return
 	}
 
-	// Backspace: remove last UTF-8 rune from input, refresh
-	if key_rep(.BACKSPACE) {
-		if len(d.input) > 0 {
-			// Walk backward over continuation bytes (10xxxxxx), then pop lead byte
-			for len(d.input) > 0 && (d.input[len(d.input)-1] & 0xC0) == 0x80 {
-				pop(&d.input)
-			}
-			if len(d.input) > 0 { pop(&d.input) }
-			d.selected  = 0
-			d.scroll    = 0
-			d.error_msg = ""
-			_ws_refresh(d)
-		}
-		return
-	}
-
-	// Ctrl+Backspace: delete back to previous path separator
+	// Ctrl+Backspace: delete back to previous path separator (must be
+	// checked before text_input_handle's own Backspace below, since
+	// Ctrl+Backspace also satisfies its held-repeat check).
 	if ctrl() && rl.IsKeyPressed(.BACKSPACE) {
 		n := len(d.input)
 		if n == 0 { return }
@@ -208,25 +196,16 @@ workspace_dialog_handle_input :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 		return
 	}
 
-	// Printable characters
-	changed := false
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch < 32 { continue }
-		if ch == '\\' { ch = '/' } // normalize Windows backslash
-		enc_buf: [4]u8
-		n := rune_encode(ch, &enc_buf)
-		for i in 0..<n { append(&d.input, enc_buf[i]) }
-		changed = true
-	}
-	if changed {
+	if text_input_handle(&d.input, &d.sel_all, nil, _ws_backslash_to_slash) {
 		d.selected  = 0
 		d.scroll    = 0
 		d.error_msg = ""
 		_ws_refresh(d)
 	}
 }
+
+// Normalize Windows-style backslashes to forward slashes as the user types.
+_ws_backslash_to_slash :: proc(r: rune) -> rune { return '/' if r == '\\' else r }
 
 // ---------------------------------------------------------------
 // Navigation helpers
@@ -506,7 +485,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
 
 	// ── Panel (shadow + body + border) ───────────────────────────────
-	dlg_begin(panel_x, panel_y, WS_PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
+	panel_x, panel_y = dlg_begin(panel_x, panel_y, WS_PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// ── Header row: title + workspace tag ────────────────────────────
 	rl.DrawRectangleV({panel_x, panel_y}, {WS_PANEL_W, WS_HEADER_H}, HEADER_BG)

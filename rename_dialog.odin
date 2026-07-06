@@ -10,6 +10,7 @@ import rl "vendor:raylib"
 Rename_Dialog :: struct {
 	open:     bool,
 	input:    [dynamic]u8,
+	sel_all:  bool,
 	orig:     string, // heap-owned — original symbol name
 }
 
@@ -29,12 +30,14 @@ rename_dialog_open :: proc(d: ^Rename_Dialog, current_word: string) {
 	clear(&d.input)
 	append(&d.input, ..transmute([]u8)current_word)
 	if d.orig != "" { delete(d.orig) }
-	d.orig = strings.clone(current_word)
-	d.open = true
+	d.orig    = strings.clone(current_word)
+	d.open    = true
+	d.sel_all = false
 }
 
 rename_dialog_close :: proc(d: ^Rename_Dialog) {
-	d.open = false
+	d.open    = false
+	d.sel_all = false
 }
 
 // Returns (new_name, confirmed). new_name is temp-allocated.
@@ -51,18 +54,7 @@ rename_dialog_handle_input :: proc(d: ^Rename_Dialog) -> (new_name: string, conf
 		return "", false
 	}
 
-	if key_rep(.BACKSPACE) && len(d.input) > 0 {
-		pop(&d.input)
-	}
-
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch < 32 { continue }
-		enc: [4]u8
-		n := rune_encode(ch, &enc)
-		for i in 0..<n { append(&d.input, enc[i]) }
-	}
+	text_input_handle(&d.input, &d.sel_all)
 
 	return "", false
 }

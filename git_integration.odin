@@ -88,3 +88,57 @@ cmd_git_panel :: proc(e: ^Editor, p: ^Palette) {
 	palette_close(p)
 	git_dialog_open(&e.git_dialog)
 }
+
+cmd_git_blame_toggle :: proc(e: ^Editor, p: ^Palette) {
+	if e.git_mgr.root == "" {
+		e.msg = "No git repository found"
+		return
+	}
+	e.blame_enabled = !e.blame_enabled
+	palette_close(p)
+	e.msg = "Git Blame: on" if e.blame_enabled else "Git Blame: off"
+}
+
+// ---------------------------------------------------------------------------
+// Blame gutter (date + author, left of line numbers, toggled via palette)
+// ---------------------------------------------------------------------------
+
+BLAME_GUTTER_CHARS :: 22 // "23/08/2017 " (11) + author name (up to 11)
+BLAME_ZERO_HASH     :: "0000000000000000000000000000000000000000"
+
+// git_blame_gutter_width returns the extra gutter width (0 when disabled)
+// that render_pane must add before the line-number column.
+git_blame_gutter_width :: proc(e: ^Editor, cw: f32) -> f32 {
+	if !e.blame_enabled { return 0 }
+	return f32(BLAME_GUTTER_CHARS)*cw + GUTTER_PAD*2
+}
+
+// git_draw_blame_gutter draws date + author for line li (0-based) at the
+// left edge of the gutter (ox), but only on the first line of a run of
+// consecutive lines that share the same commit — repeats render blank so
+// the annotation reads as one block per commit, not noise per line.
+git_draw_blame_gutter :: proc(e: ^Editor, filename: string, li: int, ox: f32, y: f32, ch: f32, font: rl.Font) {
+	if !e.blame_enabled || filename == "" { return }
+	lines := git.git_blame_get(&e.git_mgr, filename)
+	if li < 0 || li >= len(lines) { return }
+	bl := lines[li]
+	if bl.author == "" { return } // no blame info for this line (e.g. binary/empty file)
+
+	is_new_block := li == 0 || lines[li-1].hash != bl.hash
+	if !is_new_block { return }
+
+	uncommitted := bl.hash == BLAME_ZERO_HASH
+	label: string
+	col: rl.Color
+	if uncommitted {
+		label = "uncommitted"
+		col = rl.Color{250, 179, 135, 200} // Catppuccin peach
+	} else {
+		name := bl.author
+		if len(name) > 11 { name = name[:11] }
+		label = fmt.tprintf("%s %s", bl.date, name)
+		col = rl.Color{147, 153, 178, 255} // Catppuccin subtext0
+	}
+	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
+	rl.DrawTextEx(font, to_cstring(label), {ox + GUTTER_PAD, y + (ch - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, col)
+}

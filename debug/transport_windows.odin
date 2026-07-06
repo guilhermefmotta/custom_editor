@@ -92,11 +92,12 @@ adapter_kill :: proc(p: ^Adapter_Process) {
 // ---------------------------------------------------------------------------
 
 Read_Thread_Data :: struct {
-	pipe:  win32.HANDLE,
-	sock:  net.TCP_Socket,
-	mode:  Transport_Mode,
-	queue: ^Read_Queue,
-	done:  bool,
+	pipe:     win32.HANDLE,
+	sock:     net.TCP_Socket,
+	mode:     Transport_Mode,
+	protocol: Protocol_Kind,
+	queue:    ^Read_Queue,
+	done:     bool,
 }
 
 _dap_read_thread :: proc(t: ^thread.Thread) {
@@ -125,16 +126,29 @@ _dap_read_thread :: proc(t: ^thread.Thread) {
 		}
 		filled += n_read
 
-		for {
-			content_len, header_end := _parse_header(buf[:filled])
-			if content_len < 0 { break }
-			total := header_end + content_len
-			if filled < total { break }
-			body := make([]u8, content_len)
-			copy(body, buf[header_end:total])
-			rq_push(d.queue, Inbox_Msg{body = body})
-			copy(buf, buf[total:filled])
-			filled -= total
+		switch d.protocol {
+		case .DAP:
+			for {
+				content_len, header_end := _parse_header(buf[:filled])
+				if content_len < 0 { break }
+				total := header_end + content_len
+				if filled < total { break }
+				body := make([]u8, content_len)
+				copy(body, buf[header_end:total])
+				rq_push(d.queue, Inbox_Msg{body = body})
+				copy(buf, buf[total:filled])
+				filled -= total
+			}
+		case .JDWP:
+			for {
+				total := jdwp_frame_len(buf[:filled])
+				if total < 0 || filled < total { break }
+				body := make([]u8, total)
+				copy(body, buf[:total])
+				rq_push(d.queue, Inbox_Msg{body = body})
+				copy(buf, buf[total:filled])
+				filled -= total
+			}
 		}
 	}
 }
@@ -195,6 +209,7 @@ _dap_write_thread :: proc(t: ^thread.Thread) {
 
 Transport :: struct {
 	mode:         Transport_Mode,
+	protocol:     Protocol_Kind,
 	process:      Adapter_Process,
 	tcp_sock:     net.TCP_Socket,
 	inbox:        Read_Queue,
@@ -211,7 +226,7 @@ transport_start :: proc(t: ^Transport, cmd: []string) -> bool {
 	if !ok { return false }
 	t.mode    = .Process
 	t.process = p
-	_transport_start_threads(t, p.stdout_fd, p.stdin_fd, p.stdout_fd, .Process, {})
+	_transport_start_threads(t, p.stdout_fd, p.stdin_fd, p.stdout_fd, .Process, {}, .DAP)
 	return true
 }
 
@@ -222,7 +237,24 @@ transport_start_tcp :: proc(t: ^Transport, host: string, port: int) -> (ok: bool
 	}
 	t.mode     = .TCP
 	t.tcp_sock = sock
-	_transport_start_threads(t, nil, nil, nil, .TCP, sock)
+	_transport_start_threads(t, nil, nil, nil, .TCP, sock, .DAP)
+	return true, ""
+}
+
+// Connect and speak raw JDWP (a JVM's -agentlib:jdwp socket), not a DAP adapter.
+transport_start_tcp_jdwp :: proc(t: ^Transport, host: string, port: int) -> (ok: bool, err_msg: string) {
+	sock, net_err := net.dial_tcp_from_hostname_with_port_override(host, port)
+	if net_err != nil {
+		return false, fmt.tprintf("connect %s:%d failed: %v", host, port, net_err)
+	}
+	hok, herr := _jdwp_handshake(sock)
+	if !hok {
+		net.close(sock)
+		return false, herr
+	}
+	t.mode     = .TCP
+	t.tcp_sock = sock
+	_transport_start_threads(t, nil, nil, nil, .TCP, sock, .JDWP)
 	return true, ""
 }
 
@@ -232,15 +264,18 @@ _transport_start_threads :: proc(
 	read_pipe, write_pipe, close_pipe: win32.HANDLE,
 	mode: Transport_Mode,
 	sock: net.TCP_Socket,
+	protocol: Protocol_Kind,
 ) {
+	t.protocol = protocol
 	rq_init(&t.inbox)
 	wq_init(&t.outbox)
 
-	t.read_data        = new(Read_Thread_Data)
-	t.read_data.pipe   = read_pipe
-	t.read_data.sock   = sock
-	t.read_data.mode   = mode
-	t.read_data.queue  = &t.inbox
+	t.read_data          = new(Read_Thread_Data)
+	t.read_data.pipe     = read_pipe
+	t.read_data.sock     = sock
+	t.read_data.mode     = mode
+	t.read_data.protocol = protocol
+	t.read_data.queue    = &t.inbox
 
 	t.read_thread      = thread.create(_dap_read_thread)
 	t.read_thread.data = t.read_data
@@ -261,11 +296,18 @@ _transport_start_threads :: proc(
 
 transport_send :: proc(t: ^Transport, body: string) {
 	if !t.running { return }
-	header := fmt.tprintf("Content-Length: %d\r\n\r\n", len(body))
-	buf    := make([]u8, len(header) + len(body))
-	copy(buf[:len(header)], transmute([]u8)header)
-	copy(buf[len(header):], transmute([]u8)body)
-	wq_push(&t.outbox, buf)
+	switch t.protocol {
+	case .JDWP:
+		buf := make([]u8, len(body))
+		copy(buf, transmute([]u8)body)
+		wq_push(&t.outbox, buf)
+	case .DAP:
+		header := fmt.tprintf("Content-Length: %d\r\n\r\n", len(body))
+		buf    := make([]u8, len(header) + len(body))
+		copy(buf[:len(header)], transmute([]u8)header)
+		copy(buf[len(header):], transmute([]u8)body)
+		wq_push(&t.outbox, buf)
+	}
 }
 
 transport_drain :: proc(t: ^Transport, out: ^[dynamic]Inbox_Msg) {
@@ -274,17 +316,22 @@ transport_drain :: proc(t: ^Transport, out: ^[dynamic]Inbox_Msg) {
 
 transport_stop :: proc(t: ^Transport) {
 	if !t.running { return }
-	t.running        = false
-	t.read_data.done = true
-	wq_stop(&t.outbox)
+	t.running = false
 
+	// Let the write thread flush whatever's still queued (e.g. the
+	// disconnect/dispose message just sent) before the socket goes away.
+	wq_stop(&t.outbox)
+	thread.join(t.write_thread)
+
+	t.read_data.done = true
 	switch t.mode {
 	case .Process: win32.CloseHandle(t.process.stdout_fd)
-	case .TCP:     net.close(t.tcp_sock)
+	case .TCP:
+		net.shutdown(t.tcp_sock, .Both)
+		net.close(t.tcp_sock)
 	}
 
 	thread.join(t.read_thread)
-	thread.join(t.write_thread)
 	thread.destroy(t.read_thread)
 	thread.destroy(t.write_thread)
 	free(t.read_data)

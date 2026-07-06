@@ -15,12 +15,18 @@ SUGGEST_SEL     := rl.Color{49,  50,  68,  255}
 SUGGEST_SEL_BDR := rl.Color{137, 180, 250, 255}
 SUGGEST_TEXT    := rl.Color{205, 214, 244, 255}
 SUGGEST_DETAIL  := rl.Color{108, 112, 134, 255}
-SUGGEST_KIND_FN := rl.Color{137, 180, 250, 255}
-SUGGEST_KIND_KW := rl.Color{203, 166, 247, 255}
-SUGGEST_KIND_TY := rl.Color{137, 220, 235, 255}
-SUGGEST_KIND_VA := rl.Color{205, 214, 244, 255}
-SUGGEST_KIND_SN := rl.Color{250, 179, 135, 255}
-SUGGEST_KIND_MO := rl.Color{148, 226, 213, 255}
+// Badge fill colors — was too close to (or identical with) SUGGEST_TEXT for
+// the .Field/.Variable/etc default case, so the icon and the label read as
+// one run-on word ("fi" + "age" -> "fiage") with no color break between them.
+// Methods/functions get the warm color, fields/variables the cool one, so
+// even at a glance the two-letter prefix reads as a separate colored badge.
+SUGGEST_KIND_FN := rl.Color{243, 139, 168, 255} // red   — function/method/ctor
+SUGGEST_KIND_KW := rl.Color{203, 166, 247, 255} // mauve — keyword
+SUGGEST_KIND_TY := rl.Color{137, 220, 235, 255} // sky   — class/interface/type
+SUGGEST_KIND_VA := rl.Color{137, 180, 250, 255} // blue  — field/variable/property/etc (default)
+SUGGEST_KIND_SN := rl.Color{250, 179, 135, 255} // peach — snippet
+SUGGEST_KIND_MO := rl.Color{148, 226, 213, 255} // teal  — module/folder
+SUGGEST_BADGE_FG := rl.Color{17, 17, 27, 255}   // dark text drawn on top of any badge fill above
 
 // Hover popup
 HOVER_BG     := rl.Color{24, 24, 37, 240}
@@ -147,10 +153,8 @@ render_suggest_widget :: proc(
 			rl.DrawLineV({wx + 1, item_y}, {wx + 1, item_y + ITEM_H}, SUGGEST_SEL_BDR)
 		}
 
-		// Kind icon (colored square)
-		kind_col := _kind_color(item.kind)
-		icon_str := _kind_icon(item.kind)
-		rl.DrawTextEx(font, to_cstring(icon_str), {wx + 4, item_y + 3}, FONT_SIZE - 2, 0, kind_col)
+		// Kind icon (colored badge)
+		_draw_kind_badge(font, item.kind, wx + 4, item_y + 3)
 
 		// Measure detail first so the label can be truncated to leave room for
 		// it — otherwise long labels (e.g. "wait(long timeoutMillis, int nanos)")
@@ -165,9 +169,9 @@ render_suggest_widget :: proc(
 		// Label
 		label_col := SUGGEST_TEXT
 		if item.deprecated { label_col = SUGGEST_DETAIL }
-		label_x := wx + KIND_ICON_W + 4
+		label_x := wx + 4 + KIND_ICON_W + 8
 		detail_gap := detail_w + 14 if detail_w > 0 else 0
-		max_label_w := WIDGET_W - KIND_ICON_W - 8 - detail_gap
+		max_label_w := WIDGET_W - KIND_ICON_W - 12 - detail_gap
 		label := _truncate_str(item.label, font, max_label_w, context.temp_allocator)
 		rl.DrawTextEx(font, to_cstring(label), {label_x, item_y + 3}, FONT_SIZE, 0, label_col)
 
@@ -414,6 +418,21 @@ _truncate_str :: proc(s: string, font: rl.Font, max_w: f32, allocator := context
 		}
 	}
 	return fmt.aprintf("%s...", s[:lo], allocator = allocator)
+}
+
+// Draws the kind icon as a small filled, rounded badge (colored square +
+// dark glyph) instead of bare colored text — gives it a hard visual edge
+// against the label that follows, instead of two same-weight text runs
+// bleeding into each other. Returns the badge's width so callers can place
+// the label after it.
+_draw_kind_badge :: proc(font: rl.Font, kind: lsp.Completion_Item_Kind, x, y: f32) -> f32 {
+	bg   := _kind_color(kind)
+	icon := _kind_icon(kind)
+	rl.DrawRectangleRounded({x, y, KIND_ICON_W, KIND_ICON_W}, 0.3, 4, bg)
+	iw := rl.MeasureTextEx(font, to_cstring(icon), FONT_SIZE-4, 0).x
+	ih := rl.MeasureTextEx(font, to_cstring(icon), FONT_SIZE-4, 0).y
+	rl.DrawTextEx(font, to_cstring(icon), {x + (KIND_ICON_W-iw)*0.5, y + (KIND_ICON_W-ih)*0.5}, FONT_SIZE-4, 0, SUGGEST_BADGE_FG)
+	return KIND_ICON_W
 }
 
 _kind_color :: proc(kind: lsp.Completion_Item_Kind) -> rl.Color {

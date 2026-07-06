@@ -1,8 +1,13 @@
 package editor
 
-// Expression evaluation dialog — Ctrl+E when debug session active.
-// Shows editable expression, evaluates via DAP on Ctrl+Enter,
-// displays result value + call stack.
+// Expression evaluation dialog — Ctrl+E (Shift optional) whenever a debug
+// session is active, and the palette's "Debug: Evaluate" command. The
+// persistent bottom debug panel (Ctrl+... no binding of its own now, opens
+// automatically on breakpoint/step pause) still shows call stack/variables/
+// console, but Evaluate itself always goes through this modal dialog.
+// Modeled on IntelliJ's Evaluate popup: boxed expression input, then a
+// Result tree — the evaluated expression is the root row, expandable into
+// its fields (or array elements) on demand via manager_expand_variable.
 
 import rl  "vendor:raylib"
 import fmt "core:fmt"
@@ -10,26 +15,30 @@ import str "core:strings"
 import dbg "./debug"
 
 Debug_Eval_Dialog :: struct {
-	open:         bool,
-	expr_buf:     [dynamic]u8,
-	result_scroll: int,
-	frame_scroll:  int,
-	result_shown:  bool, // becomes true after first evaluate
+	open:               bool,
+	expr_buf:           [dynamic]u8,
+	tree_scroll:        int,
+	result_shown:       bool, // becomes true after first evaluate
+	expanded:           map[int]bool, // variables_ref -> user has expanded this node
+	root_auto_expanded: bool, // the current eval_result's root has already been auto-opened once
 }
 
 debug_eval_init :: proc(d: ^Debug_Eval_Dialog) {
 	d.expr_buf = make([dynamic]u8)
+	d.expanded = make(map[int]bool)
 }
 
 debug_eval_destroy :: proc(d: ^Debug_Eval_Dialog) {
 	delete(d.expr_buf)
+	delete(d.expanded)
 }
 
 debug_eval_open :: proc(d: ^Debug_Eval_Dialog, initial_expr: string) {
-	d.open          = true
-	d.result_scroll = 0
-	d.frame_scroll  = 0
-	d.result_shown  = false
+	d.open               = true
+	d.tree_scroll        = 0
+	d.result_shown       = false
+	d.root_auto_expanded = false
+	clear(&d.expanded)
 	clear(&d.expr_buf)
 	for b in transmute([]u8)initial_expr {
 		append(&d.expr_buf, b)
@@ -53,22 +62,24 @@ debug_eval_handle_input :: proc(e: ^Editor, d: ^Debug_Eval_Dialog) {
 	if ctrl() && rl.IsKeyPressed(.ENTER) {
 		expr := string(d.expr_buf[:])
 		if expr != "" {
-			// Store expression in eval_result so manager can echo it
 			e.debug_mgr.eval_result.expr = str.clone(expr)
 			dbg.debug_evaluate(&e.debug_mgr, expr)
-			d.result_shown = true
+			d.result_shown       = true
+			d.root_auto_expanded = false
+			clear(&d.expanded)
 		}
 		return
 	}
 
-	// Navigation in frames panel
-	if rl.IsKeyPressed(.PAGE_DOWN) {
-		d.frame_scroll += 5; return
-	}
-	if rl.IsKeyPressed(.PAGE_UP) {
-		if d.frame_scroll > 5 { d.frame_scroll -= 5 } else { d.frame_scroll = 0 }
-		return
-	}
+	// Scroll the result tree (PageUp/Down, arrows, or mouse wheel — wheel is
+	// the main way, since an expanded tree quickly grows past the fixed
+	// TREE_H box and there was previously no way to reach the bottom of it)
+	if rl.IsKeyPressed(.PAGE_DOWN) { d.tree_scroll += 5; return }
+	if rl.IsKeyPressed(.PAGE_UP)   { d.tree_scroll = max(0, d.tree_scroll-5); return }
+	if rl.IsKeyPressed(.DOWN)      { d.tree_scroll += 1; return }
+	if rl.IsKeyPressed(.UP)        { d.tree_scroll = max(0, d.tree_scroll-1); return }
+	wheel := rl.GetMouseWheelMove()
+	if wheel != 0 { d.tree_scroll = max(0, d.tree_scroll - int(wheel*3)); return }
 
 	// Backspace in expression
 	if rl.IsKeyPressed(.BACKSPACE) && len(d.expr_buf) > 0 {
@@ -88,46 +99,98 @@ debug_eval_handle_input :: proc(e: ^Editor, d: ^Debug_Eval_Dialog) {
 }
 
 // ---------------------------------------------------------------------------
+// Result tree
+// ---------------------------------------------------------------------------
+
+Eval_Tree_Row :: struct {
+	name:  string,
+	value: string,
+	type_: string,
+	ref:   int,
+	depth: int,
+}
+
+// Flattens the currently-expanded tree (root = the eval result, children =
+// whatever's been expanded so far) into a list of visible rows. Triggers
+// manager_expand_variable for any expanded-but-not-yet-loaded node, so the
+// fetch is kicked off the first time a row becomes visible.
+_eval_collect_rows :: proc(m: ^dbg.Debug_Manager, d: ^Debug_Eval_Dialog, out: ^[dynamic]Eval_Tree_Row) {
+	res := m.eval_result
+	root := Eval_Tree_Row{name = "result", value = res.result, type_ = res.type_, ref = res.variables_ref, depth = 0}
+	append(out, root)
+	if res.variables_ref > 0 && (d.expanded[res.variables_ref] or_else false) {
+		_eval_collect_children(m, d, res.variables_ref, 1, out)
+	}
+}
+
+_eval_collect_children :: proc(m: ^dbg.Debug_Manager, d: ^Debug_Eval_Dialog, ref: int, depth: int, out: ^[dynamic]Eval_Tree_Row) {
+	children, loaded := dbg.manager_get_children(m, ref)
+	if !loaded {
+		dbg.manager_expand_variable(m, ref)
+		append(out, Eval_Tree_Row{name = "…", value = "", type_ = "", ref = 0, depth = depth})
+		return
+	}
+	if len(children) == 0 {
+		append(out, Eval_Tree_Row{name = "(no fields)", value = "", type_ = "", ref = 0, depth = depth})
+		return
+	}
+	for c in children {
+		append(out, Eval_Tree_Row{name = c.name, value = c.value, type_ = c.type_, ref = c.variables_ref, depth = depth})
+		if c.variables_ref > 0 && (d.expanded[c.variables_ref] or_else false) {
+			_eval_collect_children(m, d, c.variables_ref, depth+1, out)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Draw
 // ---------------------------------------------------------------------------
 
 debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32) {
 	if !d.open { return }
 
-	PANEL_W   :: f32(620)
-	HEADER_H  :: f32(36)
-	INPUT_H   :: f32(44)
-	RESULT_H  :: f32(70)
-	STACK_H   :: f32(200)
-	FOOTER_H  :: f32(28)
-	panel_h   := HEADER_H + INPUT_H + RESULT_H + STACK_H + FOOTER_H
+	PANEL_W    :: f32(620)
+	HEADER_H   :: f32(40)
+	LABEL_H    :: f32(20)
+	INPUT_H    :: f32(34)
+	HINT_H     :: f32(20)
+	GAP        :: f32(8)
+	TREE_H     :: f32(280)
+	FOOTER_H   :: f32(44)
+	panel_h    := HEADER_H + LABEL_H + INPUT_H + HINT_H + GAP + LABEL_H + TREE_H + FOOTER_H
 
-	BLUE   :: rl.Color{137, 180, 250, 255}
-	BG     :: rl.Color{30,  30,  46,  255}
-	HDR_BG :: rl.Color{24,  24,  37,  255}
-	BORDER :: rl.Color{58,  60,  78,  255}
-	SEL_BG :: rl.Color{69,  71,  90,  255}
-	TEXT   :: rl.Color{205, 214, 244, 255}
+	BLUE    :: rl.Color{137, 180, 250, 255}
+	BG      :: rl.Color{30,  30,  46,  255}
+	HDR_BG  :: rl.Color{24,  24,  37,  255}
+	BORDER  :: rl.Color{58,  60,  78,  255}
+	SEL_BG  :: rl.Color{69,  71,  90,  255}
+	TEXT    :: rl.Color{205, 214, 244, 255}
 	SUBDUED :: rl.Color{108, 112, 134, 255}
-	GREEN  :: rl.Color{166, 227, 161, 255}
-	RED    :: rl.Color{243, 139, 168, 255}
-	YELLOW :: rl.Color{249, 226, 175, 255}
+	GREEN   :: rl.Color{166, 227, 161, 255}
+	RED     :: rl.Color{243, 139, 168, 255}
+	YELLOW  :: rl.Color{249, 226, 175, 255}
 	OVERLAY :: rl.Color{0, 0, 0, 160}
 
 	px := (sw - PANEL_W) * 0.5
 	py := (sh - panel_h) * 0.5
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(px, py, PANEL_W, panel_h, BG, BORDER)
+	px, py = dlg_begin(px, py, PANEL_W, panel_h, BG, BORDER)
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 	cy  := py
+	mouse := rl.GetMousePosition()
+	clicked := rl.IsMouseButtonPressed(.LEFT)
 
-	// ── Header ───────────────────────────────────────────────────
+	m := &e.debug_mgr
+	state := dbg.manager_get_state(m)
+
+	// ── Header: centered title + small state badge ─────────────────
 	rl.DrawRectangleV({px, cy}, {PANEL_W, HEADER_H}, HDR_BG)
 	rl.DrawLineV({px, cy + HEADER_H - 1}, {px + PANEL_W, cy + HEADER_H - 1}, BORDER)
+	title_w := rl.MeasureTextEx(font, "Evaluate", FONT_SIZE+2, CHAR_SPACING).x
+	rl.DrawTextEx(font, "Evaluate", {px + (PANEL_W-title_w)*0.5, cy + (HEADER_H-ref.y)*0.5}, FONT_SIZE+2, CHAR_SPACING, TEXT)
 
-	state := dbg.manager_get_state(&e.debug_mgr)
 	status: string
 	status_col := SUBDUED
 	switch state {
@@ -137,131 +200,159 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	case .Paused:   status = "paused";        status_col = BLUE
 	case .Stopping: status = "stopping";      status_col = SUBDUED
 	}
-	rl.DrawTextEx(font, "Evaluate Expression", {px+12, cy + (HEADER_H-ref.y)*0.5},
-		FONT_SIZE, CHAR_SPACING, BLUE)
 	sw_s := rl.MeasureTextEx(font, to_cstring(status), FONT_SIZE-3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(status),
-		{px + PANEL_W - sw_s - 12, cy + (HEADER_H-ref.y+2)*0.5},
-		FONT_SIZE-3, CHAR_SPACING, status_col)
-	cy += HEADER_H
+	rl.DrawTextEx(font, to_cstring(status), {px + PANEL_W - sw_s - 12, cy + (HEADER_H-ref.y+2)*0.5}, FONT_SIZE-3, CHAR_SPACING, status_col)
+	cy += HEADER_H + GAP*0.5
 
-	// ── Expression input ─────────────────────────────────────────
-	rl.DrawRectangleV({px, cy}, {PANEL_W, INPUT_H}, HDR_BG)
-	rl.DrawLineV({px, cy + INPUT_H - 1}, {px + PANEL_W, cy + INPUT_H - 1}, BORDER)
+	// ── Expression label + boxed input ───────────────────────────────
+	rl.DrawTextEx(font, "Expression:", {px+PAD_X, cy}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+	cy += LABEL_H
 
-	lbl := to_cstring("> ")
-	lbl_w := rl.MeasureTextEx(font, lbl, FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, lbl, {px+12, cy + (INPUT_H-ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, BLUE)
+	input_rect := rl.Rectangle{px+PAD_X, cy, PANEL_W-PAD_X*2, INPUT_H}
+	rl.DrawRectangleRec(input_rect, rl.Color{20, 20, 34, 255})
+	rl.DrawRectangleLinesEx(input_rect, 1, BLUE)
 
 	expr_s := string(d.expr_buf[:])
-	text_x := px + 12 + lbl_w
+	text_x := input_rect.x + 8
 	dlg_text(font, expr_s if expr_s != "" else "type expression…",
-		text_x, cy + (INPUT_H-ref.y)*0.5,
-		FONT_SIZE, CHAR_SPACING, TEXT if expr_s != "" else SUBDUED,
-		px+PANEL_W, 8)
-
+		text_x, cy + (INPUT_H-ref.y)*0.5, FONT_SIZE, CHAR_SPACING,
+		TEXT if expr_s != "" else SUBDUED, input_rect.x+input_rect.width, 8)
 	if expr_s != "" {
 		ew := rl.MeasureTextEx(font, to_cstring(expr_s), FONT_SIZE, CHAR_SPACING).x
 		rl.DrawRectangleV({text_x + ew, cy + (INPUT_H-ref.y)*0.5}, {2, ref.y}, BLUE)
 	}
 	cy += INPUT_H
 
-	// ── Result panel ──────────────────────────────────────────────
-	rl.DrawRectangleV({px, cy}, {PANEL_W, RESULT_H}, rl.Color{20, 20, 34, 255})
-	rl.DrawLineV({px, cy + RESULT_H - 1}, {px + PANEL_W, cy + RESULT_H - 1}, BORDER)
+	hint := "Ctrl+Enter to evaluate"
+	hint_w := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE-3, CHAR_SPACING).x
+	rl.DrawTextEx(font, to_cstring(hint), {px+PANEL_W-hint_w-PAD_X, cy+2}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+	cy += HINT_H + GAP
 
-	label_y := cy + 6
-	rl.DrawTextEx(font, "Result", {px+12, label_y}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
-	label_y += ref.y + 4
+	// ── Result label + tree ───────────────────────────────────────────
+	rl.DrawTextEx(font, "Result:", {px+PAD_X, cy}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+	cy += LABEL_H
 
-	m   := &e.debug_mgr
-	res := m.eval_result
+	tree_rect := rl.Rectangle{px+PAD_X, cy, PANEL_W-PAD_X*2, TREE_H}
+	rl.DrawRectangleRec(tree_rect, rl.Color{20, 20, 34, 255})
+	rl.DrawRectangleLinesEx(tree_rect, 1, BORDER)
 
-	if e.debug_mgr.eval_pending {
-		rl.DrawTextEx(font, "evaluating…", {px+12, label_y}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
-	} else if d.result_shown {
-		if res.ok {
-			val_col := GREEN
-			dlg_text(font, res.result, px+12, label_y, FONT_SIZE, CHAR_SPACING, val_col, px+PANEL_W, 8)
-			if res.type_ != "" {
-				ty_w := rl.MeasureTextEx(font, to_cstring(res.result), FONT_SIZE, CHAR_SPACING).x
-				type_x := px + 12 + ty_w + 8
-				dlg_text(font, fmt.tprintf("(%s)", res.type_), type_x, label_y + 2,
-					FONT_SIZE-3, CHAR_SPACING, SUBDUED, px+PANEL_W, 8)
-			}
-		} else {
-			dlg_text(font, res.result, px+12, label_y, FONT_SIZE-1, CHAR_SPACING, RED, px+PANEL_W, 8)
+	if m.eval_pending {
+		rl.DrawTextEx(font, "evaluating…", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+	} else if !d.result_shown {
+		rl.DrawTextEx(font, "Ctrl+Enter to evaluate", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+	} else if !m.eval_result.ok {
+		dlg_text(font, m.eval_result.result, tree_rect.x+8, tree_rect.y+6, FONT_SIZE-1, CHAR_SPACING, RED, tree_rect.x+tree_rect.width-8, 4)
+	} else {
+		// Auto-expand the root exactly once per evaluate, so an expandable
+		// result opens immediately (matches IntelliJ) without extra clicks.
+		if !d.root_auto_expanded && m.eval_result.variables_ref > 0 {
+			d.expanded[m.eval_result.variables_ref] = true
+			dbg.manager_expand_variable(m, m.eval_result.variables_ref)
+			d.root_auto_expanded = true
 		}
-	} else {
-		rl.DrawTextEx(font, "Ctrl+Enter to evaluate", {px+12, label_y},
-			FONT_SIZE-1, CHAR_SPACING, SUBDUED)
-	}
-	cy += RESULT_H
 
-	// ── Call stack ───────────────────────────────────────────────
-	rl.DrawRectangleV({px, cy}, {PANEL_W, STACK_H}, BG)
-	rl.DrawLineV({px, cy + STACK_H - 1}, {px + PANEL_W, cy + STACK_H - 1}, BORDER)
+		rows := make([dynamic]Eval_Tree_Row, 0, 32, context.temp_allocator)
+		_eval_collect_rows(m, d, &rows)
 
-	rl.DrawTextEx(font, "Call Stack", {px+12, cy + 6}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+		ROW_H :: f32(22)
+		INDENT_W :: f32(16)
+		n_vis := int(TREE_H) / int(ROW_H)
+		if d.tree_scroll > max(0, len(rows)-n_vis) { d.tree_scroll = max(0, len(rows)-n_vis) }
 
-	FRAME_H :: f32(22)
-	frames   := dbg.manager_get_frames(m)
-	list_top := cy + 6 + ref.y + 6
-	n_vis    := int((STACK_H - (list_top - cy)) / FRAME_H)
-
-	if len(frames) == 0 {
-		rl.DrawTextEx(font, state == .Idle ? "not connected" : (state == .Running ? "running…" : "no frames"),
-			{px+14, list_top + 4}, FONT_SIZE-2, CHAR_SPACING, SUBDUED)
-	} else {
-		if d.frame_scroll >= len(frames) { d.frame_scroll = max(0, len(frames)-1) }
 		for vi in 0..<n_vis {
-			fi := d.frame_scroll + vi
-			if fi >= len(frames) { break }
-			f    := frames[fi]
-			fy   := list_top + f32(vi)*FRAME_H
-			is_active := fi == m.active_frame
+			ri := d.tree_scroll + vi
+			if ri >= len(rows) { break }
+			row := rows[ri]
+			ry := tree_rect.y + f32(vi)*ROW_H
+			row_rect := rl.Rectangle{tree_rect.x, ry, tree_rect.width, ROW_H}
+			is_open := row.ref > 0 && (d.expanded[row.ref] or_else false)
 
-			if is_active {
-				rl.DrawRectangleV({px, fy}, {PANEL_W, FRAME_H}, SEL_BG)
-				rl.DrawRectangleV({px, fy}, {3, FRAME_H}, YELLOW)
+			if clicked && row.ref > 0 && rl.CheckCollisionPointRec(mouse, row_rect) {
+				d.expanded[row.ref] = !is_open
+				if !is_open { dbg.manager_expand_variable(m, row.ref) }
 			}
 
-			ty := fy + (FRAME_H - ref.y)*0.5
+			tx := tree_rect.x + 8 + f32(row.depth)*INDENT_W
+			ty := ry + (ROW_H-ref.y)*0.5
 
-			// Frame number
-			num_s := fmt.tprintf("#%d", fi)
-			rl.DrawTextEx(font, to_cstring(num_s), {px+8, ty}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
-			num_w := rl.MeasureTextEx(font, to_cstring(num_s), FONT_SIZE-3, CHAR_SPACING).x
-
-			// Function name
-			name_col := BLUE if is_active else TEXT
-			dlg_text(font, f.name, px+8+num_w+6, ty, FONT_SIZE-1, CHAR_SPACING, name_col,
-				px + PANEL_W*0.55, 4)
-
-			// Source:line on right
-			if f.source != "" {
-				base := path_basename(f.source)
-				loc  := fmt.tprintf("%s:%d", base, f.line)
-				lw   := rl.MeasureTextEx(font, to_cstring(loc), FONT_SIZE-3, CHAR_SPACING).x
-				rl.DrawTextEx(font, to_cstring(loc),
-					{px + PANEL_W - lw - 12, ty + 2},
-					FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+			if row.ref > 0 {
+				arrow := is_open ? "-" : "+"
+				rl.DrawTextEx(font, to_cstring(arrow), {tx, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 			}
+			name_x := tx + 14
+
+			if row.name == "…" {
+				rl.DrawTextEx(font, "loading…", {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+				continue
+			}
+			if row.value == "" && row.ref == 0 {
+				rl.DrawTextEx(font, to_cstring(row.name), {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+				continue
+			}
+
+			name_col := row.depth == 0 ? BLUE : TEXT
+			rl.DrawTextEx(font, to_cstring(row.name), {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, name_col)
+			name_w := rl.MeasureTextEx(font, to_cstring(row.name), FONT_SIZE-1, CHAR_SPACING).x
+
+			eq_x := name_x + name_w + 6
+			rl.DrawTextEx(font, "=", {eq_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+			val_x := eq_x + 12
+
+			view_w: f32 = 0
+			if row.ref > 0 && !is_open {
+				view_lbl := "View"
+				view_w = rl.MeasureTextEx(font, to_cstring(view_lbl), FONT_SIZE-2, CHAR_SPACING).x + 8
+				rl.DrawTextEx(font, to_cstring(view_lbl), {tree_rect.x+tree_rect.width-view_w-4, ty}, FONT_SIZE-2, CHAR_SPACING, BLUE)
+			}
+
+			val_col := row.ref > 0 ? YELLOW : (row.depth == 0 ? GREEN : TEXT)
+			dlg_text(font, row.value, val_x, ty, FONT_SIZE-1, CHAR_SPACING, val_col, tree_rect.x+tree_rect.width-view_w-8, 4)
 		}
 	}
-	cy += STACK_H
+	cy += TREE_H
 
-	// ── Footer ───────────────────────────────────────────────────
+	// ── Footer: Close / Evaluate buttons ─────────────────────────────
 	rl.DrawRectangleV({px, cy}, {PANEL_W, FOOTER_H}, HDR_BG)
 	rl.DrawLineV({px, cy}, {px+PANEL_W, cy}, BORDER)
-	hint := "Ctrl+Enter evaluate  PgUp/PgDn scroll stack  Esc close"
-	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE-3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hint),
-		{px + PANEL_W - hw - 10, cy + (FOOTER_H-ref.y)*0.5},
-		FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+
+	BTN_H :: f32(28)
+	by := cy + (FOOTER_H-BTN_H)*0.5
+
+	eval_lbl := "Evaluate"
+	eval_w := rl.MeasureTextEx(font, to_cstring(eval_lbl), FONT_SIZE-1, CHAR_SPACING).x + 24
+	eval_rect := rl.Rectangle{px+PANEL_W-PAD_X-eval_w, by, eval_w, BTN_H}
+	eval_hover := rl.CheckCollisionPointRec(mouse, eval_rect)
+	rl.DrawRectangleRec(eval_rect, eval_hover ? rl.Color{112, 161, 236, 255} : BLUE)
+	ew2 := rl.MeasureTextEx(font, to_cstring(eval_lbl), FONT_SIZE-1, CHAR_SPACING).x
+	rl.DrawTextEx(font, to_cstring(eval_lbl), {eval_rect.x + (eval_w-ew2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, rl.Color{17, 17, 27, 255})
+	if clicked && eval_hover {
+		expr := string(d.expr_buf[:])
+		if expr != "" {
+			e.debug_mgr.eval_result.expr = str.clone(expr)
+			dbg.debug_evaluate(m, expr)
+			d.result_shown       = true
+			d.root_auto_expanded = false
+			clear(&d.expanded)
+		}
+	}
+
+	close_lbl := "Close"
+	close_w := rl.MeasureTextEx(font, to_cstring(close_lbl), FONT_SIZE-1, CHAR_SPACING).x + 24
+	close_rect := rl.Rectangle{eval_rect.x-close_w-8, by, close_w, BTN_H}
+	close_hover := rl.CheckCollisionPointRec(mouse, close_rect)
+	if close_hover { rl.DrawRectangleRec(close_rect, SEL_BG) }
+	rl.DrawRectangleLinesEx(close_rect, 1, BORDER)
+	cw2 := rl.MeasureTextEx(font, to_cstring(close_lbl), FONT_SIZE-1, CHAR_SPACING).x
+	rl.DrawTextEx(font, to_cstring(close_lbl), {close_rect.x + (close_w-cw2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, TEXT)
+	if clicked && close_hover { debug_eval_close(d) }
+
+	esc_hint := "Esc close"
+	rl.DrawTextEx(font, to_cstring(esc_hint), {px+PAD_X, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
 
 	dlg_end()
 }
+
+PAD_X :: f32(16)
 
 // ---------------------------------------------------------------------------
 // UTF-8 encode helper

@@ -23,14 +23,33 @@ File_Tree :: struct {
 	scroll:     int,
 	mode:       File_Tree_Mode,
 	input_buf:  [dynamic]u8,
+	input_sel_all: bool,
 	status_msg: string,
 
 	filter:  [dynamic]u8,          // recursive fuzzy-filter text
+	filter_sel_all: bool,
 	results: [dynamic]File_Tree_Node, // flat recursive matches; populated when len(filter) > 0
 }
 
 FT_SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
                       ".cache", "build", "dist", ".next", "vendor"}
+
+// ---- Icons ----
+// Small rounded glyphs instead of hard-edged rects — reads less like a
+// terminal file listing.
+
+_ft_draw_folder_icon :: proc(x, y_mid, size: f32, color: rl.Color) {
+	body_h := size - 3
+	rl.DrawRectangleRounded({x, y_mid + 3, size, body_h}, 0.28, 4, color)
+	rl.DrawRectangleRounded({x, y_mid, size * 0.5, 4}, 0.5, 4, color)
+}
+
+_ft_draw_file_icon :: proc(x, y_mid, size: f32, color: rl.Color) {
+	w := size - 3
+	rl.DrawRectangleRounded({x, y_mid, w, size}, 0.22, 4, color)
+	// Folded top-right corner — small triangle notch in the panel bg tone.
+	rl.DrawTriangle({x + w - 4, y_mid}, {x + w, y_mid}, {x + w, y_mid + 4}, BG)
+}
 
 file_tree_init :: proc() -> File_Tree {
 	ft: File_Tree
@@ -52,11 +71,13 @@ file_tree_destroy :: proc(ft: ^File_Tree) {
 }
 
 file_tree_open :: proc(ft: ^File_Tree) {
-	ft.open       = true
-	ft.selected   = 0
-	ft.scroll     = 0
-	ft.mode       = .Browse
-	ft.status_msg = ""
+	ft.open           = true
+	ft.selected       = 0
+	ft.scroll         = 0
+	ft.mode           = .Browse
+	ft.status_msg     = ""
+	ft.filter_sel_all = false
+	ft.input_sel_all  = false
 	clear(&ft.filter)
 	for r in ft.results { delete(r.name); delete(r.path) }
 	clear(&ft.results)
@@ -381,21 +402,12 @@ file_tree_browse_input :: proc(ft: ^File_Tree, e: ^Editor) {
 	}
 
 	// Recursive filter typing (active in both browse and search views)
-	changed := false
-	if key_rep(.BACKSPACE) {
-		if len(ft.filter) > 0 { pop(&ft.filter); changed = true }
-	}
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch >= 32 && ch < 128 { append(&ft.filter, u8(ch)); changed = true }
-	}
-	if changed { _ft_rebuild_search(ft) }
+	if text_input_handle(&ft.filter, &ft.filter_sel_all) { _ft_rebuild_search(ft) }
 }
 
 file_tree_text_input :: proc(ft: ^File_Tree, e: ^Editor, mode: File_Tree_Mode) {
 	if rl.IsKeyPressed(.ESCAPE) { ft.mode = .Browse; return }
-	if key_rep(.BACKSPACE) && len(ft.input_buf) > 0 { pop(&ft.input_buf) }
+	text_input_handle(&ft.input_buf, &ft.input_sel_all)
 
 	if rl.IsKeyPressed(.ENTER) {
 		name := string(ft.input_buf[:])
@@ -435,12 +447,6 @@ file_tree_text_input :: proc(ft: ^File_Tree, e: ^Editor, mode: File_Tree_Mode) {
 		}
 		ft.mode = .Browse
 		return
-	}
-
-	for {
-		ch := rl.GetCharPressed()
-		if ch == 0 { break }
-		if ch >= 32 && ch < 128 { append(&ft.input_buf, u8(ch)) }
 	}
 }
 
@@ -503,7 +509,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	panel_y := sh * 0.05
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
+	panel_x, panel_y = dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// Header
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, HEADER_H}, INPUT_BG)
@@ -536,8 +542,13 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		placeholder := len(filter_str) == 0
 		display     := filter_str if !placeholder else "type to filter (recursive)…"
 		dcol        := TEXT if !placeholder else SUBDUED
+		if !placeholder && ft.filter_sel_all {
+			fw := rl.MeasureTextEx(font, to_cstring(filter_str), FONT_SIZE - 2, CHAR_SPACING).x
+			rl.DrawRectangleV({panel_x + 8, iy + 4}, {fw + 4, ref.y + 4}, rl.Color{137, 180, 250, 60})
+			rl.DrawRectangleLinesEx({panel_x + 8, iy + 4, fw + 4, ref.y + 4}, 1, rl.Color{137, 180, 250, 180})
+		}
 		rl.DrawTextEx(font, to_cstring(display), {panel_x + 10, iy + 6}, FONT_SIZE - 2, CHAR_SPACING, dcol)
-		if !placeholder {
+		if !placeholder && !ft.filter_sel_all {
 			fw := rl.MeasureTextEx(font, to_cstring(filter_str), FONT_SIZE - 2, CHAR_SPACING).x
 			rl.DrawRectangleV({panel_x + 10 + fw, iy + 6}, {2, ref.y}, ACCENT)
 		}
@@ -567,13 +578,10 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 			icon_h := f32(12)
 			iy_mid := iy + (ITEM_H - icon_h) * 0.5
 			if r.is_dir {
-				fc := rl.Color{148, 226, 213, 255}
-				rl.DrawRectangleV({ix,     iy_mid + 3}, {icon_h,     icon_h - 3}, fc)
-				rl.DrawRectangleV({ix,     iy_mid},     {5,          3},           fc)
+				_ft_draw_folder_icon(ix, iy_mid, icon_h, rl.Color{148, 226, 213, 255})
 				dlg_text(font, r.path, ix + icon_h + 8, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
 			} else {
-				rl.DrawRectangleV({ix,            iy_mid},        {icon_h - 3, icon_h},     LINENUM)
-				rl.DrawRectangleV({ix + icon_h - 3, iy_mid + 3}, {3,          icon_h - 3}, LINENUM)
+				_ft_draw_file_icon(ix, iy_mid, icon_h, LINENUM)
 				dlg_text(font, r.path, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
 			}
 		}
@@ -594,18 +602,14 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 			iy_mid := iy + (ITEM_H - icon_h) * 0.5
 			_ = ch
 			if nd.is_dir {
-				// Folder icon: tab nub + body
 				fc := DIR_COL if nd.expanded else rl.Color{148, 226, 213, 255}
-				rl.DrawRectangleV({ix,     iy_mid + 3}, {icon_h,     icon_h - 3}, fc)
-				rl.DrawRectangleV({ix,     iy_mid},     {5,          3},           fc)
+				_ft_draw_folder_icon(ix, iy_mid, icon_h, fc)
 				// +/- expand indicator
 				arr := "-" if nd.expanded else "+"
 				rl.DrawTextEx(font, to_cstring(arr), {ix + icon_h + 2, iy + 3}, FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
 				dlg_text(font, nd.name, ix + icon_h + 12, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
 			} else {
-				// File icon: rect with folded top-right corner
-				rl.DrawRectangleV({ix,            iy_mid},          {icon_h - 3, icon_h},     LINENUM)
-				rl.DrawRectangleV({ix + icon_h - 3, iy_mid + 3},   {3,          icon_h - 3}, LINENUM)
+				_ft_draw_file_icon(ix, iy_mid, icon_h, LINENUM)
 				dlg_text(font, nd.name, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
 			}
 		}

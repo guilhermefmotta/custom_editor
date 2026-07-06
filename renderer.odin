@@ -1,10 +1,17 @@
 package editor
 
 import "core:fmt"
+import "core:math"
 import lsp  "./lsp"
 import dbg  "./debug"
 import conf "./config"
 import rl   "vendor:raylib"
+
+// Slow breathing pulse in [0, 1], used for subtle gutter-marker animations
+// (breakpoints, LSP warning dots) so they read as "live" without being loud.
+_gutter_pulse :: proc() -> f32 {
+	return 0.5 + 0.5*math.sin(f32(rl.GetTime()) * 3.2)
+}
 
 // Mutable — updated each frame from active theme (default: Catppuccin Mocha)
 BG           := rl.Color{30,  30,  46,  255}
@@ -130,11 +137,14 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	sw       := f32(rl.GetScreenWidth())
 	sh       := f32(rl.GetScreenHeight())
 	usable_h := sh - MSG_LINE_H
+	if e.debug_panel.visible { usable_h -= DEBUG_PANEL_H }
 
 	_apply_theme(e)
+	dlg_frame_tick()
 
 	// Pump debug adapter messages every frame
 	dbg.debug_tick(&e.debug_mgr)
+	debug_panel_update(e, &e.debug_panel)
 
 	rl.ClearBackground(BG)
 
@@ -216,7 +226,8 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	// File tree overlay
 	render_file_tree(&e.file_tree, font)
 
-	// Debug dialogs (above most things)
+	// Debug panel (bottom dock) + attach dialog (above most things)
+	debug_panel_draw(e, &e.debug_panel, font, sw, sh, MSG_LINE_H)
 	debug_eval_draw(&e.debug_eval, e, font, sw, sh)
 	debug_attach_draw(&e.debug_attach, e, font, sw, sh)
 
@@ -263,7 +274,9 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 
 	total_lines := buffer_line_count(&p.buf)
 	digs        := digit_count(total_lines)
-	text_x      := ox + f32(digs)*cw + GUTTER_PAD*2 if p.show_line_numbers else ox + GUTTER_PAD*2
+	blame_w     := git_blame_gutter_width(e, cw)
+	mark_ox     := ox + blame_w // left edge for hunk marks / breakpoints / exec arrow, past the blame column
+	text_x      := mark_ox + f32(digs)*cw + GUTTER_PAD*2 if p.show_line_numbers else mark_ox + GUTTER_PAD*2
 
 	cur_line, cur_col := buffer_pos_to_line_col(&p.buf, p.cursor)
 	sel_active        := has_selection(p)
@@ -287,6 +300,17 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	text_top   := oy + PANE_TOP_PAD + tab_bar_h + (STATUS_H if status_top else 0)
 	pane_diags := lsp.manager_get_diags(&e.lsp_mgr, p.filename)
 
+	// Bracket match — only for the focused pane's own cursor.
+	bm_a, bm_b, bm_ok := 0, 0, false
+	bm_a_line, bm_a_col, bm_b_line, bm_b_col: int
+	if is_active {
+		bm_a, bm_b, bm_ok = find_matching_bracket(p)
+		if bm_ok {
+			bm_a_line, bm_a_col = buffer_pos_to_line_col(&p.buf, bm_a)
+			bm_b_line, bm_b_col = buffer_pos_to_line_col(&p.buf, bm_b)
+		}
+	}
+
 	// Draw one extra line to fill partial-scroll gaps at top and bottom
 	first_li := max(0, int(p.scroll_anim))
 	for vi := 0; ; vi += 1 {
@@ -304,25 +328,36 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			rl.DrawRectangleV({ox, y}, {ow, ch}, CUR_LINE_BG)
 		}
 
-		// Git gutter mark (thin colored bar at left edge of gutter)
-		git_draw_line_mark(e, p.filename, li + 1, ox, y, ch)
+		// Blame gutter (date + author, drawn once per commit block)
+		git_draw_blame_gutter(e, p.filename, li, ox, y, ch, font)
 
-		// Breakpoint circle (red, filled)
+		// Git gutter mark (thin colored bar at left edge of gutter)
+		git_draw_line_mark(e, p.filename, li + 1, mark_ox, y, ch)
+
+		// Breakpoint marker — outline around the line number when numbers are
+		// shown (so the digit stays legible), solid filled block when hidden
+		// (nothing to keep visible, so a plain marker reads better). Alpha
+		// breathes gently so an active breakpoint reads as "live".
 		if p.filename != "" && dbg.bp_has(&e.debug_mgr, p.filename, li + 1) {
-			cx := ox + GUTTER_PAD*1.5
-			cy := y + ch*0.5
-			rl.DrawCircleV({cx, cy}, 5, rl.Color{243, 139, 168, 255})
+			bp_a := u8(140 + _gutter_pulse()*115)
+			gx := mark_ox + GUTTER_PAD*0.5
+			gw := text_x - mark_ox - GUTTER_PAD*0.5
+			if p.show_line_numbers {
+				rl.DrawRectangleLinesEx({gx, y + 1, gw, ch - 2}, 1.5, rl.Color{243, 139, 168, bp_a})
+			} else {
+				rl.DrawRectangleV({gx, y + 1}, {gw, ch - 2}, rl.Color{243, 139, 168, bp_a})
+			}
 		}
 
 		// Current execution line arrow/highlight (when debugger is paused here)
 		if e.debug_mgr.stop_file == p.filename && e.debug_mgr.stop_line == li + 1 {
-			rl.DrawRectangleV({ox, y}, {ow, ch}, rl.Color{249, 226, 175, 30})
+			rl.DrawRectangleV({ox, y}, {ow, ch}, rl.Color{120, 20, 32, 90})
 			// Arrow indicator
-			cx := ox + GUTTER_PAD*1.5
+			cx := mark_ox + GUTTER_PAD*1.5
 			cy := y + ch*0.5
 			rl.DrawTriangle(
 				{cx - 4, cy - 5}, {cx - 4, cy + 5}, {cx + 5, cy},
-				rl.Color{249, 226, 175, 255})
+				rl.Color{243, 139, 168, 255})
 		}
 
 		// Line number — right-aligned in gutter
@@ -331,7 +366,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			ln_str  := fmt.tprintf("%d", li + 1)
 			ln_cstr := to_cstring(ln_str)
 			ln_w    := rl.MeasureTextEx(font, ln_cstr, FONT_SIZE, CHAR_SPACING).x
-			rl.DrawTextEx(font, ln_cstr, {text_x - ln_w - GUTTER_PAD, y}, FONT_SIZE, CHAR_SPACING, ln_col)
+			rl.DrawTextEx(font, ln_cstr, {text_x - ln_w - GUTTER_PAD, y + (ch - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, ln_col)
 		}
 
 		// Selection highlight (primary) — rounded single-line, extended multi-line
@@ -392,6 +427,23 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			}
 		}
 
+		// Bracket-match highlight — the pair box breathes gently, same idea
+		// as the breakpoint marker, so it reads as "linked" rather than static.
+		if bm_ok && (li == bm_a_line || li == bm_b_line) {
+			bm_a_val := u8(160 + _gutter_pulse()*95)
+			BM_COL   := rl.Color{137, 180, 250, bm_a_val}
+			if li == bm_a_line {
+				bx := text_x + f32(bm_a_col)*cw
+				rl.DrawRectangleRounded({bx, y + 1, cw, ch - 2}, 0.3, 4, rl.Color{137, 180, 250, 50})
+				rl.DrawRectangleRoundedLinesEx({bx, y + 1, cw, ch - 2}, 0.3, 4, 1.5, BM_COL)
+			}
+			if li == bm_b_line {
+				bx := text_x + f32(bm_b_col)*cw
+				rl.DrawRectangleRounded({bx, y + 1, cw, ch - 2}, 0.3, 4, rl.Color{137, 180, 250, 50})
+				rl.DrawRectangleRoundedLinesEx({bx, y + 1, cw, ch - 2}, 0.3, 4, 1.5, BM_COL)
+			}
+		}
+
 		// Text with syntax highlighting
 		draw_highlighted_line(font, line_bytes, text_x, y, p.lang)
 
@@ -407,8 +459,13 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 				case .Information: sq_col = {137, 220, 235, 200}
 				case .Hint:        sq_col = {166, 227, 161, 160}
 				}
-				// Gutter dot
-				rl.DrawCircleV({ox + 4, y + FONT_SIZE * 0.5}, 3, sq_col)
+				// Gutter dot — centered in the row; warnings (the LSP's yellow)
+				// breathe with the same pulse as breakpoint markers.
+				dot_col := sq_col
+				if d.severity == .Warning {
+					dot_col.a = u8(140 + _gutter_pulse()*115)
+				}
+				rl.DrawCircleV({ox + 4, y + ch * 0.5}, 3, dot_col)
 				// Squiggle under entire line
 				sq_y := y + FONT_SIZE - 1
 				sq_x := text_x
@@ -516,7 +573,8 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			}
 		}
 		lsp_w := rl.MeasureTextEx(font, to_cstring(lsp_str), FONT_SIZE - 2, CHAR_SPACING).x
-		lsp_x := ox + ow - pos_w - lsp_w
+		lsp_x := ox + ow - pos_w - lsp_w - 6
+		rl.DrawRectangleRounded({lsp_x, sy + 3, lsp_w, STATUS_H - 6}, 0.4, 4, rl.Color{lsp_col.r, lsp_col.g, lsp_col.b, 30})
 		rl.DrawTextEx(font, to_cstring(lsp_str), {lsp_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, lsp_col)
 
 		// Git branch badge (right side, left of LSP)
@@ -524,7 +582,9 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			br_str := fmt.tprintf(" %s ", e.git_mgr.current.branch)
 			br_col := rl.Color{166, 227, 161, 255}
 			br_w   := rl.MeasureTextEx(font, to_cstring(br_str), FONT_SIZE - 2, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(br_str), {lsp_x - br_w, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, br_col)
+			br_x   := lsp_x - br_w - 6
+			rl.DrawRectangleRounded({br_x, sy + 3, br_w, STATUS_H - 6}, 0.4, 4, rl.Color{br_col.r, br_col.g, br_col.b, 30})
+			rl.DrawTextEx(font, to_cstring(br_str), {br_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, br_col)
 		}
 	}
 
@@ -600,7 +660,7 @@ render_delete_confirm :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	py := (sh - PANEL_H) * 0.5
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(px, py, PANEL_W, PANEL_H, PANEL_BG, DANGER)
+	px, py = dlg_begin(px, py, PANEL_W, PANEL_H, PANEL_BG, DANGER)
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 
@@ -710,7 +770,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	px := sw - W - 4
 	py := f32(4)
 
-	dlg_begin(px, py, W, panel_h, DIALOG_BG, BORDER)
+	px, py = dlg_begin(px, py, W, panel_h, DIALOG_BG, BORDER)
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 	cy  := py + PAD
@@ -940,6 +1000,7 @@ TAB_DIVIDER    := rl.Color{49, 50, 68, 255}
 _render_tab_bar :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, th: f32, is_active: bool) {
 	rl.DrawRectangleV({ox, oy}, {ow, th}, TAB_INACTIVE_BG)
 
+	GAP :: f32(2)
 	x := ox
 	for t, ti in p.tabs {
 		label := path_basename(t.filename)
@@ -948,22 +1009,21 @@ _render_tab_bar :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, th: f32, is_active:
 		tab_label  := fmt.tprintf(" %s%s ", dirty_mark, label)
 		tw := rl.MeasureTextEx(font, to_cstring(tab_label), FONT_SIZE - 2, CHAR_SPACING).x + 8
 
-		bg := TAB_ACTIVE_BG if ti == p.cur_tab else TAB_INACTIVE_BG
-		rl.DrawRectangleV({x, oy}, {tw, th}, bg)
-
-		// Active tab: accent bottom border
 		if ti == p.cur_tab {
+			// Active tab reads as a raised card: rounded top corners, sits
+			// a touch taller than its inactive siblings, accent underline.
+			rl.DrawRectangleRounded({x, oy - 1, tw, th + 1}, 0.22, 6, TAB_ACTIVE_BG)
 			col := ACCENT_COL if is_active else INACTIVE_TOP
-			rl.DrawRectangleV({x, oy + th - 2}, {tw, 2}, col)
+			rl.DrawRectangleV({x + 3, oy + th - 2}, {tw - 6, 2}, col)
+		} else {
+			rl.DrawRectangleV({x, oy + 3}, {tw, th - 3}, TAB_INACTIVE_BG)
 		}
 
 		text_col := TEXT if ti == p.cur_tab else LINENUM
 		ty := oy + (th - rl.MeasureTextEx(font, "M", FONT_SIZE - 2, CHAR_SPACING).y) * 0.5
 		rl.DrawTextEx(font, to_cstring(tab_label), {x + 4, ty}, FONT_SIZE - 2, CHAR_SPACING, text_col)
 
-		// Divider
-		rl.DrawRectangleV({x + tw, oy}, {1, th}, TAB_DIVIDER)
-		x += tw + 1
+		x += tw + GAP
 		if x > ox + ow { break }
 	}
 }

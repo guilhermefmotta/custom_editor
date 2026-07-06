@@ -2,6 +2,7 @@ package editor
 
 import "core:mem"
 import "core:os"
+import "core:sys/posix"
 import rl "vendor:raylib"
 
 FONT_PATHS :: []string{
@@ -19,6 +20,13 @@ when ODIN_OS != .Windows {
 }
 
 main :: proc() {
+	// A dropped TCP debug-adapter connection (DAP or JDWP) makes the debug
+	// transport's write thread call write() on a socket the peer already
+	// closed. The default SIGPIPE disposition kills the whole process, not
+	// just that thread — ignore it so a dead debug connection surfaces as a
+	// normal EPIPE write error instead of crashing the editor.
+	posix.signal(.SIGPIPE, auto_cast posix.SIG_IGN)
+
 	platform_hide_console() // hides console window on Windows (FreeConsole)
 	rl.SetTraceLogLevel(.WARNING)
 

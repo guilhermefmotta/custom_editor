@@ -1,5 +1,6 @@
 package debug
 
+import "core:net"
 import "core:sync"
 
 // ---------------------------------------------------------------------------
@@ -7,6 +8,10 @@ import "core:sync"
 // ---------------------------------------------------------------------------
 
 Transport_Mode :: enum { Process, TCP }
+
+// DAP: JSON-over-Content-Length. JDWP: raw binary length-prefixed packets
+// (Java Debug Wire Protocol, spoken directly by a JVM's -agentlib:jdwp socket).
+Protocol_Kind :: enum { DAP, JDWP }
 
 // ---------------------------------------------------------------------------
 // Write queue
@@ -59,6 +64,29 @@ rq_drain :: proc(q: ^Read_Queue, out: ^[dynamic]Inbox_Msg) {
 	for &m in q.items { append(out, m) }
 	clear(&q.items)
 	sync.mutex_unlock(&q.mu)
+}
+
+// ---------------------------------------------------------------------------
+// JDWP handshake — literal 14-byte ASCII exchange before any framed packets
+// ---------------------------------------------------------------------------
+
+_jdwp_handshake :: proc(sock: net.TCP_Socket) -> (ok: bool, err: string) {
+	hs := transmute([]u8)string(JDWP_HANDSHAKE)
+	sent := 0
+	for sent < len(hs) {
+		n, e := net.send_tcp(sock, hs[sent:])
+		if e != nil || n <= 0 { return false, "JDWP handshake send failed" }
+		sent += n
+	}
+	buf: [14]u8
+	got := 0
+	for got < 14 {
+		n, e := net.recv_tcp(sock, buf[got:])
+		if e != nil || n <= 0 { return false, "JDWP handshake recv failed (target closed connection)" }
+		got += n
+	}
+	if string(buf[:]) != JDWP_HANDSHAKE { return false, "handshake mismatch: not a JDWP endpoint" }
+	return true, ""
 }
 
 // ---------------------------------------------------------------------------

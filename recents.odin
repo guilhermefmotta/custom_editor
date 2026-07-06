@@ -122,7 +122,7 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 	panel_y := sh * 0.10
 
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, BORDER)
+	panel_x, panel_y = dlg_begin(panel_x, panel_y, PANEL_W, panel_h, PANEL_BG, BORDER)
 
 	// Header
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, HEADER_H}, INPUT_BG)

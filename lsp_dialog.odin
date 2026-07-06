@@ -222,12 +222,14 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	if d.scroll >= max_scroll { d.auto_scroll = true }
 	d.scroll = clamp(d.scroll, 0, max_scroll)
 
-	// Store log area bounds for wheel targeting
+	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
+	px, py = dlg_begin(px, py, W, panel_h, PANEL_BG, PANEL_BOR)
+
+	// Store log area bounds for wheel targeting — computed from the panel's
+	// actual (possibly Ctrl+drag-offset) position, so wheel hit-testing
+	// tracks the dialog if the user has moved it.
 	d.log_area_y = py + HDR_H + INFO_H
 	d.log_area_h = log_section_h
-
-	rl.DrawRectangle(0, 0, i32(sw), i32(sh), OVERLAY)
-	dlg_begin(px, py, W, panel_h, PANEL_BG, PANEL_BOR)
 
 	// ── Header ────────────────────────────────────────────────────────────
 	rl.DrawRectangleV({px, py}, {W, HDR_H}, HDR_BG)

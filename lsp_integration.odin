@@ -538,6 +538,7 @@ lsp_completion_accept :: proc(e: ^Editor, p: ^Pane) -> bool {
 // applying them we shift the cursor by their net byte delta to keep it at
 // the same logical spot the user was typing at.
 _apply_additional_edits :: proc(p: ^Pane, edits: []lsp.TextEdit) {
+	first := true
 	// Reverse order: keeps earlier edits' line/col positions valid, since
 	// applying a later (higher-offset) edit first can't shift anything before it.
 	for i := len(edits) - 1; i >= 0; i -= 1 {
@@ -550,14 +551,25 @@ _apply_additional_edits :: proc(p: ^Pane, edits: []lsp.TextEdit) {
 		old_len := end_off - start_off
 		new_len := len(ed.new_text)
 
-		if end_off > start_off { buffer_delete(&p.buf, start_off, old_len) }
-		if new_len > 0 { buffer_insert_string(&p.buf, start_off, ed.new_text) }
+		if end_off > start_off {
+			del := make([]u8, old_len, context.temp_allocator)
+			for i2 in 0..<old_len { del[i2] = buffer_get_byte(&p.buf, start_off + i2) }
+			undo_push_mc(p, false, start_off, del, first)
+			first = false
+			buffer_delete(&p.buf, start_off, old_len)
+		}
+		if new_len > 0 {
+			undo_push_mc(p, true, start_off, transmute([]u8)ed.new_text, first)
+			first = false
+			buffer_insert_string(&p.buf, start_off, ed.new_text)
+		}
 
 		if start_off <= p.cursor {
 			p.cursor    += new_len - old_len
 			p.sel_anchor = p.cursor
 		}
 	}
+	undo_break(p)
 	p.dirty = true
 }
 
@@ -1161,7 +1173,12 @@ _lsp_pos_to_offset :: proc(p: ^Pane, line, char: int) -> int {
 }
 
 // Apply a single TextEdit JSON object to a pane.
-_apply_text_edit_obj :: proc(p: ^Pane, obj: json.Object) {
+// `first` threads the undo compound-group flag across every delete/insert in
+// this edit — and across every edit in the same apply_text_edits_to_pane
+// call — so one Ctrl+Z undoes the whole rename/format/code-action/workspace
+// edit, not one fragment of it (see undo_push_mc in undo.odin: the group
+// unwinds LIFO until it hits the entry pushed with first=true).
+_apply_text_edit_obj :: proc(p: ^Pane, obj: json.Object, first: ^bool) {
 	range_obj, has_r := lsp.json_obj_obj(obj, "range")
 	if !has_r { return }
 	r := lsp.parse_range(range_obj)
@@ -1172,19 +1189,32 @@ _apply_text_edit_obj :: proc(p: ^Pane, obj: json.Object) {
 	if end_off < start_off { end_off = start_off }
 	end_off = min(end_off, buffer_len(&p.buf))
 
-	if end_off > start_off { buffer_delete(&p.buf, start_off, end_off - start_off) }
-	if len(new_text) > 0   { buffer_insert_string(&p.buf, start_off, new_text) }
+	if end_off > start_off {
+		n := end_off - start_off
+		del := make([]u8, n, context.temp_allocator)
+		for i in 0..<n { del[i] = buffer_get_byte(&p.buf, start_off + i) }
+		undo_push_mc(p, false, start_off, del, first^)
+		first^ = false
+		buffer_delete(&p.buf, start_off, n)
+	}
+	if len(new_text) > 0 {
+		undo_push_mc(p, true, start_off, transmute([]u8)new_text, first^)
+		first^ = false
+		buffer_insert_string(&p.buf, start_off, new_text)
+	}
 	p.dirty = true
 }
 
 // Apply TextEdit[] (json.Array) to a pane, in reverse order to preserve offsets.
 apply_text_edits_to_pane :: proc(p: ^Pane, edits: json.Array) {
+	first := true
 	// Apply in reverse so earlier edits don't shift later positions
 	for i := len(edits) - 1; i >= 0; i -= 1 {
 		obj, is_obj := edits[i].(json.Object)
 		if !is_obj { continue }
-		_apply_text_edit_obj(p, obj)
+		_apply_text_edit_obj(p, obj, &first)
 	}
+	undo_break(p)
 	blen := buffer_len(&p.buf)
 	p.cursor     = clamp(p.cursor, 0, blen)
 	p.sel_anchor = p.cursor
