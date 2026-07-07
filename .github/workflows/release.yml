@@ -133,7 +133,7 @@ jobs:
 
   # ── Windows amd64 ─────────────────────────────────────────────────────────
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -148,7 +148,8 @@ jobs:
           "$odinBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build
-        run: odin build . -out:editor.exe -o:speed
+        # See build.yml for why /NODEFAULTLIB:libucrt.lib is needed.
+        run: odin build . -out:editor.exe -o:speed -extra-linker-flags:"/NODEFAULTLIB:libucrt.lib"
 
       - name: Package
         shell: pwsh

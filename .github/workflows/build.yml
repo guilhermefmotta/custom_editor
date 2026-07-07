@@ -65,7 +65,7 @@ jobs:
 
   # ── Windows ───────────────────────────────────────────────────────────────
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,11 @@ jobs:
           "$odinBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build
-        run: odin build . -out:editor.exe -o:speed
+        # /NODEFAULTLIB:libucrt.lib — some win32-API-heavy compile units pull
+        # in both the dynamic ucrt.lib and the static libucrt.lib, which
+        # duplicate-define CRT startup symbols (LNK2005: errno, exit, fflush,
+        # ...) at link time. Forcing resolution through ucrt.lib only fixes it.
+        run: odin build . -out:editor.exe -o:speed -extra-linker-flags:"/NODEFAULTLIB:libucrt.lib"
 
       - name: Package
         shell: pwsh
