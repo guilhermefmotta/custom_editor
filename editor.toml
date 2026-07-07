@@ -22,6 +22,7 @@ bracket_matching  = true
 show_status_bar      = true
 show_minimap         = false
 status_bar_position  = "top"    # top | bottom
+keymap_mode          = "vim" # normal | vim | emacs
 
 # ---------------------------------------------------------------------------
 [window]

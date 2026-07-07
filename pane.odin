@@ -36,6 +36,7 @@ Pane :: struct {
 	lang:              Lang,
 	dirty:             bool,
 	undo:              [dynamic]Undo_Op,
+	redo:              [dynamic]Undo_Op,
 	u_merge:           int,
 	extras:            [dynamic]Extra_Cursor,
 	lsp:               Pane_LSP,
@@ -53,6 +54,7 @@ pane_init :: proc() -> Pane {
 	p: Pane
 	p.buf               = buffer_init()
 	p.undo              = make([dynamic]Undo_Op)
+	p.redo              = make([dynamic]Undo_Op)
 	p.extras            = make([dynamic]Extra_Cursor)
 	p.tabs              = make([dynamic]Pane_Tab)
 	p.show_line_numbers = true
@@ -64,6 +66,8 @@ pane_destroy :: proc(p: ^Pane) {
 	if p.filename != "" do delete(p.filename)
 	for &op in p.undo { delete(op.data) }
 	delete(p.undo)
+	for &op in p.redo { delete(op.data) }
+	delete(p.redo)
 	delete(p.extras)
 	for &t in p.tabs { if t.filename != "" { delete(t.filename) } }
 	delete(p.tabs)
@@ -189,9 +193,11 @@ pane_open :: proc(p: ^Pane, path: string) -> bool {
 	p.filename = _pane_abs(path) // always store absolute path so LSP URIs are correct
 	p.lang     = detect_lang(path)
 	p.dirty    = false
-	// Clear undo history on file open
+	// Clear undo/redo history on file open
 	for &op in p.undo { delete(op.data) }
 	clear(&p.undo)
+	for &op in p.redo { delete(op.data) }
+	clear(&p.redo)
 	p.u_merge = 0
 	return true
 }

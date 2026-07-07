@@ -478,9 +478,16 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			}
 		}
 
-		// Beam cursor — primary (active pane only)
+		// Cursor — primary (active pane only). Vim mode shows a block cursor
+		// in Normal/Visual/Replace (translucent so the glyph underneath still
+		// reads) and the usual thin beam in Insert — matches the real editor's
+		// modal convention instead of always using the modeless beam.
 		if is_active && li == cur_line {
-			rl.DrawRectangleV({text_x + f32(cur_col)*cw, y}, {2, ch}, CURSOR_COL)
+			if _vim_cursor_is_block(e) {
+				rl.DrawRectangleV({text_x + f32(cur_col)*cw, y}, {cw, ch}, rl.Color{CURSOR_COL.r, CURSOR_COL.g, CURSOR_COL.b, 130})
+			} else {
+				rl.DrawRectangleV({text_x + f32(cur_col)*cw, y}, {2, ch}, CURSOR_COL)
+			}
 		}
 		// Extra cursor beams
 		if is_active {
@@ -520,10 +527,18 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	sy := (oy + PANE_TOP_PAD) if status_top else (oy + oh - STATUS_H)
 	rl.DrawRectangleV({ox, sy}, {ow, STATUS_H}, STATUS_BG)
 
+	name_x := ox + 4
+	if badge_text, badge_col := _keymap_badge(e); badge_text != "" {
+		badge_w := rl.MeasureTextEx(font, to_cstring(badge_text), FONT_SIZE, CHAR_SPACING).x
+		rl.DrawRectangleV({ox, sy}, {badge_w, STATUS_H}, badge_col)
+		rl.DrawTextEx(font, to_cstring(badge_text), {ox, sy + 3}, FONT_SIZE, CHAR_SPACING, BG)
+		name_x = ox + badge_w + 6
+	}
+
 	fname    := p.filename if p.filename != "" else "untitled"
 	modified := "● " if p.dirty else ""
 	rl.DrawTextEx(font, to_cstring(fmt.tprintf(" %s%s", modified, fname)),
-		{ox + 4, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
+		{name_x, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
 
 	// Breadcrumb: current symbol at cursor
 	{

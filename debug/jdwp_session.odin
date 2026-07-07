@@ -246,16 +246,20 @@ _jdwp_fetch_locals :: proc(m: ^Debug_Manager) {
 }
 
 // ---------------------------------------------------------------------------
-// Evaluate — local-variable lookup, plus zero-arg method calls on a local
-// (e.g. "response.toString()") via real ObjectReference.InvokeMethod. JDWP
-// has no expression evaluator and no argument marshalling here — this covers
-// the single most useful case (seeing an object's actual contents instead of
-// its raw reference) without building a general expression engine.
+// Evaluate — local-variable lookup, plus chained field access and zero-arg
+// method calls on the result (e.g. "response.getBody().length" or
+// "p.getAddress().city"). JDWP has no expression evaluator and no argument
+// marshalling here — this covers the single most useful case (walking into
+// an object's actual contents instead of stopping at its raw reference)
+// without building a general expression engine.
 //
-// JDWP_Pending field reuse through this chain (fields otherwise unused by
-// these kinds): `file` carries the receiver identifier, then "string"/"other"
-// for the eval_getvalue string-fetch flag; `reason` carries the method name
-// once a call is requested; `code_index` carries an objectID once resolved.
+// The parsed expression is root identifier + a []Eval_Step chain of
+// ".name" / ".name()" hops (JDWP_Pending.chain). Each hop's reply resolves
+// one step and either finalizes m.eval_result or fires the next JDWP request
+// for the remaining chain. `chain` on a JDWP_Pending is always an
+// independent clone (via eval_steps_clone) — the original is freed by
+// jdwp_pending_destroy once the reply handler returns, so ownership never
+// crosses that boundary.
 // ---------------------------------------------------------------------------
 
 _jdwp_evaluate :: proc(m: ^Debug_Manager, expr: string) {
@@ -268,39 +272,122 @@ _jdwp_evaluate :: proc(m: ^Debug_Manager, expr: string) {
 		return
 	}
 
-	recv, method, is_call := _jdwp_parse_method_call(expr)
-	name := is_call ? recv : strings.trim_space(expr)
+	root, steps, ok := _jdwp_parse_chain(expr)
+	if !ok {
+		m.eval_result.result = strings.clone("not found (JDWP evaluate supports local variable names only)")
+		m.eval_result.ok = false
+		return
+	}
 
 	fr := m.jdwp_frame_ext[m.active_frame]
 	m.eval_pending = true
 	msg, id := build_variable_table(fr.ref_type, fr.method_id, m.id_sizes)
 	_jdwp_register(m, id, JDWP_Pending{
 		kind = "eval_vartable", thread_id = fr.thread_id, frame_id = fr.frame_id,
-		file = strings.clone(name), reason = is_call ? strings.clone(method) : "",
+		file = root, chain = steps,
 	})
 	_jdwp_send(m, msg)
 }
 
-// Recognizes "recv.method()" — a bare identifier, a dot, another bare
-// identifier, and an empty argument list. Anything more (arguments, chained
-// calls, operators) falls through to plain-identifier lookup and reports
-// "not found", same as before.
-_jdwp_parse_method_call :: proc(expr: string) -> (recv, method: string, ok: bool) {
-	e := strings.trim_space(expr)
-	if !strings.has_suffix(e, "()") { return "", "", false }
-	body := strings.trim_space(e[:len(e)-2])
-	dot := strings.last_index(body, ".")
-	if dot < 0 { return "", "", false }
-	recv = strings.trim_space(body[:dot])
-	method = strings.trim_space(body[dot+1:])
-	if recv == "" || method == "" { return "", "", false }
-	for c in recv   { if !_jdwp_is_ident_char(rune(c)) { return "", "", false } }
-	for c in method { if !_jdwp_is_ident_char(rune(c)) { return "", "", false } }
-	return recv, method, true
-}
-
 _jdwp_is_ident_char :: proc(r: rune) -> bool {
 	return r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+_jdwp_is_ident :: proc(s: string) -> bool {
+	if len(s) == 0 { return false }
+	for c in s { if !_jdwp_is_ident_char(rune(c)) { return false } }
+	return true
+}
+
+// Parses "root(.name|.name())*" — a bare identifier followed by any number of
+// field-access or zero-arg method-call hops. "p" -> root="p", no steps.
+// "p.name" -> root="p", [{name, field}]. "p.getAddress().city" -> root="p",
+// [{getAddress, call}, {city, field}]. Anything not matching this grammar
+// (arguments, operators, malformed dots) fails to parse.
+_jdwp_parse_chain :: proc(expr: string) -> (root: string, steps: []Eval_Step, ok: bool) {
+	e := strings.trim_space(expr)
+	if e == "" { return "", nil, false }
+
+	segs := make([dynamic]string, 0, 4, context.temp_allocator)
+	start := 0
+	for i := 0; i <= len(e); i += 1 {
+		if i == len(e) || e[i] == '.' {
+			append(&segs, strings.trim_space(e[start:i]))
+			start = i + 1
+		}
+	}
+
+	root = segs[0]
+	if !_jdwp_is_ident(root) { return "", nil, false }
+
+	steps_dyn := make([dynamic]Eval_Step, 0, len(segs)-1)
+	for i in 1..<len(segs) {
+		seg := segs[i]
+		is_call := strings.has_suffix(seg, "()")
+		name := is_call ? strings.trim_space(seg[:len(seg)-2]) : seg
+		if !_jdwp_is_ident(name) {
+			for s in steps_dyn { delete(s.name) }
+			delete(steps_dyn)
+			return "", nil, false
+		}
+		append(&steps_dyn, Eval_Step{name = strings.clone(name), is_call = is_call})
+	}
+	out := make([]Eval_Step, len(steps_dyn))
+	copy(out, steps_dyn[:])
+	delete(steps_dyn)
+	return strings.clone(root), out, true
+}
+
+// Takes ownership of `chain` (always expects an independent clone — see the
+// eval_* pending-chain note above _jdwp_evaluate). Either finalizes
+// m.eval_result (chain empty) or fires the next JDWP request to resolve
+// chain[0] against `v`, an already-decoded value for the current node.
+// `sig` is v's declared JNI type signature if known ("" for values that came
+// back from InvokeMethod, which carries no declared-type info).
+_jdwp_eval_advance :: proc(m: ^Debug_Manager, v: JDWP_Value, sig: string, chain: []Eval_Step, thread_id: u64) {
+	if len(chain) == 0 {
+		if v.tag == 's' && v.obj_id != 0 {
+			msg, id := build_string_value(v.obj_id, m.id_sizes)
+			_jdwp_register(m, id, JDWP_Pending{kind = "eval_stringvalue"})
+			_jdwp_send(m, msg)
+			return
+		}
+		if v.tag == 'L' || v.tag == '[' || v.tag == 's' {
+			if v.obj_id == 0 {
+				m.eval_result.result = strings.clone("null")
+			} else if len(sig) > 0 {
+				m.eval_result.result = fmt.aprintf("{{%s@%d}}", _jdwp_pretty_sig(sig), v.obj_id)
+			} else {
+				m.eval_result.result = fmt.aprintf("{{@%d}}", v.obj_id)
+			}
+			if v.obj_id != 0 { m.eval_result.variables_ref = int(v.obj_id) }
+		} else {
+			m.eval_result.result = _jdwp_format_value(v)
+		}
+		m.eval_result.ok     = true
+		m.eval_pending       = false
+		return
+	}
+
+	if (v.tag != 'L' && v.tag != '[' && v.tag != 's') || v.obj_id == 0 {
+		m.eval_result.result = fmt.aprintf("cannot access .%s on null or primitive value", chain[0].name)
+		m.eval_result.ok     = false
+		m.eval_pending       = false
+		eval_steps_destroy(chain)
+		return
+	}
+
+	step_name    := strings.clone(chain[0].name)
+	step_is_call := chain[0].is_call
+	rest := eval_steps_clone(chain[1:])
+	eval_steps_destroy(chain)
+
+	msg, id := build_object_reference_type(v.obj_id, m.id_sizes)
+	_jdwp_register(m, id, JDWP_Pending{
+		kind = "eval_reftype", thread_id = thread_id, code_index = v.obj_id,
+		reason = step_name, line = step_is_call ? 1 : 0, chain = rest,
+	})
+	_jdwp_send(m, msg)
 }
 
 // A successful (or even exception-throwing) ObjectReference.InvokeMethod
@@ -650,7 +737,7 @@ _jdwp_handle_reply :: proc(m: ^Debug_Manager, hdr: JDWP_Header, data: []u8) {
 			is_string := meta.signature == "Ljava/lang/String;"
 			val_str: string
 			if is_string && val.tag != 'V' {
-				val_str = strings.clone("…")
+				val_str = strings.clone("...")
 			} else if val.tag == 'L' || val.tag == '[' {
 				val_str = val.obj_id == 0 ? strings.clone("null") : fmt.aprintf("{{%s@%d}}", _jdwp_pretty_sig(meta.signature), val.obj_id)
 			} else {
@@ -713,64 +800,77 @@ _jdwp_handle_reply :: proc(m: ^Debug_Manager, hdr: JDWP_Header, data: []u8) {
 			sig  := vars[match_idx].signature
 			tag  := u8(sig[0])
 			slot := vars[match_idx].slot
-			is_string := sig == "Ljava/lang/String;"
 			msg, id := build_stack_get_values(p.thread_id, p.frame_id, []Slot_Req{{slot = slot, tag = tag}}, m.id_sizes)
 			_jdwp_register(m, id, JDWP_Pending{
-				kind = "eval_getvalue", thread_id = p.thread_id,
-				file = strings.clone(p.reason != "" ? "call" : (is_string ? "string" : "other")),
-				reason = strings.clone(p.reason),
-				sig  = strings.clone(sig),
+				kind = "eval_value", thread_id = p.thread_id,
+				sig = strings.clone(sig), chain = eval_steps_clone(p.chain),
 			})
 			_jdwp_send(m, msg)
 		}
 		for v in vars { delete(v.name); delete(v.signature) }
 		delete(vars)
 
-	case "eval_getvalue":
+	// Wire format for StackFrame.GetValues and ObjectReference.GetValues
+	// replies is identical (count + values[]) — this handles both: the root
+	// local's value, and every subsequent field-access hop's value.
+	case "eval_value":
 		values := decode_stack_get_values(data, m.id_sizes)
 		if len(values) == 0 {
 			m.eval_result.result = strings.clone("<no value>")
 			m.eval_result.ok     = true
 			m.eval_pending       = false
-		} else if p.file == "call" {
-			v := values[0]
-			if v.tag != 'L' && v.tag != 's' && v.tag != '[' {
-				m.eval_result.result = strings.clone("cannot call a method on a primitive value")
-				m.eval_result.ok     = false
-				m.eval_pending       = false
-			} else {
-				msg, id := build_object_reference_type(v.obj_id, m.id_sizes)
-				_jdwp_register(m, id, JDWP_Pending{
-					kind = "eval_objtype", thread_id = p.thread_id, code_index = v.obj_id,
-					reason = strings.clone(p.reason),
-				})
-				_jdwp_send(m, msg)
-			}
-		} else if p.file == "string" && values[0].tag != 'V' {
-			msg, id := build_string_value(values[0].obj_id, m.id_sizes)
-			_jdwp_register(m, id, JDWP_Pending{kind = "eval_stringvalue"})
-			_jdwp_send(m, msg)
 		} else {
-			v := values[0]
-			if (v.tag == 'L' || v.tag == '[') && v.obj_id != 0 {
-				m.eval_result.result = fmt.aprintf("{{%s@%d}}", _jdwp_pretty_sig(p.sig), v.obj_id)
-			} else {
-				m.eval_result.result = _jdwp_format_value(v)
-			}
-			m.eval_result.ok     = true
-			m.eval_pending       = false
-			if (v.tag == 'L' || v.tag == '[') && v.obj_id != 0 { m.eval_result.variables_ref = int(v.obj_id) }
+			_jdwp_eval_advance(m, values[0], p.sig, eval_steps_clone(p.chain), p.thread_id)
 		}
 		delete(values)
 
-	case "eval_objtype":
+	// Received an object/array reference that has more chain steps to
+	// resolve. `line` (repurposed) says which: 1 = the next step is a
+	// method call, so fetch Methods; 0 = a field access, so fetch Fields.
+	case "eval_reftype":
 		_, ref_type := decode_object_reference_type(data, m.id_sizes)
-		msg, id := build_methods_with_generic(ref_type, m.id_sizes)
-		_jdwp_register(m, id, JDWP_Pending{
-			kind = "eval_methods", ref_type = ref_type, thread_id = p.thread_id,
-			code_index = p.code_index, reason = strings.clone(p.reason),
-		})
-		_jdwp_send(m, msg)
+		if p.line == 1 {
+			msg, id := build_methods_with_generic(ref_type, m.id_sizes)
+			_jdwp_register(m, id, JDWP_Pending{
+				kind = "eval_methods", ref_type = ref_type, thread_id = p.thread_id,
+				code_index = p.code_index, reason = strings.clone(p.reason), chain = eval_steps_clone(p.chain),
+			})
+			_jdwp_send(m, msg)
+		} else {
+			msg, id := build_fields(ref_type, m.id_sizes)
+			_jdwp_register(m, id, JDWP_Pending{
+				kind = "eval_fields", code_index = p.code_index, thread_id = p.thread_id,
+				reason = strings.clone(p.reason), chain = eval_steps_clone(p.chain),
+			})
+			_jdwp_send(m, msg)
+		}
+
+	case "eval_fields":
+		fields := decode_fields(data, m.id_sizes)
+		found_id: u64
+		found_sig: string
+		found := false
+		for f in fields {
+			if f.name == p.reason {
+				found_id = f.field_id
+				found_sig = strings.clone(f.signature)
+				found = true
+			}
+		}
+		for f in fields { delete(f.name); delete(f.signature) }
+		delete(fields)
+		if !found {
+			m.eval_result.result = strings.clone(fmt.tprintf("field %s not found", p.reason))
+			m.eval_result.ok     = false
+			m.eval_pending       = false
+		} else {
+			msg, id := build_object_get_values(p.code_index, []u64{found_id}, m.id_sizes)
+			_jdwp_register(m, id, JDWP_Pending{
+				kind = "eval_value", thread_id = p.thread_id,
+				sig = found_sig, chain = eval_steps_clone(p.chain),
+			})
+			_jdwp_send(m, msg)
+		}
 
 	case "eval_methods":
 		methods := decode_methods_with_generic(data, m.id_sizes)
@@ -790,12 +890,12 @@ _jdwp_handle_reply :: proc(m: ^Debug_Manager, hdr: JDWP_Header, data: []u8) {
 			msg, id := build_superclass(p.ref_type, m.id_sizes)
 			_jdwp_register(m, id, JDWP_Pending{
 				kind = "eval_superclass", thread_id = p.thread_id,
-				code_index = p.code_index, reason = strings.clone(p.reason),
+				code_index = p.code_index, reason = strings.clone(p.reason), chain = eval_steps_clone(p.chain),
 			})
 			_jdwp_send(m, msg)
 		} else {
 			msg, id := build_invoke_method(p.code_index, p.thread_id, p.ref_type, found_id, m.id_sizes)
-			_jdwp_register(m, id, JDWP_Pending{kind = "eval_invoke", thread_id = p.thread_id})
+			_jdwp_register(m, id, JDWP_Pending{kind = "eval_invoke", thread_id = p.thread_id, chain = eval_steps_clone(p.chain)})
 			_jdwp_send(m, msg)
 		}
 
@@ -809,36 +909,30 @@ _jdwp_handle_reply :: proc(m: ^Debug_Manager, hdr: JDWP_Header, data: []u8) {
 			msg, id := build_methods_with_generic(super_ref, m.id_sizes)
 			_jdwp_register(m, id, JDWP_Pending{
 				kind = "eval_methods", ref_type = super_ref, thread_id = p.thread_id,
-				code_index = p.code_index, reason = strings.clone(p.reason),
+				code_index = p.code_index, reason = strings.clone(p.reason), chain = eval_steps_clone(p.chain),
 			})
 			_jdwp_send(m, msg)
 		}
 
 	case "eval_invoke":
 		result, exception_id := decode_invoke_reply(data, m.id_sizes)
+		// A completed invoke (success or exception) resumed the invoking
+		// thread, invalidating every FrameID for it — refresh regardless of
+		// outcome. Safe to fire alongside any further chain step below since
+		// those operate on object/reference-type IDs, not frame IDs.
+		_jdwp_refresh_frames_after_invoke(m, p.thread_id)
 		if exception_id != 0 {
 			m.eval_result.result = strings.clone("exception thrown while calling method")
 			m.eval_result.ok     = false
 			m.eval_pending       = false
-			_jdwp_refresh_frames_after_invoke(m, p.thread_id)
-		} else if result.tag == 's' {
-			msg, id := build_string_value(result.obj_id, m.id_sizes)
-			// file="invoked" marks this so eval_stringvalue knows a frame
-			// refresh is owed — a plain string-variable fetch doesn't need one.
-			_jdwp_register(m, id, JDWP_Pending{kind = "eval_stringvalue", thread_id = p.thread_id, file = strings.clone("invoked")})
-			_jdwp_send(m, msg)
 		} else {
-			m.eval_result.result = _jdwp_format_value(result)
-			m.eval_result.ok     = true
-			m.eval_pending       = false
-			_jdwp_refresh_frames_after_invoke(m, p.thread_id)
+			_jdwp_eval_advance(m, result, "", eval_steps_clone(p.chain), p.thread_id)
 		}
 
 	case "eval_stringvalue":
 		m.eval_result.result = decode_string_value(data)
 		m.eval_result.ok     = true
 		m.eval_pending       = false
-		if p.file == "invoked" { _jdwp_refresh_frames_after_invoke(m, p.thread_id) }
 
 	case "eval_refresh_frames":
 		entries := decode_thread_frames(data, m.id_sizes)
@@ -909,9 +1003,12 @@ _jdwp_handle_reply :: proc(m: ^Debug_Manager, hdr: JDWP_Header, data: []u8) {
 		for i in 0..<n {
 			v    := values[i]
 			meta := metas[i]
-			is_obj := (v.tag == 'L' || v.tag == '[') && v.obj_id != 0
+			is_string := meta.signature == "Ljava/lang/String;"
+			is_obj := !is_string && (v.tag == 'L' || v.tag == '[' || v.tag == 's') && v.obj_id != 0
 			val_str: string
-			if (v.tag == 'L' || v.tag == '[') {
+			if is_string && v.tag != 'V' {
+				val_str = v.obj_id == 0 ? strings.clone("null") : strings.clone("...")
+			} else if (v.tag == 'L' || v.tag == '[' || v.tag == 's') {
 				val_str = v.obj_id == 0 ? strings.clone("null") : fmt.aprintf("{{%s@%d}}", _jdwp_pretty_sig(meta.signature), v.obj_id)
 			} else {
 				val_str = _jdwp_format_value(v)
@@ -921,14 +1018,21 @@ _jdwp_handle_reply :: proc(m: ^Debug_Manager, hdr: JDWP_Header, data: []u8) {
 				variables_ref = is_obj ? int(v.obj_id) : 0,
 			}
 		}
+		m.var_children[int(obj_id)] = out
+		m.expanding_ref = 0
+		for i in 0..<n {
+			if metas[i].signature == "Ljava/lang/String;" && values[i].tag != 'V' && values[i].obj_id != 0 {
+				msg, id := build_string_value(values[i].obj_id, m.id_sizes)
+				_jdwp_register(m, id, JDWP_Pending{kind = "expand_stringvalue", code_index = obj_id, method_id = values[i].obj_id, line = i})
+				_jdwp_send(m, msg)
+			}
+		}
 		delete(values)
 		if has_metas {
 			for me in metas { delete(me.name); delete(me.signature) }
 			delete(metas)
 			delete_key(&m.jdwp_expand_field_meta, int(obj_id))
 		}
-		m.var_children[int(obj_id)] = out
-		m.expanding_ref = 0
 
 	case "expand_arrlen":
 		obj_id := p.code_index
@@ -962,5 +1066,13 @@ _jdwp_handle_reply :: proc(m: ^Debug_Manager, hdr: JDWP_Header, data: []u8) {
 		delete(values)
 		m.var_children[int(obj_id)] = out
 		m.expanding_ref = 0
+
+	case "expand_stringvalue":
+		parent := int(p.code_index)
+		idx := p.line
+		if kids, ok := m.var_children[parent]; ok && idx >= 0 && idx < len(kids) {
+			delete(kids[idx].value)
+			kids[idx].value = decode_string_value(data)
+		}
 	}
 }

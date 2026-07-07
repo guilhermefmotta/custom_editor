@@ -59,17 +59,29 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	handle_mouse(e, font)
 	p := active_pane(e)
 
-	if handle_edit_shortcuts(e, p)     { return }
+	// Dialogs/palette/LSP-shortcuts/navigation/mouse above are shared across every
+	// keymap mode. Only "core buffer editing" (the rest of this proc, historically)
+	// diverges per mode — Vim/Emacs own 100% of key interpretation in their modal
+	// states, so they don't call handle_edit_shortcuts/handle_cursor_movement/
+	// handle_text_editing/handle_character_input the way Normal mode does.
+	switch e.cfg.editor.keymap_mode {
+	case .Normal:
+		if handle_edit_shortcuts(e, p) { return }
 
-	cursor_before := p.cursor
-	handle_cursor_movement(p)
+		cursor_before := p.cursor
+		handle_cursor_movement(p)
 
-	text_changed := false
-	text_changed |= handle_text_editing(p)
-	text_changed |= handle_character_input(p)
+		text_changed := false
+		text_changed |= handle_text_editing(p)
+		text_changed |= handle_character_input(p)
 
-	if p.cursor != cursor_before { lsp_on_cursor_moved(e, p) }
-	if text_changed { lsp_on_text_changed(e, p) }
+		if p.cursor != cursor_before { lsp_on_cursor_moved(e, p) }
+		if text_changed { lsp_on_text_changed(e, p) }
+	case .Vim:
+		vim_handle_input(e, p)
+	case .Emacs:
+		emacs_handle_input(e, p)
+	}
 }
 
 // -----------------------------------------------------
@@ -89,8 +101,9 @@ handle_global_shortcuts :: proc(e: ^Editor) -> bool {
 handle_debug_shortcuts :: proc(e: ^Editor) -> bool {
 	// ── Debug stepping shortcuts — global, work even with the debug panel
 	// or another dialog open, so you can keep it visible while stepping ──
-	// F9 → toggle breakpoint at current line
-	if rl.IsKeyPressed(.F9) {
+	// F9 / Ctrl+B → toggle breakpoint at current line
+	// (Ctrl+B skipped in Emacs keymap — that's C-b/move-left there)
+	if rl.IsKeyPressed(.F9) || (ctrl() && !shift() && rl.IsKeyPressed(.B) && e.cfg.editor.keymap_mode != .Emacs) {
 		p := active_pane(e)
 		if p.filename != "" {
 			line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)
@@ -422,6 +435,7 @@ handle_edit_shortcuts :: proc(e: ^Editor, p: ^Pane) -> bool {
 	if ctrl() {
 		if rl.IsKeyPressed(.S) { editor_save(e); lsp_on_save(e, active_pane(e)); return true }
 		if rl.IsKeyPressed(.Z) { pane_undo(p); lsp_on_text_changed(e, p); return true }
+		if rl.IsKeyPressed(.Y) { pane_redo(p); lsp_on_text_changed(e, p); return true }
 		if rl.IsKeyPressed(.D) { do_kill_line(p); lsp_on_text_changed(e, p); return true }
 		if rl.IsKeyPressed(.A) { mc_clear(p); sel_all(p); return true }
 		if rl.IsKeyPressed(.C) { copy_sel(p);              return true }

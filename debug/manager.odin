@@ -226,6 +226,26 @@ JDWP_Local_Meta :: struct {
 	slot:      int,
 }
 
+// One ".name" or ".name()" hop in a chained evaluate expression, e.g.
+// "p.getAddress().city" parses to root "p" + [{getAddress, true}, {city, false}].
+// Carried through the whole eval_* pending chain in JDWP_Pending.chain so each
+// hop's reply knows what to resolve next.
+Eval_Step :: struct {
+	name:    string, // heap
+	is_call: bool,
+}
+
+eval_steps_destroy :: proc(steps: []Eval_Step) {
+	for s in steps { delete(s.name) }
+	delete(steps)
+}
+
+eval_steps_clone :: proc(steps: []Eval_Step) -> []Eval_Step {
+	out := make([]Eval_Step, len(steps))
+	for i in 0..<len(steps) { out[i] = Eval_Step{name = strings.clone(steps[i].name), is_call = steps[i].is_call} }
+	return out
+}
+
 // A loaded class, cached as ClassPrepare events (or the initial AllClasses
 // scan) arrive — used to resolve file:line breakpoints against a referenceTypeID.
 JDWP_Class :: struct {
@@ -257,6 +277,7 @@ JDWP_Pending :: struct {
 	sig:           string, // heap: JNI type signature of the value being evaluated (eval_vartable -> eval_getvalue passthrough)
 	methods_queue: []u64,  // heap: remaining method IDs to probe for a line match, in the current class
 	class_queue:   []u64,  // heap: remaining candidate classes (outer + nested/lambda) to try after methods_queue is exhausted
+	chain:         []Eval_Step, // heap: remaining ".name"/".name()" hops still to resolve for an evaluate expression
 }
 
 jdwp_pending_destroy :: proc(p: ^JDWP_Pending) {
@@ -266,6 +287,7 @@ jdwp_pending_destroy :: proc(p: ^JDWP_Pending) {
 	delete(p.sig)
 	delete(p.methods_queue)
 	delete(p.class_queue)
+	eval_steps_destroy(p.chain)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,14 @@
 package editor
 
+// undo_clear_redo: any new edit invalidates whatever was undone before it.
+undo_clear_redo :: proc(p: ^Pane) {
+	for &op in p.redo { delete(op.data) }
+	clear(&p.redo)
+}
+
 // undo_push_insert: record an insert for undo, with optional char-by-char coalescing.
 undo_push_insert :: proc(p: ^Pane, pos: int, data: []u8, coalesce: bool) {
+	undo_clear_redo(p)
 	if coalesce && p.u_merge == 1 && len(p.undo) > 0 {
 		top := &p.undo[len(p.undo)-1]
 		if top.insert && top.pos + len(top.data) == pos {
@@ -24,6 +31,7 @@ undo_push_insert :: proc(p: ^Pane, pos: int, data: []u8, coalesce: bool) {
 // backspace=true  → consecutive backspaces prepend into one op (going left)
 // backspace=false → consecutive forward-deletes append into one op (going right)
 undo_push_delete :: proc(p: ^Pane, pos: int, data: []u8, backspace: bool) {
+	undo_clear_redo(p)
 	if len(p.undo) > 0 {
 		top := &p.undo[len(p.undo)-1]
 		if !top.insert {
@@ -75,6 +83,7 @@ undo_delete_sel :: proc(p: ^Pane) -> bool {
 // first=true marks the root (compound=false); subsequent calls use first=false (compound=true).
 // LIFO undo loops while compound=true, stopping at the root — so one Ctrl+Z undoes all cursors.
 undo_push_mc :: proc(p: ^Pane, insert: bool, pos: int, data: []u8, first: bool) {
+	if first { undo_clear_redo(p) }
 	if len(p.undo) >= MAX_UNDO {
 		delete(p.undo[0].data)
 		ordered_remove(&p.undo, 0)
@@ -86,13 +95,13 @@ undo_push_mc :: proc(p: ^Pane, insert: bool, pos: int, data: []u8, first: bool) 
 }
 
 // pane_undo: pop the last undo op (and the entire compound group it belongs to) and reverse it.
+// Popped ops move onto p.redo (ownership transferred, not freed) so pane_redo can replay them.
 pane_undo :: proc(p: ^Pane) {
 	if len(p.undo) == 0 do return
 	p.u_merge = 0
 	for {
 		if len(p.undo) == 0 { break }
 		op := pop(&p.undo)
-		defer delete(op.data)
 		if op.insert {
 			buffer_delete(&p.buf, op.pos, len(op.data))
 			p.cursor = op.pos
@@ -102,6 +111,43 @@ pane_undo :: proc(p: ^Pane) {
 		}
 		p.sel_anchor = p.cursor
 		p.dirty      = true
-		if !op.compound { break }
+		if len(p.redo) >= MAX_UNDO {
+			delete(p.redo[0].data)
+			ordered_remove(&p.redo, 0)
+		}
+		compound := op.compound
+		append(&p.redo, op)
+		if !compound { break }
+	}
+}
+
+// pane_redo: pop the last undone op (and its compound group) off p.redo and reapply it,
+// moving it back onto p.undo. Mirrors pane_undo in the opposite direction.
+pane_redo :: proc(p: ^Pane) {
+	if len(p.redo) == 0 do return
+	p.u_merge = 0
+	first := true
+	for {
+		if len(p.redo) == 0 { break }
+		// A compound group's root is pushed onto p.redo *last* by pane_undo (its
+		// followers are pushed first), so it sits on top — pop it first, then keep
+		// popping while the next item down still belongs to the same group.
+		if !first && !p.redo[len(p.redo)-1].compound { break }
+		op := pop(&p.redo)
+		if op.insert {
+			buffer_insert_string(&p.buf, op.pos, string(op.data[:]))
+			p.cursor = op.pos + len(op.data)
+		} else {
+			buffer_delete(&p.buf, op.pos, len(op.data))
+			p.cursor = op.pos
+		}
+		p.sel_anchor = p.cursor
+		p.dirty      = true
+		if len(p.undo) >= MAX_UNDO {
+			delete(p.undo[0].data)
+			ordered_remove(&p.undo, 0)
+		}
+		append(&p.undo, op)
+		first = false
 	}
 }

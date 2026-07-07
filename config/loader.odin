@@ -141,6 +141,13 @@ _apply_editor :: proc(cfg: ^Config, t: ^TOML_Table) {
 	if s, ok := toml_str(t, "status_bar_position"); ok {
 		if s == "top" || s == "bottom" { _replace_str(&e.status_bar_position, s) }
 	}
+	if s, ok := toml_str(t, "keymap_mode"); ok {
+		switch s {
+		case "normal": e.keymap_mode = .Normal
+		case "vim":    e.keymap_mode = .Vim
+		case "emacs":  e.keymap_mode = .Emacs
+		}
+	}
 }
 
 @(private)

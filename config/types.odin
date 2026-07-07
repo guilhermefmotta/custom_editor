@@ -64,7 +64,12 @@ Editor_Config :: struct {
 	show_minimap:           bool,
 	status_bar_position:    string, // "top" | "bottom"
 	rulers:            []int, // vertical rulers at these columns
+	keymap_mode:       Keymap_Mode,
 }
+
+// Which keybinding scheme the main text-editing input pipeline uses.
+// Persisted; switched at runtime via the command palette ("Set Keymap Mode").
+Keymap_Mode :: enum { Normal, Vim, Emacs }
 
 // ---------------------------------------------------------------------------
 // Window
@@ -452,6 +457,7 @@ config_defaults :: proc() -> Config {
 		show_status_bar       = true,
 		show_minimap          = false,
 		status_bar_position   = strings.clone("top"),
+		keymap_mode           = .Normal,
 	}
 
 	c.window = {

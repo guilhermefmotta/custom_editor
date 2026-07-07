@@ -45,7 +45,19 @@ location_item_destroy :: proc(li: ^Location_Item) {
 
 // ---- Palette state ----
 
-Palette_Mode :: enum { Commands, Files, Search, Marks, Themes, Locations, Workspace_Symbols }
+Palette_Mode :: enum { Commands, Files, Search, Marks, Themes, Locations, Workspace_Symbols, Keymap_Modes }
+
+// Fixed 3-item list (unlike Themes' registry-driven set) — deliberately a
+// static array rather than a p.themes-style [dynamic]string.
+keymap_choices := [3]string{"Normal", "Vim", "Emacs"}
+
+_keymap_choice_mode :: proc(name: string) -> conf.Keymap_Mode {
+	switch name {
+	case "Vim":   return .Vim
+	case "Emacs": return .Emacs
+	}
+	return .Normal
+}
 
 Palette :: struct {
 	open:         bool,
@@ -109,6 +121,7 @@ palette_init :: proc() -> Palette {
 		Command{"Git",                      "Open Git panel (stage, commit, diff)",             cmd_git_panel, nil},
 		Command{"Git Blame: Toggle",        "Show/hide date + author gutter for the active file", cmd_git_blame_toggle, nil},
 		Command{"Switch Theme",             "Browse and apply editor color themes",             cmd_switch_theme, nil},
+		Command{"Set Keymap Mode",          "Switch between Normal, Vim, and Emacs keybindings", cmd_set_keymap_mode, nil},
 		Command{"Toggle Line Numbers",      "Show or hide line numbers in the active pane",     cmd_toggle_line_numbers, nil},
 	)
 	register_debug_commands(&p)
@@ -209,6 +222,17 @@ palette_open_themes :: proc(p: ^Palette, reg: ^conf.Registry) {
 	p.selected = 0
 	p.scroll   = 0
 	p.sel_all  = false
+	clear(&p.query)
+}
+
+palette_open_keymap_modes :: proc(p: ^Palette, e: ^Editor) {
+	p.open     = true
+	p.mode     = .Keymap_Modes
+	for name, i in keymap_choices {
+		if _keymap_choice_mode(name) == e.cfg.editor.keymap_mode { p.selected = i }
+	}
+	p.scroll  = 0
+	p.sel_all = false
 	clear(&p.query)
 }
 
@@ -399,6 +423,24 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 			}
 			vis += 1
 		}
+
+	case .Keymap_Modes:
+		vis := 0
+		for name in keymap_choices {
+			if !pal_match(name, q) { continue }
+			if vis == p.selected {
+				e.cfg.editor.keymap_mode = _keymap_choice_mode(name)
+				keymap_switch_reset(e)
+				if !conf.config_persist_keymap_mode(conf.default_config_paths().workspace, e.cfg.editor.keymap_mode) {
+					e.msg = "Keymap mode set (not saved to editor.toml)"
+				} else {
+					e.msg = fmt.tprintf("Keymap mode: %s", name)
+				}
+				palette_close(p)
+				return
+			}
+			vis += 1
+		}
 	}
 }
 
@@ -503,6 +545,10 @@ palette_count :: proc(p: ^Palette, e: ^Editor, q: string) -> int {
 		n := 0
 		for t in p.themes { if pal_match(t, q) { n += 1 } }
 		return n
+	case .Keymap_Modes:
+		n := 0
+		for name in keymap_choices { if pal_match(name, q) { n += 1 } }
+		return n
 	}
 	return 0
 }
@@ -581,6 +627,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			.Themes            = "Filter themes...",
 			.Locations         = "Filter results...",
 			.Workspace_Symbols = "Type a symbol name...",
+			.Keymap_Modes      = "Filter keymap modes...",
 		}
 		placeholder := ph_map[p.mode]
 		rl.DrawTextEx(font, to_cstring(placeholder), {panel_x + 14 + cw + 10, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
@@ -745,6 +792,29 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 
 			draw_i += 1; data_i += 1
 		}
+
+	case .Keymap_Modes:
+		active := e.cfg.editor.keymap_mode
+		for name in keymap_choices {
+			if !pal_match(name, q) { continue }
+			if data_i < p.scroll { data_i += 1; continue }
+			if draw_i >= PALETTE_MAX_VIS { break }
+
+			iy := item_y + f32(draw_i) * ITEM_H
+			if data_i == p.selected {
+				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
+				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
+			}
+
+			is_active := _keymap_choice_mode(name) == active
+			name_col  := TEXT if !is_active else ACCENT
+			dlg_text(font, name, panel_x + 16, iy + (ITEM_H-ch)*0.5, FONT_SIZE, CHAR_SPACING, name_col, txt_max - 110, 0)
+			if is_active {
+				rl.DrawTextEx(font, "active", {panel_x + 16 + rl.MeasureTextEx(font, to_cstring(name), FONT_SIZE, CHAR_SPACING).x + 10, iy + (ITEM_H-ch)*0.5 + 2}, FONT_SIZE-3, CHAR_SPACING, ACCENT)
+			}
+
+			draw_i += 1; data_i += 1
+		}
 	}
 
 	// Footer
@@ -774,6 +844,8 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		footer_text = fmt.tprintf("%d marks  |  Enter jump  |  Del remove  |  Esc close", n_m)
 	case .Themes:
 		footer_text = fmt.tprintf("%d themes  |  Enter apply  |  Esc close", len(p.themes))
+	case .Keymap_Modes:
+		footer_text = "3 modes  |  Enter apply  |  Esc close"
 	case .Locations:
 		title := p.loc_title if p.loc_title != "" else "results"
 		footer_text = fmt.tprintf("%s  |  Enter jump  |  Esc close", title)
@@ -929,6 +1001,10 @@ cmd_lsp_control :: proc(e: ^Editor, p: ^Palette) {
 
 cmd_switch_theme :: proc(e: ^Editor, p: ^Palette) {
 	palette_open_themes(p, &e.registry)
+}
+
+cmd_set_keymap_mode :: proc(e: ^Editor, p: ^Palette) {
+	palette_open_keymap_modes(p, e)
 }
 
 cmd_toggle_line_numbers :: proc(e: ^Editor, p: ^Palette) {

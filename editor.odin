@@ -88,6 +88,8 @@ Editor :: struct {
 	debug_eval:      Debug_Eval_Dialog,
 	debug_attach:    Debug_Attach_Dialog,
 	blame_enabled:   bool, // Git Blame gutter toggle (palette command)
+	vim:             Vim_State,   // runtime-only; live only while cfg.editor.keymap_mode == .Vim
+	emacs:           Emacs_State, // runtime-only; live only while cfg.editor.keymap_mode == .Emacs
 }
 
 editor_init :: proc() -> Editor {
@@ -119,6 +121,8 @@ editor_init :: proc() -> Editor {
 	debug_panel_init(&e.debug_panel)
 	debug_eval_init(&e.debug_eval)
 	debug_attach_init(&e.debug_attach)
+	e.vim   = vim_init()
+	e.emacs = emacs_init()
 	return e
 }
 
@@ -160,6 +164,8 @@ editor_destroy :: proc(e: ^Editor) {
 	debug_panel_destroy(&e.debug_panel)
 	debug_eval_destroy(&e.debug_eval)
 	debug_attach_destroy(&e.debug_attach)
+	vim_destroy(&e.vim)
+	emacs_destroy(&e.emacs)
 	conf.registry_destroy(&e.registry)
 	conf.config_destroy(&e.cfg)
 	e^ = {}
@@ -308,6 +314,8 @@ delete_file_confirm :: proc(e: ^Editor) {
 	p.scroll_anim = 0
 	for &op in p.undo { delete(op.data) }
 	clear(&p.undo)
+	for &op in p.redo { delete(op.data) }
+	clear(&p.redo)
 	p.u_merge = 0
 	p.dirty   = false
 	mc_clear(p)
