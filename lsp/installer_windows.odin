@@ -59,7 +59,7 @@ install_job_start :: proc(cmd: []string) -> (job: Install_Job, ok: bool) {
 	// Build command line
 	sb: strings.Builder
 	strings.builder_init(&sb, context.temp_allocator)
-	for i, a in cmd {
+	for a, i in cmd {
 		if i > 0 { strings.write_byte(&sb, ' ') }
 		if strings.contains(a, " ") {
 			strings.write_byte(&sb, '"')
@@ -82,13 +82,13 @@ install_job_start :: proc(cmd: []string) -> (job: Install_Job, ok: bool) {
 	si: win32.STARTUPINFOW
 	si.cb         = size_of(win32.STARTUPINFOW)
 	si.dwFlags    = win32.STARTF_USESTDHANDLES | win32.STARTF_USESHOWWINDOW
-	si.wShowWindow = win32.SW_HIDE
+	si.wShowWindow = u16(win32.SW_HIDE)
 	si.hStdInput  = win32.INVALID_HANDLE_VALUE
 	si.hStdOutput = out_write
 	si.hStdError  = out_write
 
 	pi: win32.PROCESS_INFORMATION
-	flags := win32.CREATE_NO_WINDOW | win32.CREATE_UNICODE_ENVIRONMENT
+	flags: u32 = win32.CREATE_NO_WINDOW | win32.CREATE_UNICODE_ENVIRONMENT
 	ok2 := win32.CreateProcessW(nil, cmd_wide, nil, nil, true, flags, nil, nil, &si, &pi)
 	win32.CloseHandle(out_write)
 	if !ok2 {
