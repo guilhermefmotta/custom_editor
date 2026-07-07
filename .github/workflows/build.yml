@@ -81,11 +81,17 @@ jobs:
           "$odinBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build
-        # /NODEFAULTLIB:libucrt.lib — some win32-API-heavy compile units pull
-        # in both the dynamic ucrt.lib and the static libucrt.lib, which
-        # duplicate-define CRT startup symbols (LNK2005: errno, exit, fflush,
-        # ...) at link time. Forcing resolution through ucrt.lib only fixes it.
-        run: odin build . -out:editor.exe -o:speed -extra-linker-flags:"/NODEFAULTLIB:libucrt.lib" -print-linker-flags
+        # Odin's Windows link line explicitly includes libucrt.lib (its own
+        # CRT-startup support, not something we control) alongside ucrt.lib
+        # pulled in by the Windows API libs core:sys/windows brings in
+        # (bcrypt/ntdll/dnsapi, needed by core:net) — same CRT symbols
+        # reachable both ways, so link.exe sees them as duplicates
+        # (LNK2005: errno, exit, fflush, ...). /NODEFAULTLIB only filters
+        # implicit default libs, not this explicit one, so it had no effect
+        # (verified via -print-linker-flags). /FORCE:MULTIPLE is the
+        # standard MSVC escape hatch: link succeeds, first definition wins —
+        # safe here since both are the same UCRT implementation.
+        run: odin build . -out:editor.exe -o:speed -extra-linker-flags:"/FORCE:MULTIPLE"
 
       - name: Package
         shell: pwsh
