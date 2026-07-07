@@ -85,7 +85,7 @@ jobs:
         # in both the dynamic ucrt.lib and the static libucrt.lib, which
         # duplicate-define CRT startup symbols (LNK2005: errno, exit, fflush,
         # ...) at link time. Forcing resolution through ucrt.lib only fixes it.
-        run: odin build . -out:editor.exe -o:speed -extra-linker-flags:"/NODEFAULTLIB:libucrt.lib"
+        run: odin build . -out:editor.exe -o:speed -extra-linker-flags:"/NODEFAULTLIB:libucrt.lib" -print-linker-flags
 
       - name: Package
         shell: pwsh
