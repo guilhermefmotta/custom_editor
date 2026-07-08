@@ -1,0 +1,57 @@
+# 4coder "theme-casey" (Casey Muratori / Handmade Hero), ported from
+# https://github.com/cmuratori/4coder_temp/blob/main/theme-casey.4coder
+# Cursor overridden to red per request — the real theme uses a green/orange
+# cursor pair (defcolor_cursor = {0x00EE00, 0xEE7700}), everything else here
+# is the actual defcolor_* values from that file.
+name = "4coder"
+
+[ui]
+background        = "#0c0c0c"  # defcolor_back / defcolor_margin
+foreground        = "#a08563"  # defcolor_text_default
+cursor            = "#ff1a1a"  # overridden red (source: green/orange pair)
+cursor_inactive   = "#ee7700"  # source's second cursor color, repurposed here
+selection         = "#494949"  # defcolor_mark
+line_highlight    = "#1f1f27"  # defcolor_highlight_cursor_line / defcolor_bar
+line_number       = "#404040"  # defcolor_line_numbers_text
+line_number_cur   = "#cb9401"  # defcolor_base
+status_bar_bg     = "#1f1f27"  # defcolor_bar
+status_bar_fg     = "#a08563"
+status_bar_sel_bg = "#cb9401"
+tab_bar_bg        = "#1f1f27"
+tab_active_bg     = "#0c0c0c"
+tab_active_fg     = "#a08563"
+tab_inactive_bg   = "#1f1f27"
+tab_inactive_fg   = "#686868"  # defcolor_comment
+sidebar_bg        = "#101010"  # defcolor_line_numbers_back
+sidebar_fg        = "#a08563"
+sidebar_sel_bg    = "#2d3640"  # defcolor_list_item_active
+panel_bg          = "#101010"
+border            = "#2d3640"
+scrollbar         = "#2d3640"
+scrollbar_thumb   = "#494949"
+diag_error        = "#ff3333"
+diag_warn         = "#c4b82b"  # defcolor_at_highlight
+diag_info         = "#315268"  # defcolor_highlight
+diag_hint         = "#6b8e23"  # defcolor_str_constant
+lsp_off           = "#686868"
+lsp_loading       = "#c4b82b"
+lsp_ready         = "#6b8e23"
+lsp_error         = "#ff3333"
+accent            = "#cb9401"  # defcolor_base
+accent_fg         = "#0c0c0c"
+
+[syntax]
+keyword     = "#ac7b0b"  # defcolor_keyword
+string      = "#6b8e23"  # defcolor_str_constant (olive green, not red — source value)
+comment     = "#686868"  # defcolor_comment
+number      = "#cb9401"  # not split out in source; using defcolor_base
+type        = "#dab98f"  # defcolor_preproc/include family
+function    = "#cb9401"  # not split out in source; using defcolor_base
+variable    = "#a08563"  # defcolor_text_default
+operator    = "#a08563"
+preproc     = "#dab98f"  # defcolor_preproc
+builtin     = "#dab98f"  # defcolor_include
+constant    = "#c4b82b"  # defcolor_at_highlight
+label       = "#ac7b0b"
+escape      = "#c4b82b"
+punctuation = "#686868"

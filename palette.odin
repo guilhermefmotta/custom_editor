@@ -123,6 +123,8 @@ palette_init :: proc() -> Palette {
 		Command{"Switch Theme",             "Browse and apply editor color themes",             cmd_switch_theme, nil},
 		Command{"Set Keymap Mode",          "Switch between Normal, Vim, and Emacs keybindings", cmd_set_keymap_mode, nil},
 		Command{"Toggle Line Numbers",      "Show or hide line numbers in the active pane",     cmd_toggle_line_numbers, nil},
+		Command{"Toggle Markdown Preview",  "Render the active .md file as styled markdown",    cmd_toggle_md_preview,   _avail_markdown},
+		Command{"Copy Path",                "Copy the absolute path of the current file",       cmd_copy_path, nil},
 	)
 	register_debug_commands(&p)
 
@@ -611,8 +613,8 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		tx  := panel_x + 14 + cw + 10
 		tw  := rl.MeasureTextEx(font, to_cstring(q), FONT_SIZE, CHAR_SPACING).x
 		if p.sel_all {
-			rl.DrawRectangleV({tx - 2, panel_y + 10}, {tw + 4, ch + 4}, rl.Color{137, 180, 250, 60})
-			rl.DrawRectangleLinesEx({tx - 2, panel_y + 10, tw + 4, ch + 4}, 1, rl.Color{137, 180, 250, 180})
+			rl.DrawRectangleV({tx - 2, panel_y + 10}, {tw + 4, ch + 4}, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 60})
+			rl.DrawRectangleLinesEx({tx - 2, panel_y + 10, tw + 4, ch + 4}, 1, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 180})
 		}
 		rl.DrawTextEx(font, to_cstring(q), {tx, panel_y + 14}, FONT_SIZE, CHAR_SPACING, TEXT)
 		if !p.sel_all {
@@ -1009,6 +1011,24 @@ cmd_set_keymap_mode :: proc(e: ^Editor, p: ^Palette) {
 
 cmd_toggle_line_numbers :: proc(e: ^Editor, p: ^Palette) {
 	e.panes[e.active].show_line_numbers = !e.panes[e.active].show_line_numbers
+	palette_close(p)
+}
+
+cmd_toggle_md_preview :: proc(e: ^Editor, p: ^Palette) {
+	md_preview_toggle(active_pane(e))
+	palette_close(p)
+}
+
+_avail_markdown :: proc(e: ^Editor) -> bool {
+	return is_markdown_file(active_pane(e).filename)
+}
+
+cmd_copy_path :: proc(e: ^Editor, p: ^Palette) {
+	ap := active_pane(e)
+	if ap.filename != "" {
+		rl.SetClipboardText(to_cstring(ap.filename))
+		e.msg = fmt.tprintf("Copied path: %s", ap.filename)
+	}
 	palette_close(p)
 }
 

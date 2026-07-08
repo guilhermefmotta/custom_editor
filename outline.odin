@@ -450,7 +450,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	rl.DrawLineV({panel_x, iy + INPUT_H - 1}, {panel_x + PANEL_W, iy + INPUT_H - 1}, BORDER)
 	filter_str := string(od.filter[:])
 	placeholder := len(filter_str) == 0
-	display := filter_str if !placeholder else "type to filter…"
+	display := filter_str if !placeholder else "type to filter..."
 	dcol := TEXT if !placeholder else SUBDUED
 	rl.DrawTextEx(font, to_cstring(display), {panel_x + 10, iy + 7}, FONT_SIZE, CHAR_SPACING, dcol)
 	if !placeholder {
@@ -513,17 +513,20 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	dlg_end()
 }
 
+// Theme-driven — reuses the already-synced syntax token colors (renderer.odin)
+// instead of a hardcoded Catppuccin palette, so outline icons follow the
+// active theme like everything else.
 _outline_kind_color :: proc(kind: string) -> rl.Color {
 	switch kind {
-	case "proc", "func", "method": return rl.Color{137, 180, 250, 255} // blue
-	case "struct", "class":        return rl.Color{166, 227, 161, 255} // green
-	case "enum", "union":          return rl.Color{249, 226, 175, 255} // yellow
-	case "type", "interface":      return rl.Color{148, 226, 213, 255} // teal
-	case "const":                  return rl.Color{203, 166, 247, 255} // mauve
-	case "var":                    return rl.Color{250, 179, 135, 255} // peach
-	case "impl":                   return rl.Color{116, 199, 236, 255} // sapphire
-	case "trait":                  return rl.Color{245, 194, 231, 255} // pink
-	case "mod":                    return rl.Color{180, 190, 254, 255} // lavender
+	case "proc", "func", "method": return FUNC_COL
+	case "struct", "class":        return TOKEN_COLORS[.Type]
+	case "enum", "union":          return DIAG_WARN_COL
+	case "type", "interface":      return TOKEN_COLORS[.Builtin]
+	case "const":                  return TOKEN_COLORS[.Number]
+	case "var":                    return TOKEN_COLORS[.String_Lit]
+	case "impl":                   return ACCENT_COL
+	case "trait":                  return TOKEN_COLORS[.Macro]
+	case "mod":                    return TOKEN_COLORS[.Attribute]
 	}
-	return rl.Color{108, 112, 134, 255} // subdued
+	return LINENUM
 }

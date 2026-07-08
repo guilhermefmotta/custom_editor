@@ -350,7 +350,7 @@ render_diagnostic_inline :: proc(
 	for &d in diags {
 		if d.range.start.line != line { continue }
 		msg := d.message
-		if len(msg) > 60 { msg = fmt.tprintf("%s…", msg[:57]) }
+		if len(msg) > 60 { msg = fmt.tprintf("%s...", msg[:57]) }
 		label := fmt.tprintf("  %s", msg)
 		msg_col: rl.Color
 		#partial switch d.severity {

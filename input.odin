@@ -59,6 +59,11 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	handle_mouse(e, font)
 	p := active_pane(e)
 
+	// Markdown preview is read-only and swallows keyboard input uniformly
+	// across Normal/Vim/Emacs — checked here, before the mode switch below,
+	// so it doesn't have to be special-cased into each mode's own dispatch.
+	if handle_md_preview(e, p) { return }
+
 	// Dialogs/palette/LSP-shortcuts/navigation/mouse above are shared across every
 	// keymap mode. Only "core buffer editing" (the rest of this proc, historically)
 	// diverges per mode — Vim/Emacs own 100% of key interpretation in their modal
@@ -225,7 +230,35 @@ handle_panels :: proc(e: ^Editor) -> bool {
 		return true
 	}
 
+	// Ctrl+Shift+V → toggle Markdown preview for the active pane (no-op on
+	// non-.md files; VSCode uses the same combo for "Open Preview").
+	if ctrl() && shift() && rl.IsKeyPressed(.V) {
+		md_preview_toggle(active_pane(e))
+		return true
+	}
+
 	return false
+}
+
+// -----------------------------------------------------
+// Markdown preview (read-only scroll while a .md pane is in preview mode)
+// -----------------------------------------------------
+
+handle_md_preview :: proc(e: ^Editor, p: ^Pane) -> bool {
+	if !p.md_preview.visible { return false }
+
+	line_h     := FONT_SIZE + LINE_SPACING
+	max_scroll := max(f32(0), p.md_preview.content_h - p.md_preview.viewport_h)
+
+	if key_rep(.DOWN)         { p.md_preview.scroll += line_h * 3 }
+	if key_rep(.UP)           { p.md_preview.scroll -= line_h * 3 }
+	if key_rep(.PAGE_DOWN)    { p.md_preview.scroll += p.md_preview.viewport_h }
+	if key_rep(.PAGE_UP)      { p.md_preview.scroll -= p.md_preview.viewport_h }
+	if rl.IsKeyPressed(.HOME) { p.md_preview.scroll = 0 }
+	if rl.IsKeyPressed(.END)  { p.md_preview.scroll = max_scroll }
+
+	p.md_preview.scroll = clamp(p.md_preview.scroll, 0, max_scroll)
+	return true
 }
 
 // -----------------------------------------------------
@@ -348,6 +381,21 @@ handle_mouse :: proc(e: ^Editor, font: rl.Font) {
 	sh := f32(rl.GetScreenHeight()) - MSG_LINE_H
 	if e.debug_panel.visible { sh -= DEBUG_PANEL_H }
 
+	// Wheel over a pane in Markdown preview scrolls the rendered preview.
+	if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+		mp := rl.GetMousePosition()
+		for i in 0 ..< len(e.panes) {
+			mpv := &e.panes[i].md_preview
+			if !mpv.visible { continue }
+			px2, py2, pw2, ph2 := get_pane_rect(e, i, sw, sh)
+			if mp.x >= px2 && mp.x < px2+pw2 && mp.y >= py2 && mp.y < py2+ph2 {
+				max_scroll := max(f32(0), mpv.content_h - mpv.viewport_h)
+				mpv.scroll = clamp(mpv.scroll - wheel*40, 0, max_scroll)
+				break
+			}
+		}
+	}
+
 	// Mouse click: switch active pane / position cursor / alt+click adds extra cursor
 	if rl.IsMouseButtonPressed(.LEFT) {
 		mp := rl.GetMousePosition()
@@ -368,7 +416,7 @@ handle_mouse :: proc(e: ^Editor, font: rl.Font) {
 				tx := px2
 				for ti in 0..<len(cp.tabs) {
 					lbl := path_basename(cp.tabs[ti].filename)
-					dirty_mark := "● " if cp.tabs[ti].dirty else ""
+					dirty_mark := "* " if cp.tabs[ti].dirty else ""
 					tab_label  := fmt.tprintf(" %s%s ", dirty_mark, lbl)
 					tw := rl.MeasureTextEx(font, to_cstring(tab_label), FONT_SIZE - 2, CHAR_SPACING).x + 8
 					if mp.x >= tx && mp.x < tx + tw {

@@ -127,7 +127,7 @@ _eval_collect_children :: proc(m: ^dbg.Debug_Manager, d: ^Debug_Eval_Dialog, ref
 	children, loaded := dbg.manager_get_children(m, ref)
 	if !loaded {
 		dbg.manager_expand_variable(m, ref)
-		append(out, Eval_Tree_Row{name = "…", value = "", type_ = "", ref = 0, depth = depth})
+		append(out, Eval_Tree_Row{name = "...", value = "", type_ = "", ref = 0, depth = depth})
 		return
 	}
 	if len(children) == 0 {
@@ -159,17 +159,23 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	FOOTER_H   :: f32(44)
 	panel_h    := HEADER_H + LABEL_H + INPUT_H + HINT_H + GAP + LABEL_H + TREE_H + FOOTER_H
 
-	BLUE    :: rl.Color{137, 180, 250, 255}
-	BG      :: rl.Color{30,  30,  46,  255}
-	HDR_BG  :: rl.Color{24,  24,  37,  255}
-	BORDER  :: rl.Color{58,  60,  78,  255}
-	SEL_BG  :: rl.Color{69,  71,  90,  255}
-	TEXT    :: rl.Color{205, 214, 244, 255}
-	SUBDUED :: rl.Color{108, 112, 134, 255}
-	GREEN   :: rl.Color{166, 227, 161, 255}
-	RED     :: rl.Color{243, 139, 168, 255}
-	YELLOW  :: rl.Color{249, 226, 175, 255}
-	OVERLAY :: rl.Color{0, 0, 0, 160}
+	// Theme-driven (package-level vars synced every frame in _apply_theme),
+	// not hardcoded — this dialog used to ignore the active theme entirely.
+	BLUE       := ACCENT_COL
+	HDR_BG     := STATUS_BG
+	BORDER     := DIVIDER_COL
+	SUBDUED    := LINENUM
+	GREEN      := DIFF_ADD_COL
+	RED        := MSG_COL
+	YELLOW     := DIAG_WARN_COL
+	INPUT_BG   := STATUS_BG
+	BLUE_HOVER := rl.Color{
+		u8(min(255, int(ACCENT_COL.r)+40)),
+		u8(min(255, int(ACCENT_COL.g)+40)),
+		u8(min(255, int(ACCENT_COL.b)+40)),
+		255,
+	}
+	OVERLAY    :: rl.Color{0, 0, 0, 160}
 
 	px := (sw - PANEL_W) * 0.5
 	py := (sh - panel_h) * 0.5
@@ -209,12 +215,12 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	cy += LABEL_H
 
 	input_rect := rl.Rectangle{px+PAD_X, cy, PANEL_W-PAD_X*2, INPUT_H}
-	rl.DrawRectangleRec(input_rect, rl.Color{20, 20, 34, 255})
+	rl.DrawRectangleRec(input_rect, INPUT_BG)
 	rl.DrawRectangleLinesEx(input_rect, 1, BLUE)
 
 	expr_s := string(d.expr_buf[:])
 	text_x := input_rect.x + 8
-	dlg_text(font, expr_s if expr_s != "" else "type expression…",
+	dlg_text(font, expr_s if expr_s != "" else "type expression...",
 		text_x, cy + (INPUT_H-ref.y)*0.5, FONT_SIZE, CHAR_SPACING,
 		TEXT if expr_s != "" else SUBDUED, input_rect.x+input_rect.width, 8)
 	if expr_s != "" {
@@ -233,11 +239,11 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	cy += LABEL_H
 
 	tree_rect := rl.Rectangle{px+PAD_X, cy, PANEL_W-PAD_X*2, TREE_H}
-	rl.DrawRectangleRec(tree_rect, rl.Color{20, 20, 34, 255})
+	rl.DrawRectangleRec(tree_rect, INPUT_BG)
 	rl.DrawRectangleLinesEx(tree_rect, 1, BORDER)
 
 	if m.eval_pending {
-		rl.DrawTextEx(font, "evaluating…", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+		rl.DrawTextEx(font, "evaluating...", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 	} else if !d.result_shown {
 		rl.DrawTextEx(font, "Ctrl+Enter to evaluate", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 	} else if !m.eval_result.ok {
@@ -281,8 +287,8 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 			}
 			name_x := tx + 14
 
-			if row.name == "…" {
-				rl.DrawTextEx(font, "loading…", {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+			if row.name == "..." {
+				rl.DrawTextEx(font, "loading...", {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 				continue
 			}
 			if row.value == "" && row.ref == 0 {
@@ -322,9 +328,9 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	eval_w := rl.MeasureTextEx(font, to_cstring(eval_lbl), FONT_SIZE-1, CHAR_SPACING).x + 24
 	eval_rect := rl.Rectangle{px+PANEL_W-PAD_X-eval_w, by, eval_w, BTN_H}
 	eval_hover := rl.CheckCollisionPointRec(mouse, eval_rect)
-	rl.DrawRectangleRec(eval_rect, eval_hover ? rl.Color{112, 161, 236, 255} : BLUE)
+	rl.DrawRectangleRec(eval_rect, eval_hover ? BLUE_HOVER : BLUE)
 	ew2 := rl.MeasureTextEx(font, to_cstring(eval_lbl), FONT_SIZE-1, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(eval_lbl), {eval_rect.x + (eval_w-ew2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, rl.Color{17, 17, 27, 255})
+	rl.DrawTextEx(font, to_cstring(eval_lbl), {eval_rect.x + (eval_w-ew2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, BG)
 	if clicked && eval_hover {
 		expr := string(d.expr_buf[:])
 		if expr != "" {

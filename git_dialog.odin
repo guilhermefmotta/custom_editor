@@ -410,7 +410,7 @@ git_dialog_handle_input :: proc(d: ^Git_Dialog, e: ^Editor) {
 	wheel := rl.GetMouseWheelMove()
 	if wheel != 0 { d.selected = clamp(d.selected - int(wheel)*3, 0, max(0, total-1)) }
 	if rl.IsKeyPressed(.TAB) { d.focus = .Commit; return }
-	if rl.IsKeyPressed(.R)   { git.git_manager_refresh_now(m); _gitd_set_msg(d, true, "refreshing…"); return }
+	if rl.IsKeyPressed(.R)   { git.git_manager_refresh_now(m); _gitd_set_msg(d, true, "refreshing..."); return }
 
 	// Branch picker (merge a branch)
 	if rl.IsKeyPressed(.B) { _bp_open(d, m); return }
@@ -591,8 +591,8 @@ _gitd_draw_status :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw
 	header_col := GITD_ORANGE if merging else GITD_BLUE
 	rl.DrawTextEx(font, to_cstring(branch_str), {px+10, py + (GITD_HEADER_H-ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, header_col)
 	if m.refreshing {
-		ind_w := rl.MeasureTextEx(font, "refreshing…", FONT_SIZE-2, CHAR_SPACING).x
-		rl.DrawTextEx(font, "refreshing…", {px + GITD_W - ind_w - 10, py + (GITD_HEADER_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, GITD_SUBDUED)
+		ind_w := rl.MeasureTextEx(font, "refreshing...", FONT_SIZE-2, CHAR_SPACING).x
+		rl.DrawTextEx(font, "refreshing...", {px + GITD_W - ind_w - 10, py + (GITD_HEADER_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, GITD_SUBDUED)
 	}
 
 	// File list
@@ -657,7 +657,7 @@ _gitd_draw_status :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw
 	commit_border := GITD_BLUE if d.focus == .Commit else GITD_BORDER
 	rl.DrawRectangleLinesEx({px+8, commit_y, GITD_W-16, GITD_COMMIT_H}, 1, commit_border)
 	commit_str  := string(d.commit_buf[:]) if len(d.commit_buf) > 0 else ""
-	commit_cstr := to_cstring(commit_str)  if commit_str != "" else cstring("Commit message… (Tab to focus, Enter to commit)")
+	commit_cstr := to_cstring(commit_str)  if commit_str != "" else cstring("Commit message... (Tab to focus, Enter to commit)")
 	commit_col  := GITD_TEXT if len(d.commit_buf) > 0 else GITD_SUBDUED
 	rl.DrawTextEx(font, commit_cstr, {px+14, commit_y + (GITD_COMMIT_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, commit_col)
 	if d.focus == .Commit {
@@ -891,7 +891,7 @@ _gitd_draw_branch_picker :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.F
 	// Filter input box
 	rl.DrawRectangleLinesEx({px+8, cy+4, GITD_BP_W-16, BP_INPUT_H-8}, 1, GITD_BLUE)
 	filter_str  := string(d.bp_filter[:])
-	filter_cstr := to_cstring(filter_str) if filter_str != "" else cstring("Filter branches…")
+	filter_cstr := to_cstring(filter_str) if filter_str != "" else cstring("Filter branches...")
 	filter_col  := GITD_TEXT if filter_str != "" else GITD_SUBDUED
 	text_x      := px + 14
 	text_y      := cy + 4 + (BP_INPUT_H-8-ref.y)*0.5

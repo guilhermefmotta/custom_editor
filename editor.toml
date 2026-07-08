@@ -2,7 +2,7 @@
 # Priority: built-in defaults < system < user < workspace (this file).
 
 version = 1
-theme = "dark"
+theme = "4coder"
 
 # ---------------------------------------------------------------------------
 [editor]

@@ -46,6 +46,7 @@ Pane :: struct {
 	// Tab management
 	tabs:              [dynamic]Pane_Tab,
 	cur_tab:           int,
+	md_preview:        Md_Preview,
 }
 
 MAX_UNDO :: 500
@@ -72,6 +73,7 @@ pane_destroy :: proc(p: ^Pane) {
 	for &t in p.tabs { if t.filename != "" { delete(t.filename) } }
 	delete(p.tabs)
 	pane_lsp_destroy(&p.lsp)
+	md_preview_destroy(&p.md_preview)
 	p^ = {}
 }
 
@@ -193,6 +195,7 @@ pane_open :: proc(p: ^Pane, path: string) -> bool {
 	p.filename = _pane_abs(path) // always store absolute path so LSP URIs are correct
 	p.lang     = detect_lang(path)
 	p.dirty    = false
+	md_preview_destroy(&p.md_preview) // stale preview from the previous file must not bleed through
 	// Clear undo/redo history on file open
 	for &op in p.undo { delete(op.data) }
 	clear(&p.undo)

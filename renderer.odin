@@ -60,7 +60,7 @@ _apply_theme :: proc(e: ^Editor) {
 	ui := t.ui
 	BG          = _c(ui.background)
 	TEXT        = _c(ui.foreground)
-	CURSOR_COL  = _c(ui.accent)
+	CURSOR_COL  = _c(ui.cursor)
 	LINENUM     = _c(ui.line_number)
 	LINENUM_CUR = _c(ui.line_number_cur)
 	CUR_LINE_BG = _c(ui.line_highlight)
@@ -105,6 +105,22 @@ _apply_theme :: proc(e: ^Editor) {
 	GITD_RED     = DIFF_DEL_COL
 	GITD_RED_BG  = DIFF_DEL_BG
 	GITD_BLUE    = ACCENT_COL
+
+	// debug_panel package-level vars
+	DBGP_BG      = BG
+	DBGP_HDR_BG  = STATUS_BG
+	DBGP_BORDER  = DIVIDER_COL
+	DBGP_SEL     = SEL_BG
+	DBGP_TEXT    = TEXT
+	DBGP_SUBDUED = LINENUM
+	DBGP_GREEN   = DIFF_ADD_COL
+	DBGP_RED     = MSG_COL
+	DBGP_YELLOW  = DIAG_WARN_COL
+	DBGP_BLUE    = ACCENT_COL
+
+	// tab bar
+	TAB_ACTIVE_BG   = STATUS_BG
+	TAB_INACTIVE_BG = rl.Color{BG.r, BG.g, BG.b, 180}
 
 	// suggest_widget package-level vars
 	SUGGEST_BG      = rl.Color{BG.r, BG.g, BG.b, 245}
@@ -177,10 +193,17 @@ render :: proc(e: ^Editor, font: rl.Font) {
 		}
 	}
 
-	// Global message line
+	// Global message line — doubles as the Vim Command_Line input (:, /, ?)
+	// so what you're typing is actually visible while typing it.
 	my := sh - MSG_LINE_H
 	rl.DrawRectangleV({0, my}, {sw, MSG_LINE_H}, STATUS_BG)
-	if e.msg != "" {
+	if e.cfg.editor.keymap_mode == .Vim && e.vim.mode == .Command_Line {
+		kind_buf: [1]u8 = {e.vim.cmdline_kind}
+		cmd_str := fmt.tprintf("%s%s", string(kind_buf[:]), string(e.vim.cmdline_buf[:]))
+		rl.DrawTextEx(font, to_cstring(cmd_str), {4, my + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
+		tw := rl.MeasureTextEx(font, to_cstring(cmd_str), FONT_SIZE, CHAR_SPACING).x
+		rl.DrawRectangleV({4 + tw + 2, my + 2}, {2, FONT_SIZE}, CURSOR_COL)
+	} else if e.msg != "" {
 		rl.DrawTextEx(font, to_cstring(e.msg), {4, my + 3}, FONT_SIZE, CHAR_SPACING, MSG_COL)
 	}
 
@@ -272,6 +295,21 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		_render_tab_bar(p, font, ox, oy + PANE_TOP_PAD, ow, TAB_BAR_H, is_active)
 	}
 
+	// Markdown preview replaces the raw-text/gutter/status rendering below
+	// entirely — own minimal status bar, then bail before the per-line loop.
+	if p.md_preview.visible {
+		content_top := oy + PANE_TOP_PAD + tab_bar_h + (STATUS_H if status_top else 0)
+		content_h   := oh - PANE_TOP_PAD - tab_bar_h - STATUS_H
+		md_preview_draw(p, font, ox, content_top, ow, content_h)
+
+		sy := (oy + PANE_TOP_PAD) if status_top else (oy + oh - STATUS_H)
+		rl.DrawRectangleV({ox, sy}, {ow, STATUS_H}, STATUS_BG)
+		fname := path_basename(p.filename) if p.filename != "" else "untitled"
+		rl.DrawTextEx(font, to_cstring(fmt.tprintf(" %s — Markdown Preview (Ctrl+Shift+V to edit)", fname)),
+			{ox + 4, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
+		return
+	}
+
 	total_lines := buffer_line_count(&p.buf)
 	digs        := digit_count(total_lines)
 	blame_w     := git_blame_gutter_width(e, cw)
@@ -296,6 +334,17 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	}
 	sel_first_y: f32 = -1  // y of first selected visible line
 	sel_last_y:  f32 = -1  // y of last selected visible line
+
+	// Vim Visual_Block (Ctrl-V): same column range on every line between
+	// anchor and cursor, not a linear byte range — draw a rectangle per line
+	// instead of the linear first/last/full-width-middle shape below.
+	is_block_visual := sel_active && e.cfg.editor.keymap_mode == .Vim && e.vim.mode == .Visual_Block
+	block_lo_col, block_hi_col: int
+	if is_block_visual {
+		_, anchor_col := buffer_pos_to_line_col(&p.buf, p.sel_anchor)
+		block_lo_col = min(anchor_col, cur_col)
+		block_hi_col = max(anchor_col, cur_col) + 1
+	}
 
 	text_top   := oy + PANE_TOP_PAD + tab_bar_h + (STATUS_H if status_top else 0)
 	pane_diags := lsp.manager_get_diags(&e.lsp_mgr, p.filename)
@@ -372,17 +421,25 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		// Selection highlight (primary) — rounded single-line, extended multi-line
 		line_end := line_start + len(line_bytes)
 		if sel_active && li >= s_lo_line && li <= s_hi_line {
-			is_first_sel := li == s_lo_line
-			is_last_sel  := li == s_hi_line
-			xl := text_x + f32(s_lo_col if is_first_sel else 0)*cw
-			xr := text_x + f32(s_hi_col)*cw if is_last_sel else ox + ow
-			if xl < xr {
-				if is_first_sel { sel_first_y = y }
-				if is_last_sel  { sel_last_y  = y }
-				if is_first_sel && is_last_sel {
-					rl.DrawRectangleRounded({xl, y + 1, xr - xl, ch - 2}, 0.35, 6, SEL_BG)
-				} else {
-					rl.DrawRectangleV({xl, y}, {xr - xl, ch}, SEL_BG)
+			if is_block_visual {
+				xl := text_x + f32(block_lo_col)*cw
+				xr := text_x + f32(block_hi_col)*cw
+				if sel_first_y < 0 { sel_first_y = y }
+				sel_last_y = y
+				rl.DrawRectangleV({xl, y}, {xr - xl, ch}, SEL_BG)
+			} else {
+				is_first_sel := li == s_lo_line
+				is_last_sel  := li == s_hi_line
+				xl := text_x + f32(s_lo_col if is_first_sel else 0)*cw
+				xr := text_x + f32(s_hi_col)*cw if is_last_sel else ox + ow
+				if xl < xr {
+					if is_first_sel { sel_first_y = y }
+					if is_last_sel  { sel_last_y  = y }
+					if is_first_sel && is_last_sel {
+						rl.DrawRectangleRounded({xl, y + 1, xr - xl, ch - 2}, 0.35, 6, SEL_BG)
+					} else {
+						rl.DrawRectangleV({xl, y}, {xr - xl, ch}, SEL_BG)
+					}
 				}
 			}
 		}
@@ -431,15 +488,16 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		// as the breakpoint marker, so it reads as "linked" rather than static.
 		if bm_ok && (li == bm_a_line || li == bm_b_line) {
 			bm_a_val := u8(160 + _gutter_pulse()*95)
-			BM_COL   := rl.Color{137, 180, 250, bm_a_val}
+			BM_COL      := rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, bm_a_val}
+			BM_FILL_COL := rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 50}
 			if li == bm_a_line {
 				bx := text_x + f32(bm_a_col)*cw
-				rl.DrawRectangleRounded({bx, y + 1, cw, ch - 2}, 0.3, 4, rl.Color{137, 180, 250, 50})
+				rl.DrawRectangleRounded({bx, y + 1, cw, ch - 2}, 0.3, 4, BM_FILL_COL)
 				rl.DrawRectangleRoundedLinesEx({bx, y + 1, cw, ch - 2}, 0.3, 4, 1.5, BM_COL)
 			}
 			if li == bm_b_line {
 				bx := text_x + f32(bm_b_col)*cw
-				rl.DrawRectangleRounded({bx, y + 1, cw, ch - 2}, 0.3, 4, rl.Color{137, 180, 250, 50})
+				rl.DrawRectangleRounded({bx, y + 1, cw, ch - 2}, 0.3, 4, BM_FILL_COL)
 				rl.DrawRectangleRoundedLinesEx({bx, y + 1, cw, ch - 2}, 0.3, 4, 1.5, BM_COL)
 			}
 		}
@@ -502,14 +560,16 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 
 	// Selection border outline — drawn after text so it's always visible
 	if sel_active && sel_first_y >= 0 && sel_last_y >= 0 {
-		x_lo    := text_x + f32(s_lo_col)*cw
-		x_hi    := text_x + f32(s_hi_col)*cw
+		x_lo    := text_x + f32(block_lo_col if is_block_visual else s_lo_col)*cw
+		x_hi    := text_x + f32(block_hi_col if is_block_visual else s_hi_col)*cw
 		x_right := ox + ow
 		y0      := sel_first_y
 		y_last  := sel_last_y
 		bdr     := rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 170}
 
-		if s_lo_line == s_hi_line {
+		if is_block_visual {
+			rl.DrawRectangleLinesEx({x_lo, y0 + 1, x_hi - x_lo, (y_last - y0) + ch - 2}, 1.5, bdr)
+		} else if s_lo_line == s_hi_line {
 			rl.DrawRectangleRoundedLinesEx({x_lo, y0 + 1, x_hi - x_lo, ch - 2}, 0.35, 6, 1.5, bdr)
 		} else {
 			rl.DrawLineEx({x_lo,    y0},         {x_right, y0},         1, bdr)  // top of first row
@@ -535,8 +595,8 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		name_x = ox + badge_w + 6
 	}
 
-	fname    := p.filename if p.filename != "" else "untitled"
-	modified := "● " if p.dirty else ""
+	fname    := path_basename(p.filename) if p.filename != "" else "untitled"
+	modified := "* " if p.dirty else ""
 	rl.DrawTextEx(font, to_cstring(fmt.tprintf(" %s%s", modified, fname)),
 		{name_x, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
 
@@ -632,9 +692,9 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 
 render_save_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	DIALOG_H  :: f32(38)
-	DIALOG_BG :: rl.Color{30,  32,  48,  255}
-	BORDER    :: rl.Color{137, 180, 250, 255}
-	SUBDUED   :: rl.Color{108, 112, 134, 255}
+	DIALOG_BG := STATUS_BG
+	BORDER    := ACCENT_COL
+	SUBDUED   := LINENUM
 
 	dy := sh - MSG_LINE_H - DIALOG_H
 	rl.DrawRectangleV({0, dy}, {sw, DIALOG_H}, DIALOG_BG)
@@ -666,10 +726,10 @@ render_delete_confirm :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 	PANEL_W  :: f32(420)
 	PANEL_H  :: f32(100)
-	OVERLAY  :: rl.Color{0,   0,   0,   160}
-	PANEL_BG :: rl.Color{30,  30,  46,  255}
-	DANGER   :: rl.Color{243, 139, 168, 255}
-	SUBDUED  :: rl.Color{108, 112, 134, 255}
+	OVERLAY  :: rl.Color{0, 0, 0, 160}
+	PANEL_BG := STATUS_BG
+	DANGER   := MSG_COL
+	SUBDUED  := LINENUM
 
 	px := (sw - PANEL_W) * 0.5
 	py := (sh - PANEL_H) * 0.5
@@ -692,9 +752,9 @@ render_delete_confirm :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 render_mark_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	DIALOG_H  :: f32(38)
-	DIALOG_BG :: rl.Color{30, 32, 48, 255}
-	BORDER    :: rl.Color{166, 227, 161, 255} // green accent for marks
-	SUBDUED   :: rl.Color{108, 112, 134, 255}
+	DIALOG_BG := STATUS_BG
+	BORDER    := DIFF_ADD_COL // green accent for marks
+	SUBDUED   := LINENUM
 
 	dy := sh - MSG_LINE_H - DIALOG_H - 40 // above save dialog position
 	rl.DrawRectangleV({0, dy}, {sw, DIALOG_H}, DIALOG_BG)
@@ -720,9 +780,9 @@ render_mark_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 render_goto_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	DIALOG_H  :: f32(38)
-	DIALOG_BG :: rl.Color{30, 32, 48, 255}
-	BORDER    :: rl.Color{250, 179, 135, 255} // peach accent for goto
-	SUBDUED   :: rl.Color{108, 112, 134, 255}
+	DIALOG_BG := STATUS_BG
+	BORDER    := TOKEN_COLORS[.Number] // peach/orange accent for goto
+	SUBDUED   := LINENUM
 
 	dy := sh - MSG_LINE_H - DIALOG_H - 40
 	rl.DrawRectangleV({0, dy}, {sw, DIALOG_H}, DIALOG_BG)
@@ -763,18 +823,20 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	LNUM_W   :: f32(46)
 	MAX_ITEMS :: 8
 
-	DIALOG_BG    :: rl.Color{24, 24, 40, 248}
-	BORDER       :: rl.Color{137, 180, 250, 255}
-	SUBDUED      :: rl.Color{108, 112, 134, 255}
-	ACT_BDR      :: rl.Color{137, 180, 250, 255}
-	INACT_BDR    :: rl.Color{58,  60,  78,  255}
-	MATCH_HL_BG  :: rl.Color{249, 226, 175,  80}
-	MATCH_HL_FG  :: rl.Color{249, 226, 175, 255}
-	MATCH_OK_COL :: rl.Color{166, 227, 161, 255}
-	RESULT_SEL   :: rl.Color{56,  84, 160,  255}
-	RESULT_ALT   :: rl.Color{32,  32,  52,  180}
-	TOG_ON_BG    :: rl.Color{41,  54,  82,  255}
-	TOG_OFF_BG   :: rl.Color{32,  33,  50,  255}
+	// Theme-driven (package-level vars synced every frame in _apply_theme),
+	// not hardcoded — this dialog used to ignore the active theme entirely.
+	DIALOG_BG    := rl.Color{STATUS_BG.r, STATUS_BG.g, STATUS_BG.b, 248}
+	BORDER       := ACCENT_COL
+	SUBDUED      := LINENUM
+	ACT_BDR      := ACCENT_COL
+	INACT_BDR    := DIVIDER_COL
+	MATCH_HL_BG  := rl.Color{DIAG_WARN_COL.r, DIAG_WARN_COL.g, DIAG_WARN_COL.b, 80}
+	MATCH_HL_FG  := DIAG_WARN_COL
+	MATCH_OK_COL := DIFF_ADD_COL
+	RESULT_SEL   := SEL_BG
+	RESULT_ALT   := rl.Color{STATUS_BG.r, STATUS_BG.g, STATUS_BG.b, 180}
+	TOG_ON_BG    := rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 60}
+	TOG_OFF_BG   := rl.Color{STATUS_BG.r, STATUS_BG.g, STATUS_BG.b, 255}
 
 	n_vis := min(MAX_ITEMS, len(fr.matches)) if fr.show_results else 0
 
@@ -1008,7 +1070,9 @@ to_cstring :: proc(s: string) -> cstring {
 // Tab bar
 // ---------------------------------------------------------------------------
 
-TAB_ACTIVE_BG  := STATUS_BG
+// Both re-synced from the active theme every frame in _apply_theme — these
+// initial values are only what's visible before the first frame runs.
+TAB_ACTIVE_BG   := STATUS_BG
 TAB_INACTIVE_BG := rl.Color{24, 24, 37, 180}
 TAB_DIVIDER    := rl.Color{49, 50, 68, 255}
 
@@ -1020,7 +1084,7 @@ _render_tab_bar :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, th: f32, is_active:
 	for t, ti in p.tabs {
 		label := path_basename(t.filename)
 		if label == "" { label = "untitled" }
-		dirty_mark := "● " if t.dirty else ""
+		dirty_mark := "* " if t.dirty else ""
 		tab_label  := fmt.tprintf(" %s%s ", dirty_mark, label)
 		tw := rl.MeasureTextEx(font, to_cstring(tab_label), FONT_SIZE - 2, CHAR_SPACING).x + 8
 

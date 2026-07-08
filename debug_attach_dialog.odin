@@ -94,14 +94,14 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 	FOOTER_H :: f32(50)
 	panel_h  := HEADER_H + ROW_H*3 + FOOTER_H
 
-	BLUE    :: rl.Color{137, 180, 250, 255}
-	BG      :: rl.Color{30,  30,  46,  255}
-	HDR_BG  :: rl.Color{24,  24,  37,  255}
-	BORDER  :: rl.Color{58,  60,  78,  255}
-	TEXT    :: rl.Color{205, 214, 244, 255}
-	SUBDUED :: rl.Color{108, 112, 134, 255}
-	RED     :: rl.Color{243, 139, 168, 255}
-	OVERLAY :: rl.Color{0,   0,   0,   160}
+	// Theme-driven (package-level vars synced every frame in _apply_theme),
+	// not hardcoded — this dialog used to ignore the active theme entirely.
+	BLUE    := ACCENT_COL
+	HDR_BG  := STATUS_BG
+	BORDER  := DIVIDER_COL
+	SUBDUED := LINENUM
+	RED     := MSG_COL
+	OVERLAY :: rl.Color{0, 0, 0, 160}
 
 	px := (sw - PANEL_W) * 0.5
 	py := sh * 0.30

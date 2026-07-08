@@ -540,12 +540,12 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		rl.DrawLineV({panel_x, iy + INPUT_H - 1}, {panel_x + PANEL_W, iy + INPUT_H - 1}, PANEL_BOR)
 		filter_str  := string(ft.filter[:])
 		placeholder := len(filter_str) == 0
-		display     := filter_str if !placeholder else "type to filter (recursive)…"
+		display     := filter_str if !placeholder else "type to filter (recursive)..."
 		dcol        := TEXT if !placeholder else SUBDUED
 		if !placeholder && ft.filter_sel_all {
 			fw := rl.MeasureTextEx(font, to_cstring(filter_str), FONT_SIZE - 2, CHAR_SPACING).x
-			rl.DrawRectangleV({panel_x + 8, iy + 4}, {fw + 4, ref.y + 4}, rl.Color{137, 180, 250, 60})
-			rl.DrawRectangleLinesEx({panel_x + 8, iy + 4, fw + 4, ref.y + 4}, 1, rl.Color{137, 180, 250, 180})
+			rl.DrawRectangleV({panel_x + 8, iy + 4}, {fw + 4, ref.y + 4}, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 60})
+			rl.DrawRectangleLinesEx({panel_x + 8, iy + 4, fw + 4, ref.y + 4}, 1, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 180})
 		}
 		rl.DrawTextEx(font, to_cstring(display), {panel_x + 10, iy + 6}, FONT_SIZE - 2, CHAR_SPACING, dcol)
 		if !placeholder && !ft.filter_sel_all {

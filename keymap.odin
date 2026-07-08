@@ -29,11 +29,14 @@ keymap_mode_name :: proc(m: conf.Keymap_Mode) -> string {
 	return "Normal"
 }
 
+// Mode-indicator colors follow the vim-airline convention (green=normal,
+// yellow=insert, purple=visual, red=replace) — deliberately fixed rather
+// than theme-driven, same idea as git diff always being red/green regardless
+// of syntax theme.
 VIM_MODE_COL_NORMAL  := rl.Color{166, 227, 161, 255} // green
 VIM_MODE_COL_INSERT  := rl.Color{249, 226, 175, 255} // yellow
 VIM_MODE_COL_VISUAL  := rl.Color{203, 166, 247, 255} // mauve
 VIM_MODE_COL_REPLACE := rl.Color{243, 139, 168, 255} // red
-EMACS_MODE_COL       := rl.Color{137, 180, 250, 255} // blue
 
 // _keymap_badge: status-bar mode indicator (like vim-airline's mode block).
 // Empty text = no badge (Normal keymap doesn't need one, it's modeless).
@@ -43,16 +46,18 @@ _keymap_badge :: proc(e: ^Editor) -> (text: string, col: rl.Color) {
 		return "", BG
 	case .Vim:
 		switch e.vim.mode {
-		case .Normal:      return " NORMAL ", VIM_MODE_COL_NORMAL
-		case .Insert:      return " INSERT ", VIM_MODE_COL_INSERT
-		case .Visual:      return " VISUAL ", VIM_MODE_COL_VISUAL
-		case .Visual_Line: return " V-LINE ", VIM_MODE_COL_VISUAL
-		case .Replace:     return " REPLACE ", VIM_MODE_COL_REPLACE
+		case .Normal:       return " NORMAL ", VIM_MODE_COL_NORMAL
+		case .Insert:       return " INSERT ", VIM_MODE_COL_INSERT
+		case .Visual:       return " VISUAL ", VIM_MODE_COL_VISUAL
+		case .Visual_Line:  return " V-LINE ", VIM_MODE_COL_VISUAL
+		case .Visual_Block: return " V-BLOCK ", VIM_MODE_COL_VISUAL
+		case .Replace:      return " REPLACE ", VIM_MODE_COL_REPLACE
+		case .Command_Line: return " COMMAND ", VIM_MODE_COL_INSERT
 		}
 	case .Emacs:
 		if e.emacs.isearch.active { return " I-SEARCH ", VIM_MODE_COL_INSERT }
 		if e.emacs.mark_active    { return " MARK ", VIM_MODE_COL_VISUAL }
-		return " EMACS ", EMACS_MODE_COL
+		return " EMACS ", ACCENT_COL
 	}
 	return "", BG
 }
