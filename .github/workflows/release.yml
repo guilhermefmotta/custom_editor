@@ -46,7 +46,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/editor-linux-amd64.tar.gz editor font/
+          tar -czf dist/editor-linux-amd64.tar.gz editor font/ themes/ editor.toml
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -93,7 +93,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/editor-macos-arm64.tar.gz editor font/
+          tar -czf dist/editor-macos-arm64.tar.gz editor font/ themes/ editor.toml
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -123,7 +123,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/editor-macos-amd64.tar.gz editor font/
+          tar -czf dist/editor-macos-amd64.tar.gz editor font/ themes/ editor.toml
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -155,7 +155,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Compress-Archive -Path editor.exe, font -DestinationPath dist\editor-windows-amd64.zip
+          Compress-Archive -Path editor.exe, font, themes, editor.toml -DestinationPath dist\editor-windows-amd64.zip
 
       - name: Release
         uses: softprops/action-gh-release@v2

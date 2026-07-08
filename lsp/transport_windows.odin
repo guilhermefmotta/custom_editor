@@ -21,17 +21,29 @@ Server_Process :: struct {
 spawn_server :: proc(cmd: []string) -> (proc_: Server_Process, ok: bool) {
 	if len(cmd) == 0 { log_writef("ERR", "spawn_server: empty command"); return {}, false }
 
-	// Build quoted command line
+	// CreateProcess cannot directly launch a .bat/.cmd file (that's a cmd.exe
+	// built-in interpreter feature, not something the OS loader understands —
+	// it just fails with "not a valid Win32 application"). Our own installers
+	// generate exactly this kind of wrapper for servers that need one (e.g.
+	// jdtls, which needs a computed classpath jar + -data dir), so route
+	// through cmd.exe /c whenever the resolved binary is a batch script.
+	first_lower := strings.to_lower(cmd[0], context.temp_allocator)
+	needs_shell := strings.has_suffix(first_lower, ".bat") || strings.has_suffix(first_lower, ".cmd")
+
+	// Build quoted command line — every arg individually quoted (not just
+	// ones containing spaces) since that's also required for the cmd.exe /c
+	// "..." wrapping trick to parse correctly when a path has spaces in it
+	// (e.g. "C:\Users\Jane Doe\AppData\...").
 	sb: strings.Builder
 	strings.builder_init(&sb, context.temp_allocator)
+	if needs_shell { strings.write_string(&sb, `cmd.exe /c "`) }
 	for i := 0; i < len(cmd); i += 1 {
 		if i > 0 { strings.write_byte(&sb, ' ') }
-		a := cmd[i]
-		has_space := strings.contains(a, " ")
-		if has_space { strings.write_byte(&sb, '"') }
-		strings.write_string(&sb, a)
-		if has_space { strings.write_byte(&sb, '"') }
+		strings.write_byte(&sb, '"')
+		strings.write_string(&sb, cmd[i])
+		strings.write_byte(&sb, '"')
 	}
+	if needs_shell { strings.write_byte(&sb, '"') }
 	cmd_wide := win32.utf8_to_wstring(strings.to_string(sb), context.temp_allocator)
 
 	// Inheritable security attributes for pipe handles

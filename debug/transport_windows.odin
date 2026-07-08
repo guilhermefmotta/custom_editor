@@ -22,16 +22,21 @@ Adapter_Process :: struct {
 spawn_adapter :: proc(cmd: []string) -> (proc_: Adapter_Process, ok: bool) {
 	if len(cmd) == 0 { return {}, false }
 
+	// CreateProcess can't directly launch a .bat/.cmd file — see the matching
+	// comment in lsp/transport_windows.odin's spawn_server for why.
+	first_lower := strings.to_lower(cmd[0], context.temp_allocator)
+	needs_shell := strings.has_suffix(first_lower, ".bat") || strings.has_suffix(first_lower, ".cmd")
+
 	sb: strings.Builder
 	strings.builder_init(&sb, context.temp_allocator)
+	if needs_shell { strings.write_string(&sb, `cmd.exe /c "`) }
 	for i := 0; i < len(cmd); i += 1 {
 		if i > 0 { strings.write_byte(&sb, ' ') }
-		a := cmd[i]
-		has_space := strings.contains(a, " ")
-		if has_space { strings.write_byte(&sb, '"') }
-		strings.write_string(&sb, a)
-		if has_space { strings.write_byte(&sb, '"') }
+		strings.write_byte(&sb, '"')
+		strings.write_string(&sb, cmd[i])
+		strings.write_byte(&sb, '"')
 	}
+	if needs_shell { strings.write_byte(&sb, '"') }
 	cmd_wide := win32.utf8_to_wstring(strings.to_string(sb), context.temp_allocator)
 
 	sa: win32.SECURITY_ATTRIBUTES

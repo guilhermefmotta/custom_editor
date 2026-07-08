@@ -484,6 +484,12 @@ search_jump :: proc(e: ^Editor, r: ^Search_Result) {
 
 // ---- File scanner ----
 
+// Hard cap on a single synchronous walk (this runs on the main thread,
+// blocking a frame) — without it, a huge workspace (tens of GB / hundreds of
+// thousands of files) freezes the editor for as long as the walk takes.
+// 50k files is already far more than "Find File" is usable with interactively.
+PALETTE_SCAN_MAX_FILES :: 50_000
+
 palette_scan_files :: proc(p: ^Palette) {
 	for f in p.files { delete(f) }
 	clear(&p.files)
@@ -495,7 +501,7 @@ palette_scan_files :: proc(p: ^Palette) {
 	os.walker_init(&w, ".")
 	defer os.walker_destroy(&w)
 
-	for {
+	for len(p.files) < PALETTE_SCAN_MAX_FILES {
 		info, ok := os.walker_walk(&w)
 		if !ok { break }
 

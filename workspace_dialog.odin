@@ -115,12 +115,16 @@ workspace_dialog_confirm :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 	if d.workspace != "" { delete(d.workspace) }
 	d.workspace = strings.clone(target)
 
-	// Refresh palette cwd + file list
+	// Refresh palette cwd — the file list itself is scanned lazily, the first
+	// time "Find File in Workspace" is actually opened (cmd_find_file), not
+	// eagerly here. Eagerly walking the whole tree on every workspace open
+	// used to freeze the editor on large (tens-of-GB) workspaces.
 	if e.palette.cwd != "" { delete(e.palette.cwd) }
 	e.palette.cwd, _ = os.get_working_directory(context.allocator)
-	palette_scan_files(&e.palette)
 
 	// Always open the file tree so the user sees the new workspace immediately
+	// (this only lists one directory level, bounded by FT_MAX_CHILDREN — cheap
+	// regardless of total workspace size).
 	file_tree_open(&e.file_tree)
 
 	name := path_basename(target)

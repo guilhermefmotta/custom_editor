@@ -201,7 +201,7 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 			cmd_str := strings.concatenate({
 				`winget install --silent EclipseAdoptium.Temurin.21.JDK; ` +
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
-				`$url="https://www.eclipse.org/downloads/download.php?file=/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
+				`$url="https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$DEST\jdtls.tar.gz"; ` +
 				`tar -xzf "$DEST\jdtls.tar.gz" -C "$DEST"; Remove-Item "$DEST\jdtls.tar.gz"; ` +
 				`$jar=(Get-ChildItem "$DEST\plugins\org.eclipse.equinox.launcher_*.jar" | Select-Object -First 1).FullName; ` +
@@ -213,7 +213,7 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 		} else {
 			cmd_str := strings.concatenate({
 				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
-				`URL="https://www.eclipse.org/downloads/download.php?file=/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
+				`URL="https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
 				`curl -fsSL "$URL" -o "$DEST/jdtls.tar.gz"; ` +
 				`tar -xzf "$DEST/jdtls.tar.gz" -C "$DEST"; rm -f "$DEST/jdtls.tar.gz"; ` +
 				`CONF=config_linux; [ "$(uname -s)" = "Darwin" ] && CONF=config_mac; ` +
@@ -338,14 +338,23 @@ _lsp_find_root :: proc(e: ^Editor) -> string {
 
 	markers := [?]string{"ols.json","Cargo.toml","go.mod","pom.xml","build.gradle",".git","package.json"}
 	dir := search
-	for dir != "" && dir != "/" {
+	best := ""
+	// Keep climbing past the first marker match, all the way up to (but not
+	// above) the opened workspace root, remembering the OUTERMOST directory
+	// that has one — a multi-module Maven/Gradle project has a pom.xml in
+	// every submodule, and stopping at the first (innermost) one picks the
+	// submodule instead of the true reactor root the LSP needs to resolve
+	// inter-module dependencies. len(dir) >= len(cwd) bounds the climb to
+	// stay within the workspace the user actually opened.
+	for dir != "" && dir != "/" && len(dir) >= len(cwd) {
 		for marker in markers {
-			if _file_exists(fmt.tprintf("%s/%s", dir, marker)) { return dir }
+			if _file_exists(fmt.tprintf("%s/%s", dir, marker)) { best = dir; break }
 		}
 		parent := _path_dirname(dir)
 		if parent == dir || parent == "" { break } // guard against infinite loop
 		dir = parent
 	}
+	if best != "" { return best }
 	return search // file's dir (or CWD) if no marker found
 }
 
