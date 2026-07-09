@@ -29,6 +29,11 @@ File_Tree :: struct {
 	filter:  [dynamic]u8,          // recursive fuzzy-filter text
 	filter_sel_all: bool,
 	results: [dynamic]File_Tree_Node, // flat recursive matches; populated when len(filter) > 0
+
+	search_walker:  os.Walker, // incremental recursive-filter scan, see _ft_search_step
+	search_active:  bool,
+	search_needle:  string,    // heap — lowercased, owned by the walker's lifetime
+	search_visited: int,
 }
 
 FT_SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
@@ -67,6 +72,8 @@ file_tree_destroy :: proc(ft: ^File_Tree) {
 	delete(ft.filter)
 	for r in ft.results { delete(r.name); delete(r.path) }
 	delete(ft.results)
+	if ft.search_active { os.walker_destroy(&ft.search_walker) }
+	delete(ft.search_needle)
 	ft^ = {}
 }
 
@@ -81,6 +88,10 @@ file_tree_open :: proc(ft: ^File_Tree) {
 	clear(&ft.filter)
 	for r in ft.results { delete(r.name); delete(r.path) }
 	clear(&ft.results)
+	if ft.search_active { os.walker_destroy(&ft.search_walker) }
+	ft.search_active = false
+	delete(ft.search_needle)
+	ft.search_needle = ""
 	for n in ft.nodes { delete(n.name); delete(n.path) }
 	clear(&ft.nodes)
 	_ft_load_children(ft, ".", 0, 0)
@@ -219,47 +230,56 @@ _ft_toggle_dir :: proc(ft: ^File_Tree, idx: int) {
 }
 
 // ---- Recursive fuzzy filter ----
+//
+// Walking a huge workspace synchronously on every keystroke used to freeze
+// the editor while typing in the filter box. The walker is now kept alive
+// across frames and stepped a bounded number of entries per frame from
+// _ft_search_step (called every frame the tree is open and searching), so
+// the cost is spread out instead of landing in one blocking call.
 
 FT_SEARCH_MAX_RESULTS :: 300
 FT_SEARCH_MAX_VISITED :: 20000
+FT_SEARCH_BUDGET      :: 3000 // entries inspected per frame
 
-_ft_search_walk :: proc(ft: ^File_Tree, dir_path: string, needle: string, visited: ^int) {
-	if len(ft.results) >= FT_SEARCH_MAX_RESULTS { return }
-	if visited^ >= FT_SEARCH_MAX_VISITED { return }
+_ft_search_step :: proc(ft: ^File_Tree) {
+	if !ft.search_active { return }
 
-	f, ferr := os.open(dir_path)
-	if ferr != nil { return }
-	defer os.close(f)
+	for n := 0; n < FT_SEARCH_BUDGET; n += 1 {
+		if len(ft.results) >= FT_SEARCH_MAX_RESULTS || ft.search_visited >= FT_SEARCH_MAX_VISITED {
+			_ft_search_finish(ft)
+			return
+		}
 
-	it := os.read_directory_iterator_create(f)
-	defer os.read_directory_iterator_destroy(&it)
+		info, ok := os.walker_walk(&ft.search_walker)
+		if !ok {
+			_ft_search_finish(ft)
+			return
+		}
+		ft.search_visited += 1
 
-	for {
-		if len(ft.results) >= FT_SEARCH_MAX_RESULTS { break }
-		visited^ += 1
-		if visited^ >= FT_SEARCH_MAX_VISITED { break }
-
-		fi, _, ok := os.read_directory_iterator(&it)
-		if !ok { break }
-
-		name   := fi.name
-		is_dir := fi.type == .Directory
-		if _ft_is_skipped(name) { continue }
-
-		full, _ := filepath.join({dir_path, name}, context.temp_allocator)
+		name   := info.name
+		is_dir := info.type == .Directory
+		if _ft_is_skipped(name) {
+			if is_dir { os.walker_skip_dir(&ft.search_walker) }
+			continue
+		}
 
 		name_low := strings.to_lower(name, context.temp_allocator)
-		if strings.contains(name_low, needle) {
+		if strings.contains(name_low, ft.search_needle) {
 			append(&ft.results, File_Tree_Node{
 				name   = strings.clone(name),
-				path   = strings.clone(full),
+				path   = strings.clone(info.fullpath),
 				is_dir = is_dir,
 			})
 		}
-		if is_dir {
-			_ft_search_walk(ft, full, needle, visited)
-		}
 	}
+}
+
+@(private="file")
+_ft_search_finish :: proc(ft: ^File_Tree) {
+	ft.search_active = false
+	os.walker_destroy(&ft.search_walker)
+	_ft_sort_results(ft)
 }
 
 _ft_sort_results :: proc(ft: ^File_Tree) {
@@ -276,12 +296,16 @@ _ft_rebuild_search :: proc(ft: ^File_Tree) {
 	clear(&ft.results)
 	ft.selected = 0
 	ft.scroll   = 0
+	if ft.search_active { os.walker_destroy(&ft.search_walker) }
+	ft.search_active = false
+	delete(ft.search_needle)
+	ft.search_needle = ""
 	if len(ft.filter) == 0 { return }
 
-	needle  := strings.to_lower(string(ft.filter[:]), context.temp_allocator)
-	visited := 0
-	_ft_search_walk(ft, ".", needle, &visited)
-	_ft_sort_results(ft)
+	ft.search_needle  = strings.clone(strings.to_lower(string(ft.filter[:]), context.temp_allocator))
+	ft.search_visited = 0
+	os.walker_init(&ft.search_walker, ".")
+	ft.search_active = true
 }
 
 // ---- Input ----
@@ -475,6 +499,8 @@ file_tree_delete_input :: proc(ft: ^File_Tree, e: ^Editor) {
 render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	if !ft.open { return }
 
+	_ft_search_step(ft)
+
 	sw := f32(rl.GetScreenWidth())
 	sh := f32(rl.GetScreenHeight())
 
@@ -561,7 +587,8 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 
 	if searching {
 		if total == 0 {
-			rl.DrawTextEx(font, "  no matches", {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			msg := "  searching..." if ft.search_active else "  no matches"
+			rl.DrawTextEx(font, to_cstring(msg), {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 		}
 		for vi in 0..<vis_count {
 			ri := ft.scroll + vi
@@ -628,7 +655,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		if ft.status_msg != "" {
 			footer = ft.status_msg
 		} else if searching {
-			footer = "↑↓ navigate  Enter open  Esc clear filter"
+			footer = fmt.tprintf("Searching... %d found", total) if ft.search_active else "↑↓ navigate  Enter open  Esc clear filter"
 		} else {
 			footer = "Enter open  ←→ expand  Ctrl+R rename  Ctrl+D del  Ctrl+N dir  Esc"
 		}

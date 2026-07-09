@@ -75,6 +75,14 @@ Palette :: struct {
 	marks:        ^[dynamic]Mark, // pointer into Editor.marks
 	locations:    [dynamic]Location_Item, // .Locations and .Workspace_Symbols results
 	loc_title:    string,                 // heap — e.g. "12 references"
+
+	scan_walker: os.Walker, // incremental file-list scan, see palette_scan_step
+	scan_active: bool,
+
+	// .Search only — which files are expanded (Ctrl+Enter toggles), showing
+	// their full match lines inline accordion-style instead of collapsed
+	// into a single header row. Absent/false = collapsed.
+	search_expanded: map[string]bool,
 }
 
 // ---- Lifecycle ----
@@ -87,6 +95,7 @@ palette_init :: proc() -> Palette {
 	p.cmds      = make([dynamic]Command)
 	p.locations = make([dynamic]Location_Item)
 	p.search    = search_state_init()
+	p.search_expanded = make(map[string]bool)
 
 	append(&p.cmds,
 		Command{"Open Workspace",            "Open a folder and set it as the workspace root",    cmd_open_workspace, nil},
@@ -135,6 +144,8 @@ palette_init :: proc() -> Palette {
 
 palette_destroy :: proc(p: ^Palette) {
 	search_state_destroy(&p.search)
+	if p.scan_active { os.walker_destroy(&p.scan_walker) }
+	delete(p.search_expanded)
 	delete(p.query)
 	delete(p.cmds)
 	for f in p.files  { delete(f) }; delete(p.files)
@@ -241,6 +252,9 @@ palette_open_keymap_modes :: proc(p: ^Palette, e: ^Editor) {
 // ---- Input ----
 
 PALETTE_MAX_VIS :: 8
+// Search rows are single-line/compact — more fit on screen than the
+// standard two-line row height PALETTE_MAX_VIS assumes.
+PALETTE_SEARCH_MAX_VIS :: 18
 
 palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 	// Advance search / workspace-symbol debounce timer
@@ -258,6 +272,27 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 
 	if rl.IsKeyPressed(.ESCAPE) { p.sel_all = false; palette_close(p); return }
 
+	// Ctrl+Enter toggles the selected result's file group open/closed —
+	// accordion style, expanding to show every match in that file as its
+	// own full-line row. Enter below is unchanged: it always jumps straight
+	// to a location and closes the palette, whether that's a header row
+	// (jumps to the file's first match) or an individual match row.
+	if p.mode == .Search && ctrl() && rl.IsKeyPressed(.ENTER) {
+		sync.mutex_lock(&p.search.mu)
+		rows := _search_build_rows(p)
+		if p.selected >= 0 && p.selected < len(rows) {
+			hdr_idx := p.selected
+			for hdr_idx > 0 && !rows[hdr_idx].is_header { hdr_idx -= 1 }
+			file := rows[hdr_idx].file
+			p.search_expanded[file] = !p.search_expanded[file]
+			p.selected = hdr_idx
+		}
+		sync.mutex_unlock(&p.search.mu)
+		if p.selected < p.scroll { p.scroll = p.selected }
+		if p.selected >= p.scroll + PALETTE_SEARCH_MAX_VIS { p.scroll = p.selected - PALETTE_SEARCH_MAX_VIS + 1 }
+		return
+	}
+
 	if key_rep(.UP) {
 		p.sel_all = false
 		if p.selected > 0 {
@@ -270,10 +305,11 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 	if key_rep(.DOWN) {
 		p.sel_all = false
 		n := palette_count(p, e, string(p.query[:]))
+		max_vis := PALETTE_SEARCH_MAX_VIS if p.mode == .Search else PALETTE_MAX_VIS
 		if p.selected < n - 1 {
 			p.selected += 1
-			if p.selected >= p.scroll + PALETTE_MAX_VIS {
-				p.scroll = p.selected - PALETTE_MAX_VIS + 1
+			if p.selected >= p.scroll + max_vis {
+				p.scroll = p.selected - max_vis + 1
 			}
 		}
 		return
@@ -308,6 +344,7 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 
 	if text_input_handle(&p.query, &p.sel_all) {
 		palette_reset_selection(p)
+		if p.mode == .Search { clear(&p.search_expanded) }
 		if p.mode == .Search || p.mode == .Workspace_Symbols { p.search_timer = 0.35 }
 	}
 }
@@ -369,7 +406,8 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 
 	case .Search:
 		// Enter with no query: start search
-		// Enter with results: jump to selected
+		// Enter with results: jump to selected — a header row jumps to
+		// that file's first match (Search_Row.result_idx points there).
 		sync.mutex_lock(&p.search.mu)
 		n := len(p.search.results)
 		sync.mutex_unlock(&p.search.mu)
@@ -379,12 +417,13 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 			search_start(&p.search, q)
 			return
 		}
-		// Jump to selected result
+
 		sync.mutex_lock(&p.search.mu)
+		rows := _search_build_rows(p)
 		sel := p.selected
 		if sel < 0 { sel = 0 }
-		if sel >= len(p.search.results) { sel = len(p.search.results) - 1 }
-		r := p.search.results[sel]
+		if sel >= len(rows) { sel = len(rows) - 1 }
+		r := p.search.results[rows[sel].result_idx]
 		sync.mutex_unlock(&p.search.mu)
 
 		search_jump(e, &r)
@@ -483,34 +522,58 @@ search_jump :: proc(e: ^Editor, r: ^Search_Result) {
 }
 
 // ---- File scanner ----
+//
+// Walking a huge workspace (tens of GB / hundreds of thousands of files) in
+// one shot blocks the main thread for as long as the walk takes — that was
+// the "Find File freezes the editor" bug. Instead the walker is kept alive
+// across frames and stepped a bounded number of entries per frame from
+// palette_scan_step (called every frame the palette is open), so the cost
+// is spread out and the UI stays responsive while results stream in.
 
-// Hard cap on a single synchronous walk (this runs on the main thread,
-// blocking a frame) — without it, a huge workspace (tens of GB / hundreds of
-// thousands of files) freezes the editor for as long as the walk takes.
-// 50k files is already far more than "Find File" is usable with interactively.
+// Hard cap on total files collected — "Find File" isn't usable with more
+// than this many results anyway, and it bounds worst-case scan time.
 PALETTE_SCAN_MAX_FILES :: 50_000
+
+// Entries inspected per frame. Cheap (stat/readdir, no file content), so
+// this is comfortably under a millisecond even on a slow disk.
+PALETTE_SCAN_BUDGET :: 3000
+
+@(private="file")
+_palette_scan_skip := [?]string{".git", "node_modules", "target", "__pycache__",
+                                 ".cache", "build", "dist", ".next", "vendor"}
 
 palette_scan_files :: proc(p: ^Palette) {
 	for f in p.files { delete(f) }
 	clear(&p.files)
+	if p.scan_active { os.walker_destroy(&p.scan_walker) }
 
-	SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
-	                  ".cache", "build", "dist", ".next", "vendor"}
+	os.walker_init(&p.scan_walker, ".")
+	p.scan_active = true
+}
 
-	w: os.Walker
-	os.walker_init(&w, ".")
-	defer os.walker_destroy(&w)
+palette_scan_step :: proc(p: ^Palette) {
+	if !p.scan_active { return }
 
-	for len(p.files) < PALETTE_SCAN_MAX_FILES {
-		info, ok := os.walker_walk(&w)
-		if !ok { break }
+	for n := 0; n < PALETTE_SCAN_BUDGET; n += 1 {
+		if len(p.files) >= PALETTE_SCAN_MAX_FILES {
+			p.scan_active = false
+			os.walker_destroy(&p.scan_walker)
+			return
+		}
+
+		info, ok := os.walker_walk(&p.scan_walker)
+		if !ok {
+			p.scan_active = false
+			os.walker_destroy(&p.scan_walker)
+			return
+		}
 
 		if info.type == .Directory {
 			skip := len(info.name) > 0 && info.name[0] == '.'
 			if !skip {
-				for s in SKIP { if info.name == s { skip = true; break } }
+				for s in _palette_scan_skip { if info.name == s { skip = true; break } }
 			}
-			if skip { os.walker_skip_dir(&w) }
+			if skip { os.walker_skip_dir(&p.scan_walker) }
 		} else {
 			append(&p.files, strings.clone(info.fullpath))
 		}
@@ -541,7 +604,8 @@ palette_count :: proc(p: ^Palette, e: ^Editor, q: string) -> int {
 		return n
 	case .Search:
 		sync.mutex_lock(&p.search.mu)
-		n := len(p.search.results)
+		rows := _search_build_rows(p)
+		n := len(rows)
 		sync.mutex_unlock(&p.search.mu)
 		return n
 	case .Marks:
@@ -561,10 +625,110 @@ palette_count :: proc(p: ^Palette, e: ^Editor, q: string) -> int {
 	return 0
 }
 
+// Draws `text` clipped to (right_edge - pad), highlighting the first
+// case-insensitive occurrence of `needle` in `hl_col`. Falls back to a
+// plain dlg_text draw when there's no match (or no needle).
+_dlg_text_hl :: proc(font: rl.Font, text: string, needle: string, tx, ty, size, spacing: f32, base_col, hl_col: rl.Color, right_edge, pad: f32) {
+	max_w := right_edge - tx - pad
+	s := text_clip(font, text, max_w, size, spacing)
+	if s == "" { return }
+
+	idx := -1
+	if needle != "" {
+		low_s := strings.to_lower(s, context.temp_allocator)
+		low_n := strings.to_lower(needle, context.temp_allocator)
+		idx = strings.index(low_s, low_n)
+	}
+	if idx < 0 {
+		rl.DrawTextEx(font, to_cstring(s), {tx, ty}, size, spacing, base_col)
+		return
+	}
+
+	pre  := s[:idx]
+	mid  := s[idx:idx + len(needle)]
+	post := s[idx + len(needle):]
+	x := tx
+	if pre != "" {
+		rl.DrawTextEx(font, to_cstring(pre), {x, ty}, size, spacing, base_col)
+		x += rl.MeasureTextEx(font, to_cstring(pre), size, spacing).x
+	}
+	if mid != "" {
+		mw := rl.MeasureTextEx(font, to_cstring(mid), size, spacing).x
+		rl.DrawRectangleV({x - 1, ty - 1}, {mw + 2, size + 2}, rl.Color{hl_col.r, hl_col.g, hl_col.b, 55})
+		rl.DrawTextEx(font, to_cstring(mid), {x, ty}, size, spacing, hl_col)
+		x += mw
+	}
+	if post != "" {
+		rl.DrawTextEx(font, to_cstring(post), {x, ty}, size, spacing, base_col)
+	}
+}
+
+// Reads the exact (1-based, untrimmed — preserves original indentation)
+// content of one line from `path`, for an expanded Search accordion row.
+// Search_Result.ctx is whitespace-trimmed for compact display, which loses
+// indentation — this re-reads from disk instead. Allocates from
+// temp_allocator; result is only valid for the current frame.
+_search_read_line :: proc(path: string, line_no: int) -> (line: string, ok: bool) {
+	data, err := os.read_entire_file(path, context.temp_allocator)
+	if err != nil { return "", false }
+	if len(data) > 5 * 1024 * 1024 { return "", false } // too large to preview inline
+
+	text := string(data)
+	ln    := 1
+	start := 0
+	for i := 0; i <= len(text); i += 1 {
+		at_end := i == len(text)
+		if at_end || text[i] == '\n' {
+			if ln == line_no {
+				seg := text[start:i]
+				if len(seg) > 0 && seg[len(seg)-1] == '\r' { seg = seg[:len(seg)-1] }
+				return seg, true
+			}
+			if ln >= line_no { break }
+			start = i + 1
+			ln += 1
+		}
+	}
+	return "", false
+}
+
+// Search_Row is the flattened, collapse-aware row list for .Search mode:
+// one header row per file, plus (only for files the user has expanded via
+// Ctrl+Enter) one row per match in that file. Caller must hold
+// p.search.mu for the duration of use — .file/.result_idx reference
+// p.search.results, which the search worker thread can append to.
+Search_Row :: struct {
+	file:       string,
+	is_header:  bool,
+	result_idx: int, // first match of the file if is_header, else this row's own match
+	group_cnt:  int, // valid when is_header
+}
+
+_search_build_rows :: proc(p: ^Palette, allocator := context.temp_allocator) -> [dynamic]Search_Row {
+	rows := make([dynamic]Search_Row, allocator)
+	i := 0
+	n := len(p.search.results)
+	for i < n {
+		file := p.search.results[i].file
+		j := i
+		for j < n && p.search.results[j].file == file { j += 1 }
+		append(&rows, Search_Row{file = file, is_header = true, result_idx = i, group_cnt = j - i})
+		if p.search_expanded[file] {
+			for k := i; k < j; k += 1 {
+				append(&rows, Search_Row{file = file, is_header = false, result_idx = k})
+			}
+		}
+		i = j
+	}
+	return rows
+}
+
 // ---- Rendering ----
 
 palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	if !p.open { return }
+
+	if p.mode == .Files { palette_scan_step(p) }
 
 	sw := f32(rl.GetScreenWidth())
 	sh := f32(rl.GetScreenHeight())
@@ -574,9 +738,13 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	ch  := ref.y + LINE_SPACING
 
 	PANEL_W  :: f32(640)
-	ITEM_H   :: f32(50)
+	// Search results are single-line, denser rows (JetBrains-style grouped
+	// list) so more matches fit on screen at once; every other mode keeps
+	// the original two-line row.
+	ITEM_H   := f32(26) if p.mode == .Search else f32(50)
 	QUERY_H  :: f32(48)
 	FOOTER_H :: f32(30)
+	max_vis  := PALETTE_SEARCH_MAX_VIS if p.mode == .Search else PALETTE_MAX_VIS
 
 	OVERLAY :: rl.Color{0, 0, 0, 160}
 	SHADOW  :: rl.Color{0, 0, 0, 80}
@@ -597,7 +765,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 
 	q       := string(p.query[:])
 	n_items := palette_count(p, e, q)
-	vis     := min(n_items, PALETTE_MAX_VIS)
+	vis     := min(n_items, max_vis)
 	panel_h := QUERY_H + f32(vis)*ITEM_H + FOOTER_H
 
 	panel_x := (sw - PANEL_W) * 0.5
@@ -654,7 +822,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			if !pal_match(cmd.name, q) { continue }
 			if cmd.available != nil && !cmd.available(e) { continue }
 			if data_i < p.scroll { data_i += 1; continue }
-			if draw_i >= PALETTE_MAX_VIS { break }
+			if draw_i >= max_vis { break }
 			iy := item_y + f32(draw_i) * ITEM_H
 			if data_i == p.selected {
 				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
@@ -671,7 +839,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			li := p.locations[data_i]
 			if p.mode == .Locations && !pal_match(li.label, q) { data_i += 1; continue }
 			if data_i < p.scroll { data_i += 1; continue }
-			if draw_i >= PALETTE_MAX_VIS { break }
+			if draw_i >= max_vis { break }
 
 			iy := item_y + f32(draw_i) * ITEM_H
 			if data_i == p.selected {
@@ -695,7 +863,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		for f in p.files {
 			if !pal_match(f, q) { continue }
 			if data_i < p.scroll { data_i += 1; continue }
-			if draw_i >= PALETTE_MAX_VIS { break }
+			if draw_i >= max_vis { break }
 			iy    := item_y + f32(draw_i) * ITEM_H
 			bname := path_basename(f)
 			rel   := path_rel(f, p.cwd)
@@ -710,30 +878,54 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		}
 
 	case .Search:
+		// Accordion, JetBrains-style: each file starts as a collapsed
+		// header row (path:line (count), project name on the right, +/-
+		// fold indicator). Ctrl+Enter expands it into one full-line row per
+		// match underneath, indented, read fresh from disk to preserve
+		// original indentation (Search_Result.ctx is whitespace-trimmed,
+		// fine for the collapsed view but not for an expanded code look).
+		proj := path_basename(p.cwd)
 		sync.mutex_lock(&p.search.mu)
-		for data_i < len(p.search.results) {
-			if data_i < p.scroll { data_i += 1; continue }
-			if draw_i >= PALETTE_MAX_VIS { break }
+		rows := _search_build_rows(p)
+		for ri := 0; ri < len(rows); ri += 1 {
+			if ri < p.scroll { continue }
+			if draw_i >= max_vis { break }
 
-			r  := p.search.results[data_i]
+			row := rows[ri]
 			iy := item_y + f32(draw_i) * ITEM_H
+			ty := iy + (ITEM_H - ch) * 0.5
 
-			if data_i == p.selected {
+			if ri == p.selected {
 				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
 				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
 			}
 
-			// Top row: filename + line:col
-			bname   := path_basename(r.file)
-			rel     := path_rel(r.file, p.cwd)
-			loc_str := fmt.tprintf(":%d:%d", r.line, r.col)
-			top_str := fmt.tprintf("%s  %s%s", bname, rel, loc_str)
-			dlg_text(font, top_str, panel_x + 16, iy + 5, FONT_SIZE - 2, CHAR_SPACING, MATCH_COL, txt_max, 0)
+			row_txt_max := txt_max
+			if row.is_header {
+				expanded := p.search_expanded[row.file]
+				fold := "-" if expanded else "+"
+				rl.DrawTextEx(font, to_cstring(fold), {panel_x + 12, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 
-			// Bottom row: context
-			dlg_text(font, r.ctx, panel_x + 16, iy + 5 + ch - 2, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
+				if proj != "" {
+					pw := rl.MeasureTextEx(font, to_cstring(proj), FONT_SIZE - 3, CHAR_SPACING).x
+					rl.DrawTextEx(font, to_cstring(proj), {panel_x + PANEL_W - 16 - pw, ty + 1}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+					row_txt_max = txt_max - pw - 12
+				}
+				r0    := p.search.results[row.result_idx]
+				rel   := path_rel(row.file, p.cwd)
+				label := fmt.tprintf("%s:%d  (%d)", rel, r0.line, row.group_cnt)
+				dlg_text(font, label, panel_x + 26, ty, FONT_SIZE - 2, CHAR_SPACING, MATCH_COL, row_txt_max, 0)
+			} else {
+				r := p.search.results[row.result_idx]
+				num_str := fmt.tprintf("%d", r.line)
+				dlg_text(font, num_str, panel_x + 30, ty, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, row_txt_max, 0)
+				nx := panel_x + 30 + rl.MeasureTextEx(font, to_cstring(num_str), FONT_SIZE - 2, CHAR_SPACING).x + 12
+				line_txt, lok := _search_read_line(r.file, r.line)
+				if !lok { line_txt = r.ctx } // fall back to the trimmed snippet if the file vanished/changed
+				_dlg_text_hl(font, line_txt, q, nx, ty, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, ACCENT, row_txt_max, 0)
+			}
 
-			draw_i += 1; data_i += 1
+			draw_i += 1
 		}
 		sync.mutex_unlock(&p.search.mu)
 
@@ -743,7 +935,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			for m in p.marks^ {
 				if !_mark_match(m, q) { continue }
 				if data_i < p.scroll { data_i += 1; continue }
-				if draw_i >= PALETTE_MAX_VIS { break }
+				if draw_i >= max_vis { break }
 
 				iy := item_y + f32(draw_i) * ITEM_H
 				if data_i == p.selected {
@@ -767,7 +959,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		for name in p.themes {
 			if !pal_match(name, q) { continue }
 			if data_i < p.scroll { data_i += 1; continue }
-			if draw_i >= PALETTE_MAX_VIS { break }
+			if draw_i >= max_vis { break }
 
 			iy := item_y + f32(draw_i) * ITEM_H
 			if data_i == p.selected {
@@ -806,7 +998,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		for name in keymap_choices {
 			if !pal_match(name, q) { continue }
 			if data_i < p.scroll { data_i += 1; continue }
-			if draw_i >= PALETTE_MAX_VIS { break }
+			if draw_i >= max_vis { break }
 
 			iy := item_y + f32(draw_i) * ITEM_H
 			if data_i == p.selected {
@@ -833,7 +1025,11 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	footer_text: string
 	switch p.mode {
 	case .Commands, .Files:
-		footer_text = "up/down navigate    enter select    Esc close"
+		if p.mode == .Files && p.scan_active {
+			footer_text = fmt.tprintf("Scanning... %d files found so far", len(p.files))
+		} else {
+			footer_text = "up/down navigate    enter select    Esc close"
+		}
 	case .Search:
 		sync.mutex_lock(&p.search.mu)
 		phase   := p.search.phase
@@ -844,7 +1040,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		switch phase {
 		case .Idle:    footer_text = "Type query and press Enter to search"
 		case .Running: footer_text = fmt.tprintf("Searching... %d files  |  %d results so far", n_files, n_res)
-		case .Done:    footer_text = fmt.tprintf("%d results in %d files  |  Enter to jump  |  Esc to close", n_res, n_files)
+		case .Done:    footer_text = fmt.tprintf("%d results in %d files  |  Enter jump  |  Ctrl+Enter expand  |  Esc close", n_res, n_files)
 		}
 	case .Marks:
 		n_m := 0
@@ -900,6 +1096,7 @@ cmd_search_workspace :: proc(e: ^Editor, p: ^Palette) {
 	p.scroll       = 0
 	p.search_timer = 0
 	p.sel_all      = false
+	clear(&p.search_expanded)
 	clear(&p.query)
 	_prefill_from_selection(p, e)
 	q := string(p.query[:])
