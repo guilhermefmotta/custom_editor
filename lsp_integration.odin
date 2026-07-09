@@ -67,7 +67,7 @@ _register_lsp_from_config :: proc(e: ^Editor) {
 		for a, i in srv.args { cmd[i+1] = strings.clone(a) }
 
 		// Look up auto-install command for known server IDs
-		inst_cmd, inst_label := _install_cmd_for_id(srv.id)
+		inst_cmd, inst_label := _install_cmd_for_id(srv.id, srv.install_url)
 
 		// Transfer ownership of cmd and exts backing arrays to lsp manager
 		lsp.lsp_manager_register(&e.lsp_mgr, lsp.Server_Config{
@@ -91,7 +91,13 @@ _register_lsp_from_config :: proc(e: ^Editor) {
 // locations, or a system package manager. lsp.manager resolves the
 // produced binary by absolute path (see server_binary_exists), so no
 // PATH mutation is ever required.
-_install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
+// install_url, when non-empty (from editor.toml's [[lsp.servers]] entry),
+// overrides the built-in release-asset download URL for the servers that
+// fetch one (jdtls, lua-language-server, zls, lemminx, rust-analyzer) — lets
+// you pin a version or point at a mirror without editing source. Overriding
+// replaces the OS/arch auto-detection for that server too, since a URL you
+// supply is assumed to already be right for your platform.
+_install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, label: string) {
 	_s :: proc(strs: []string) -> []string {
 		out := make([]string, len(strs))
 		for s, i in strs { out[i] = strings.clone(s) }
@@ -146,11 +152,14 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 			       strings.clone("Installing gopls into editor-local dir...")
 		}
 	case "rust-analyzer":
+		// install_url is a template containing $TARGET; each OS branch sets
+		// $TARGET itself (detection glue, not a URL) before expanding it.
 		dest := lsp.lsp_home_dir("rust-analyzer")
 		when ODIN_OS == .Windows {
 			cmd_str := strings.concatenate({
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
-				`$url="https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-pc-windows-msvc.gz"; ` +
+				`$TARGET="x86_64-pc-windows-msvc"; ` +
+				`$url="`, install_url, `"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$DEST\ra.gz"; ` +
 				`$in=New-Object System.IO.FileStream("$DEST\ra.gz",[IO.FileMode]::Open); ` +
 				`$out=New-Object System.IO.FileStream("$DEST\rust-analyzer.exe",[IO.FileMode]::Create); ` +
@@ -168,7 +177,7 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 				`else ` +
 				`  if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then TARGET=aarch64-unknown-linux-gnu; else TARGET=x86_64-unknown-linux-gnu; fi; ` +
 				`fi; ` +
-				`URL="https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-$TARGET.gz"; ` +
+				`URL="`, install_url, `"; ` +
 				`curl -fsSL "$URL" | gunzip -c > "$DEST/rust-analyzer"; ` +
 				`chmod +x "$DEST/rust-analyzer"; echo "Installed: $DEST/rust-analyzer"`,
 			})
@@ -201,7 +210,7 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 			cmd_str := strings.concatenate({
 				`winget install --silent EclipseAdoptium.Temurin.21.JDK; ` +
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
-				`$url="https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
+				`$url="`, install_url, `"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$DEST\jdtls.tar.gz"; ` +
 				`tar -xzf "$DEST\jdtls.tar.gz" -C "$DEST"; Remove-Item "$DEST\jdtls.tar.gz"; ` +
 				`$jar=(Get-ChildItem "$DEST\plugins\org.eclipse.equinox.launcher_*.jar" | Select-Object -First 1).FullName; ` +
@@ -213,7 +222,7 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 		} else {
 			cmd_str := strings.concatenate({
 				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
-				`URL="https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"; ` +
+				`URL="`, install_url, `"; ` +
 				`curl -fsSL "$URL" -o "$DEST/jdtls.tar.gz"; ` +
 				`tar -xzf "$DEST/jdtls.tar.gz" -C "$DEST"; rm -f "$DEST/jdtls.tar.gz"; ` +
 				`CONF=config_linux; [ "$(uname -s)" = "Darwin" ] && CONF=config_mac; ` +
@@ -227,11 +236,14 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 			       strings.clone("Installing jdtls into editor-local dir (requires Java 17+)...")
 		}
 	case "lua-language-server":
+		// install_url is a template containing $PLAT/$ARCH/$EXT; each OS
+		// branch sets those vars itself before expanding the template.
 		dest := lsp.lsp_home_dir("lua-language-server")
 		when ODIN_OS == .Windows {
 			cmd_str := strings.concatenate({
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
-				`$url="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-win32-x64.zip"; ` +
+				`$PLAT="win32"; $ARCH="x64"; $EXT="zip"; ` +
+				`$url="`, install_url, `"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$DEST\luals.zip"; ` +
 				`Expand-Archive -Force "$DEST\luals.zip" "$DEST\extracted"; ` +
 				`Copy-Item "$DEST\extracted\bin\lua-language-server.exe" "$DEST\lua-language-server.exe" -Force`,
@@ -244,7 +256,8 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 				`OS=$(uname -s); ARCH=$(uname -m); ` +
 				`if [ "$OS" = "Darwin" ]; then PLAT=darwin; else PLAT=linux; fi; ` +
 				`if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then ARCH=arm64; else ARCH=x64; fi; ` +
-				`URL="https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-$PLAT-$ARCH.tar.gz"; ` +
+				`EXT=tar.gz; ` +
+				`URL="`, install_url, `"; ` +
 				`TMP=$(mktemp -d); curl -fsSL "$URL" | tar -xz -C "$TMP"; ` +
 				`cp "$TMP/bin/lua-language-server" "$DEST/lua-language-server"; ` +
 				`chmod +x "$DEST/lua-language-server"; rm -rf "$TMP"; echo "Installed: $DEST/lua-language-server"`,
@@ -253,11 +266,14 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 			       strings.clone("Downloading lua-language-server into editor-local dir...")
 		}
 	case "zls":
+		// install_url is a template containing $ARCH/$OS/$EXT; each OS
+		// branch sets those vars itself before expanding the template.
 		dest := lsp.lsp_home_dir("zls")
 		when ODIN_OS == .Windows {
 			cmd_str := strings.concatenate({
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
-				`$url="https://github.com/zigtools/zls/releases/latest/download/zls-x86_64-windows.zip"; ` +
+				`$ARCH="x86_64"; $OS="windows"; $EXT="zip"; ` +
+				`$url="`, install_url, `"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$DEST\zls.zip"; ` +
 				`Expand-Archive -Force "$DEST\zls.zip" "$DEST\extracted"; ` +
 				`Copy-Item "$DEST\extracted\zls.exe" "$DEST\zls.exe" -Force`,
@@ -269,7 +285,8 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
 				`ARCH=$(uname -m); OS=$(uname -s | tr A-Z a-z); ` +
 				`if [ "$OS" = "darwin" ]; then OS=macos; fi; ` +
-				`URL="https://github.com/zigtools/zls/releases/latest/download/zls-$ARCH-$OS.tar.xz"; ` +
+				`EXT=tar.xz; ` +
+				`URL="`, install_url, `"; ` +
 				`curl -fsSL "$URL" | tar -xJ -C "$DEST" zls; ` +
 				`chmod +x "$DEST/zls"; echo "Installed: $DEST/zls"`,
 			})
@@ -277,11 +294,14 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 			       strings.clone("Downloading zls into editor-local dir...")
 		}
 	case "lemminx":
+		// install_url is a template containing $SUFFIX/$EXT; each OS branch
+		// sets those vars itself before expanding the template.
 		dest := lsp.lsp_home_dir("lemminx")
 		when ODIN_OS == .Windows {
 			cmd_str := strings.concatenate({
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
-				`$url="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-win32.exe"; ` +
+				`$SUFFIX="win32"; $EXT=".exe"; ` +
+				`$url="`, install_url, `"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$DEST\lemminx.exe"`,
 			})
 			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
@@ -290,7 +310,8 @@ _install_cmd_for_id :: proc(id: string) -> (cmd: []string, label: string) {
 			cmd_str := strings.concatenate({
 				`set -e; DEST="`, dest, `"; mkdir -p "$DEST"; ` +
 				`OS=$(uname -s); if [ "$OS" = "Darwin" ]; then SUFFIX=osx; else SUFFIX=linux; fi; ` +
-				`URL="https://github.com/eclipse/lemminx/releases/latest/download/lemminx-$SUFFIX"; ` +
+				`EXT=""; ` +
+				`URL="`, install_url, `"; ` +
 				`curl -fsSL "$URL" -o "$DEST/lemminx" || wget -qO "$DEST/lemminx" "$URL"; ` +
 				`chmod +x "$DEST/lemminx"; echo "Installed: $DEST/lemminx"`,
 			})

@@ -294,6 +294,7 @@ _parse_lsp_server :: proc(t: ^TOML_Table) -> LSP_Server_Config {
 	if v, ok := toml_str(t, "name");         ok { s.name         = strings.clone(v) }
 	if v, ok := toml_str(t, "command");      ok { s.command      = strings.clone(v) }
 	if v, ok := toml_str(t, "init_options"); ok { s.init_options = strings.clone(v) }
+	if v, ok := toml_str(t, "install_url");  ok { s.install_url  = strings.clone(v) }
 	if v, ok := toml_bool(t, "enabled");     ok { s.enabled      = v }
 	if v, ok := toml_int(t, "priority");     ok { s.priority     = int(v) }
 	if arr, ok := toml_array(t, "args");      ok { s.args      = _arr_strings(arr) }
@@ -616,7 +617,7 @@ _table_strings :: proc(t: ^TOML_Table) -> map[string]string {
 
 @(private)
 _lsp_server_destroy :: proc(s: ^LSP_Server_Config) {
-	delete(s.id); delete(s.name); delete(s.command); delete(s.init_options)
+	delete(s.id); delete(s.name); delete(s.command); delete(s.init_options); delete(s.install_url)
 	for a in s.args      { delete(a) }; delete(s.args)
 	for l in s.languages { delete(l) }; delete(s.languages)
 	for k, v in s.env    { delete(k); delete(v) }; delete(s.env)

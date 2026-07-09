@@ -252,6 +252,11 @@ LSP_Server_Config :: struct {
 	init_options: string,   // JSON string
 	enabled:      bool,
 	priority:     int,      // higher = preferred when multiple servers match
+	install_url:  string,   // optional — overrides the built-in download URL
+	                        // for servers whose auto-install fetches a release
+	                        // asset (jdtls, lua-language-server, zls, lemminx,
+	                        // rust-analyzer). Empty = use the built-in default
+	                        // for the current OS/arch.
 }
 
 LSP_Config :: struct {

@@ -20,6 +20,10 @@ when ODIN_OS != .Windows {
 }
 
 main :: proc() {
+	elog_init()
+	defer elog_close()
+	context.assertion_failure_proc = elog_assertion_failure_proc
+
 	// A dropped TCP debug-adapter connection (DAP or JDWP) makes the debug
 	// transport's write thread call write() on a socket the peer already
 	// closed. The default SIGPIPE disposition kills the whole process, not

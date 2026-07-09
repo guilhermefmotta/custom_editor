@@ -128,6 +128,14 @@ max_file_size_kb    = 5120   # files larger than this skip highlighting
 # ---------------------------------------------------------------------------
 # Language Server Protocol  — add entries for any language you need.
 # No editor source changes required.  [[lsp.servers]] is an array of tables.
+#
+# For servers with a built-in auto-installer (rust-analyzer, jdtls,
+# lua-language-server, zls, lemminx), install_url is the download URL the
+# installer fetches — editable here directly (e.g. to point at a mirror/
+# proxy, or bump past an upstream release-layout change) since the editor
+# no longer hardcodes these. Some are templates: the installer sets
+# $TARGET/$PLAT/$ARCH/$OS/$SUFFIX/$EXT for the current platform/arch
+# before expanding the URL, so keep those placeholders if you edit one.
 # ---------------------------------------------------------------------------
 
 [[lsp.servers]]
@@ -149,13 +157,14 @@ enabled   = true
 priority  = 10
 
 [[lsp.servers]]
-id        = "rust-analyzer"
-name      = "rust-analyzer"
-command   = "rust-analyzer"
-args      = []
-languages = ["rust"]
-enabled   = true
-priority  = 10
+id          = "rust-analyzer"
+name        = "rust-analyzer"
+command     = "rust-analyzer"
+args        = []
+languages   = ["rust"]
+enabled     = true
+priority    = 10
+install_url = "https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-$TARGET.gz"
 
 [[lsp.servers]]
 id        = "gopls"
@@ -194,31 +203,44 @@ enabled   = true
 priority  = 10
 
 [[lsp.servers]]
-id        = "zls"
-name      = "Zig Language Server"
-command   = "zls"
-args      = []
-languages = ["zig"]
-enabled   = true
-priority  = 10
+id          = "zls"
+name        = "Zig Language Server"
+command     = "zls"
+args        = []
+languages   = ["zig"]
+enabled     = true
+priority    = 10
+install_url = "https://github.com/zigtools/zls/releases/latest/download/zls-$ARCH-$OS.$EXT"
 
 [[lsp.servers]]
-id        = "jdtls"
-name      = "Eclipse JDT Language Server"
-command   = "jdtls"
-args      = []
-languages = ["java"]
-enabled   = true
-priority  = 10
+id          = "jdtls"
+name        = "Eclipse JDT Language Server"
+command     = "jdtls"
+args        = []
+languages   = ["java"]
+enabled     = true
+priority    = 10
+install_url = "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"
 
 [[lsp.servers]]
-id        = "lua-language-server"
-name      = "Lua Language Server"
-command   = "lua-language-server"
-args      = []
-languages = ["lua"]
-enabled   = true
-priority  = 10
+id          = "lua-language-server"
+name        = "Lua Language Server"
+command     = "lua-language-server"
+args        = []
+languages   = ["lua"]
+enabled     = true
+priority    = 10
+install_url = "https://github.com/LuaLS/lua-language-server/releases/latest/download/lua-language-server-$PLAT-$ARCH.$EXT"
+
+[[lsp.servers]]
+id          = "lemminx"
+name        = "LemMinX (XML)"
+command     = "lemminx"
+args        = []
+languages   = ["xml"]
+enabled     = false   # set true to enable XML support
+priority    = 10
+install_url = "https://github.com/eclipse/lemminx/releases/latest/download/lemminx-$SUFFIX$EXT"
 
 # ---------------------------------------------------------------------------
 # Build profiles

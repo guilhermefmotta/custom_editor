@@ -209,6 +209,10 @@ vim_handle_normal :: proc(e: ^Editor, p: ^Pane) {
 	// Ctrl+F: this editor's Find/Replace dialog, alongside real Vim's own
 	// `/` search — kept for muscle memory, doesn't replace `/`.
 	if ctrl() && rl.IsKeyPressed(.F) { find_replace_open(e); return }
+	// This editor's own IDE shortcuts, not real Vim bindings — carried over
+	// since Vim mode doesn't call handle_edit_shortcuts the way Normal does.
+	if ctrl() && rl.IsKeyPressed(.P)   { palette_open_files(&e.palette, e); return }
+	if ctrl() && rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return }
 
 	if key_rep(.LEFT)  { p.cursor = max(0, p.cursor-1); p.sel_anchor = p.cursor }
 	if key_rep(.RIGHT) { p.cursor = min(buffer_len(&p.buf), p.cursor+1); p.sel_anchor = p.cursor }
