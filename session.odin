@@ -62,7 +62,18 @@ _session_write_view :: proc(sb: ^strings.Builder, panes: []Pane, active: int, sp
 		if pi > 0 { strings.write_string(sb, ",") }
 		strings.write_string(sb, `{"filename":`)
 		_session_json_str(sb, p.filename)
-		strings.write_string(sb, fmt.tprintf(`,"cursor":%d,"scroll":%d}`, p.cursor, p.scroll))
+		strings.write_string(sb, fmt.tprintf(`,"cursor":%d,"scroll":%d,"cur_tab":%d,"tabs":[`, p.cursor, p.scroll, p.cur_tab))
+		// Every open tab, so reopening the editor brings them all back. The
+		// current tab's live cursor/scroll are in the pane, not in its tab entry.
+		for t, ti in p.tabs {
+			if ti > 0 { strings.write_string(sb, ",") }
+			cur, scr := t.cursor, t.scroll
+			if ti == p.cur_tab { cur, scr = p.cursor, p.scroll }
+			strings.write_string(sb, `{"filename":`)
+			_session_json_str(sb, t.filename)
+			strings.write_string(sb, fmt.tprintf(`,"cursor":%d,"scroll":%d}`, cur, scr))
+		}
+		strings.write_string(sb, "]}")
 	}
 	strings.write_string(sb, "]")
 }
@@ -160,6 +171,7 @@ _session_read_view :: proc(obj: json.Object) -> (v: _View) {
 				}
 			}
 		}
+		_session_read_tabs(&p, po)
 		append(&v.panes, p)
 		if len(v.panes) >= MAX_PANES { break }
 	}
@@ -170,6 +182,37 @@ _session_read_view :: proc(obj: json.Object) -> (v: _View) {
 	}
 	v.ok = true
 	return
+}
+
+// Restores the pane's tab list. Without it the restored file had no tab, so
+// the first file opened afterwards replaced it instead of opening beside it.
+// Sessions saved before tabs were persisted get a single tab for the file.
+_session_read_tabs :: proc(p: ^Pane, po: json.Object) {
+	if tv, has := po["tabs"]; has {
+		if arr, ok := tv.(json.Array); ok {
+			for item in arr {
+				to, is_obj := item.(json.Object)
+				if !is_obj { continue }
+				fn, _ := to["filename"].(string)
+				if fn == "" || !os.exists(fn) { continue }
+				tab := Pane_Tab{filename = strings.clone(fn)}
+				if ci, ok := to["cursor"].(json.Integer); ok { tab.cursor = int(ci) }
+				if si, ok := to["scroll"].(json.Integer); ok { tab.scroll = int(si) }
+				append(&p.tabs, tab)
+			}
+		}
+	}
+	if p.filename == "" {
+		// Its file is gone: keep the other tabs, open the first one
+		if len(p.tabs) > 0 { p.cur_tab = 0; _pane_load_tab(p, 0) }
+		return
+	}
+	for t, i in p.tabs {
+		if t.filename == p.filename { p.cur_tab = i; return }
+	}
+	// The pane's file wasn't in the list (old session format): it becomes a tab
+	append(&p.tabs, Pane_Tab{filename = strings.clone(p.filename), cursor = p.cursor, scroll = p.scroll})
+	p.cur_tab = len(p.tabs) - 1
 }
 
 session_restore :: proc(e: ^Editor) -> bool {

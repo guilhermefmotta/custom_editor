@@ -193,6 +193,12 @@ editor_open :: proc(e: ^Editor, path: string) -> bool {
 		}
 	}
 	p := active_pane(e)
+	// A file shown without a tab entry (opened outside editor_open) becomes a
+	// tab first, so the new file opens beside it instead of replacing it.
+	if len(p.tabs) == 0 && p.filename != "" {
+		append(&p.tabs, Pane_Tab{filename = strings.clone(p.filename), cursor = p.cursor, scroll = p.scroll})
+		p.cur_tab = 0
+	}
 	if len(p.tabs) == 0 {
 		// First file ever: open normally and register as tab 0
 		if !pane_open(p, path) { return false }
