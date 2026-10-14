@@ -399,11 +399,7 @@ _wt_expand :: proc(e: ^Editor, row: Wt_Row) {
 
 @(private="file")
 _wt_resolve :: proc(e: ^Editor, path: string) {
-	if ui_panel_find("merge_resolver") != nil {
-		ui_panel_open(e, "merge_resolver")
-	} else {
-		git_dialog_open_merge(e, path)
-	}
+	merge_resolver_open_file(e, path) // opens the resolver on this file
 }
 
 // Enter / click: conflicts go to the resolver (Enter) — everything else
