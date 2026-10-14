@@ -3,6 +3,9 @@ set -e
 
 OUT="${1:-editor}"
 
+# Embedded terminal: vendored libvterm as a static lib (ADR 0004).
+bash "$(dirname "$0")/terminal/libvterm/build.sh"
+
 odin build . -out:"$OUT"
 
 # Copy font alongside the binary so the relative path font/ttf/FiraCode-Regular.ttf resolves
