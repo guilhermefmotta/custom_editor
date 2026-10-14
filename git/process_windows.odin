@@ -6,16 +6,17 @@ import win32 "core:sys/windows"
 
 @(private)
 _exec :: proc(root: string, args: []string, allocator := context.allocator) -> (output: string, exit_code: int) {
-	// Build: git -C "<root>" <args> 2>nul
+	// Build: git -C "<root>" <args>. CreateProcessW runs no shell, so no
+	// redirections here (a "2>nul" would reach git as an argument); stderr is
+	// the parent's (no console: CREATE_NO_WINDOW).
 	sb: strings.Builder
 	strings.builder_init(&sb, context.temp_allocator)
 	strings.write_string(&sb, "git -C ")
-	strings.write_quoted_string(&sb, root)
+	_win_quote(&sb, root)
 	for a in args {
 		strings.write_byte(&sb, ' ')
-		strings.write_quoted_string(&sb, a)
+		_win_quote(&sb, a)
 	}
-	strings.write_string(&sb, " 2>nul")
 	cmd_wide := win32.utf8_to_wstring(strings.to_string(sb), context.temp_allocator)
 
 	// Create stdout pipe
@@ -58,4 +59,31 @@ _exec :: proc(root: string, args: []string, allocator := context.allocator) -> (
 	win32.CloseHandle(pi.hProcess)
 
 	return string(buf[:]), int(code)
+}
+
+// Quotes one argument for CommandLineToArgvW / the MSVC CRT parser (no cmd.exe
+// involved): wrapped in "..."; a " is escaped as \" and backslashes are
+// doubled only when they precede a " (or the closing quote). Everything else,
+// newlines included, is literal.
+@(private)
+_win_quote :: proc(sb: ^strings.Builder, s: string) {
+	strings.write_byte(sb, '"')
+	backslashes := 0
+	for i in 0..<len(s) {
+		c := s[i]
+		switch c {
+		case '\\':
+			backslashes += 1
+		case '"':
+			for _ in 0..<backslashes*2 + 1 { strings.write_byte(sb, '\\') }
+			backslashes = 0
+			strings.write_byte(sb, '"')
+		case:
+			for _ in 0..<backslashes { strings.write_byte(sb, '\\') }
+			backslashes = 0
+			strings.write_byte(sb, c)
+		}
+	}
+	for _ in 0..<backslashes*2 { strings.write_byte(sb, '\\') }
+	strings.write_byte(sb, '"')
 }

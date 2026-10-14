@@ -57,6 +57,10 @@ Git_Manager :: struct {
 	timer:          f32,
 
 	blame_cache: map[string][dynamic]Blame_Line, // abs path → per-line blame (main thread, lazy)
+
+	// Async request queue for every new git query/operation (ADR 0001, see
+	// queue.odin). Worker thread starts on the first request.
+	queue: Git_Queue,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +73,7 @@ git_manager_init :: proc(m: ^Git_Manager, root: string) {
 	m.current.hunks   = make(map[string][dynamic]Hunk)
 	m.blame_cache     = make(map[string][dynamic]Blame_Line)
 	m.timer           = 0 // refresh immediately on first update
+	git_queue_init(&m.queue, root)
 }
 
 git_manager_destroy :: proc(m: ^Git_Manager) {
@@ -77,6 +82,7 @@ git_manager_destroy :: proc(m: ^Git_Manager) {
 		thread.destroy(m.refresh_thread)
 		m.refresh_thread = nil
 	}
+	git_queue_destroy(&m.queue)
 	delete(m.root)
 	_free_state(&m.current)
 	_free_state(&m.pending)
@@ -88,6 +94,8 @@ git_manager_destroy :: proc(m: ^Git_Manager) {
 // Swaps pending→current when refresh is done, triggers next refresh on timer.
 git_manager_update :: proc(m: ^Git_Manager, dt: f32) {
 	if m.root == "" { return }
+
+	git_queue_update(&m.queue) // run callbacks of finished async jobs
 
 	// Check if background refresh finished
 	sync.mutex_lock(&m.mu)

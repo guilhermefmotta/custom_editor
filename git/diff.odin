@@ -169,3 +169,35 @@ _looks_binary :: proc(text: string) -> bool {
 	n := min(len(text), 8000)
 	return strings.index_byte(text[:n], 0) >= 0
 }
+
+// Whole-file side-by-side diff of `path` as changed by commit `rev`, against
+// its first parent (merge commits included); a root commit shows the file as
+// all added. Pass old_path when the file was renamed in that commit so the
+// rename is paired instead of shown as an addition. Empty File_Diff (ok=true)
+// when the commit didn't touch the path. Worker-side: blocking git calls.
+// Everything (rows and raw text) is allocated from `allocator`.
+git_diff_commit_file :: proc(root, rev, path: string, old_path := "", allocator := context.allocator) -> (fd: File_Diff, ok: bool) {
+	context.allocator = allocator
+	FULL :: "-U2147483647"
+
+	parents_out, pok := git_run(root, {"rev-list", "--parents", "-n", "1", rev, "--"}, context.temp_allocator)
+	if !pok { return {}, false }
+	ids := strings.fields(parents_out, context.temp_allocator)
+	if len(ids) == 0 { return {}, false }
+
+	args := make([dynamic]string, context.temp_allocator)
+	append(&args, "diff-tree", "-p", "-M", FULL, "--no-color", "--no-commit-id")
+	if len(ids) > 1 {
+		append(&args, ids[1], ids[0]) // first parent → commit
+	} else {
+		append(&args, "--root", ids[0])
+	}
+	append(&args, "--")
+	if old_path != "" && old_path != path { append(&args, old_path) }
+	append(&args, path)
+
+	out, dok := git_run(root, args[:])
+	if !dok { return {}, false }
+	if out == "" { return {}, true }
+	return parse_unified_diff(out), true
+}
