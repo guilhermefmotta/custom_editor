@@ -119,8 +119,7 @@ sidebar_on_branch_activate :: proc(e: ^Editor, name: string) {
 	if name == "" { return }
 	if sidebar_active_branch != "" { delete(sidebar_active_branch) }
 	sidebar_active_branch = strings.clone(name)
-	ui_panel_open(e, "commit_graph")
-	// INTEGRAÇÃO: chamar commit_graph_show_branch(e, name)
+	commit_graph_show_branch(e, name) // opens the graph filtered by this branch
 }
 
 // Reload every list (no-op without a repository).

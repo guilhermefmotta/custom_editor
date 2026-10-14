@@ -1,4 +1,4 @@
-# 0006 — Sidebar de refs como overlay com foco, operações via `git/refs_ops`
+# 0007 — Sidebar de refs como overlay com foco, operações via `git/refs_ops`
 
 Data: 2026-10-14 · Ticket #6
 
