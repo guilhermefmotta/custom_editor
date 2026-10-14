@@ -1,7 +1,7 @@
 package term
 
 // Minimal libvterm 0.3.3 bindings (only what the terminal model uses).
-// Linking (ADR 0004): the vendored source in libvterm/ is compiled to a
+// Linking (ADR 0010): the vendored source in libvterm/ is compiled to a
 // static lib by libvterm/build.sh (build.bat on Windows); when it hasn't been
 // built yet, macOS/Linux fall back to a system libvterm (Homebrew /
 // libvterm-dev) so a plain `odin build .` still works on a dev machine.

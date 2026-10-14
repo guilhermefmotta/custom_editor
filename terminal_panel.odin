@@ -1,6 +1,6 @@
 package editor
 
-// Embedded terminal panel (ticket #16, ADR 0004). Registers itself via
+// Embedded terminal panel (ticket #16, ADR 0010). Registers itself via
 // @(init) (ADR 0001): "Terminal: Toggle" (Ctrl+`), "Terminal: New Tab"
 // (Ctrl+Shift+`), "Terminal: Close Tab". Overlay on the bottom half of the
 // window (Dock panels don't reserve space yet).

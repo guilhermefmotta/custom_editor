@@ -1,4 +1,4 @@
-# 0004 — Terminal embutido: libvterm vendorizada + PTY/ConPTY com threads de I/O
+# 0010 — Terminal embutido: libvterm vendorizada + PTY/ConPTY com threads de I/O
 
 Data: 2026-10-14 · Épico #1 · Ticket #16
 
