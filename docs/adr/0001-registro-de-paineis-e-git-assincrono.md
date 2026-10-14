@@ -79,3 +79,22 @@ _minha_tela_register :: proc "contextless" () { // @(init) exige "contextless"
   Convenção: lógica pura testável (`ui_kit_test.odin`, `odin test .`),
   teclado em `ui_*_handle_input`, mouse em modo imediato nos procs de
   desenho.
+
+### API da camada git (ticket #3)
+
+- Fila: `Git_Queue` (em `git/queue.odin`, documentada no topo do arquivo),
+  embutida em `Git_Manager.queue`; uma thread de trabalho por repositório,
+  iniciada no primeiro pedido, execução FIFO. `git_manager_update` já bombeia
+  a fila (callbacks) a cada frame.
+- Pedido → id: `git_request_log/commit_detail/commit_file_diff/branches/
+  remotes/tags/stashes/reflog/submodules/file_at/conflict/repo_state/command/
+  custom(...)` retornam `Job_Id` na hora.
+- Leitura: `git_poll_as(q, id, T)` por frame (`.Queued/.Running/.Done/.Failed/
+  .Unknown`) ou `git_on_done(q, id, cb, user)` (callback na thread principal,
+  resultado liberado logo depois). `git_release(q, id)` libera tudo do
+  resultado (arena por job) e cancela se ainda não terminou.
+- Operações de tela (`git/<tela>_ops*.odin`) são `Git_Work_Proc` enfileiradas
+  com `git_request_custom`; dentro delas `context.allocator` é a arena do job
+  e as consultas síncronas `git_query_*` (`git/queries.odin`) podem ser usadas.
+- Estado de operação é o enum `Repo_Operation`; a UI compara o enum, nunca
+  strings (`repo_operation_name` dá nomes estáveis só para exibição/log).

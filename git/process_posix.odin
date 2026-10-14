@@ -9,10 +9,10 @@ _exec :: proc(root: string, args: []string, allocator := context.allocator) -> (
 	sb: strings.Builder
 	strings.builder_init(&sb, context.temp_allocator)
 	strings.write_string(&sb, "git -C ")
-	strings.write_quoted_string(&sb, root)
+	_sh_quote(&sb, root)
 	for a in args {
 		strings.write_byte(&sb, ' ')
-		strings.write_quoted_string(&sb, a)
+		_sh_quote(&sb, a)
 	}
 	strings.write_string(&sb, " 2>/dev/null")
 
@@ -31,4 +31,19 @@ _exec :: proc(root: string, args: []string, allocator := context.allocator) -> (
 
 	rc := posix.pclose(fp)
 	return string(buf[:]), int((u32(rc) >> 8) & 0xFF)
+}
+
+// POSIX shell single-quoting: everything is literal inside '...' (no $, `,
+// \ or newline interpretation); an embedded ' becomes '\''.
+@(private)
+_sh_quote :: proc(sb: ^strings.Builder, s: string) {
+	strings.write_byte(sb, '\'')
+	for i in 0..<len(s) {
+		if s[i] == '\'' {
+			strings.write_string(sb, "'\\''")
+		} else {
+			strings.write_byte(sb, s[i])
+		}
+	}
+	strings.write_byte(sb, '\'')
 }
