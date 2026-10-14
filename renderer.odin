@@ -157,6 +157,7 @@ render :: proc(e: ^Editor, font: rl.Font) {
 
 	_apply_theme(e)
 	dlg_frame_tick()
+	ui_registry_update(e, rl.GetFrameTime())
 
 	// Pump debug adapter messages every frame
 	dbg.debug_tick(&e.debug_mgr)
@@ -192,6 +193,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 			rl.DrawRectangleV({dx, 0}, {DIVIDER_W, usable_h}, DIVIDER_COL)
 		}
 	}
+
+	// Registered dock panels (ui_registry.odin) — above panes, below dialogs
+	ui_registry_draw(e, font, .Dock, sw, sh)
 
 	// Global message line — doubles as the Vim Command_Line input (:, /, ?)
 	// so what you're typing is actually visible while typing it.
@@ -253,6 +257,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	debug_panel_draw(e, &e.debug_panel, font, sw, sh, MSG_LINE_H)
 	debug_eval_draw(&e.debug_eval, e, font, sw, sh)
 	debug_attach_draw(&e.debug_attach, e, font, sw, sh)
+
+	// Registered overlay panels + banner (ui_registry.odin)
+	ui_registry_draw(e, font, .Overlay, sw, sh)
 
 	// Palette overlay — always on top
 	palette_render(&e.palette, e, font)

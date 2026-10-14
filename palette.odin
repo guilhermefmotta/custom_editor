@@ -136,6 +136,8 @@ palette_init :: proc() -> Palette {
 		Command{"Copy Path",                "Copy the absolute path of the current file",       cmd_copy_path, nil},
 	)
 	register_debug_commands(&p)
+	// Commands registered by screens via @(init) (ui_registry.odin)
+	append(&p.cmds, ..ui_registered_commands())
 
 	cwd, err := os.get_working_directory(context.allocator)
 	if err == nil { p.cwd = cwd }
@@ -364,7 +366,12 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 		for &cmd in p.cmds {
 			if !pal_match(cmd.name, q) { continue }
 			if cmd.available != nil && !cmd.available(e) { continue }
-			if vis == p.selected { cmd.execute(e, p); return }
+			if vis == p.selected {
+				ui_command_running = cmd.name
+				cmd.execute(e, p)
+				ui_command_running = ""
+				return
+			}
 			vis += 1
 		}
 
