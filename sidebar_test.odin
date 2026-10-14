@@ -130,7 +130,7 @@ test_sidebar_menu_actions_by_row_kind :: proc(t: ^testing.T) {
 // teste: test_sidebar_activate_records_branch
 @(test)
 test_sidebar_activate_records_branch :: proc(t: ^testing.T) {
-	// commit_graph isn't registered in this base: the open is a no-op
+	// No editor: only records the branch (opening the graph needs one)
 	sidebar_on_branch_activate(nil, "feat")
 	testing.expect_value(t, sidebar_active_branch, "feat")
 	sidebar_on_branch_activate(nil, "origin/main")
