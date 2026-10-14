@@ -30,6 +30,9 @@ Config_Paths :: struct {
 
 default_config_paths :: proc() -> Config_Paths {
 	home := os.get_env("HOME", context.temp_allocator)
+	// Windows usually has no HOME; without this the user file resolved to
+	// "/.config/editor/editor.toml" (root of the current drive).
+	if home == "" { home = os.get_env("USERPROFILE", context.temp_allocator) }
 	return {
 		system    = "/etc/editor/editor.toml",
 		user      = fmt.tprintf("%s/.config/editor/editor.toml", home),

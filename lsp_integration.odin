@@ -1320,7 +1320,7 @@ lsp_format_document :: proc(e: ^Editor) {
 	p := active_pane(e)
 	c := _get_client(e, p)
 	if c == nil || !c.caps.has_formatting { e.msg = "LSP: format not supported"; return }
-	lsp.manager_format(&e.lsp_mgr, p.filename, 4, true, lsp.Response_Callback{
+	lsp.manager_format(&e.lsp_mgr, p.filename, e.cfg.editor.tab_size, true, lsp.Response_Callback{
 		proc_ = _on_format_response, user = e,
 	})
 }

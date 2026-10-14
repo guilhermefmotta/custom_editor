@@ -291,7 +291,11 @@ _load_themes_dir :: proc(tr: ^Theme_Registry, dir: string) {
 		theme, ok := load_theme(path)
 		if !ok { continue }
 		if old, exists := tr.themes[theme.name]; exists {
+			// same name (e.g. themes/dark.toml vs the built-in): the map
+			// keeps its existing key, so don't clone a new one (it leaked)
 			_theme_destroy(&old)
+			tr.themes[theme.name] = theme
+			continue
 		}
 		tr.themes[strings.clone(theme.name)] = theme
 	}
