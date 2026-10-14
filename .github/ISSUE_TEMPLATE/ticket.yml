@@ -1,0 +1,52 @@
+name: "Ticket de épico"
+description: Um ticket dentro de um épico — vira uma unidade do escalonador (~/.claude/epic-orchestrator)
+title: ""
+labels: []
+body:
+  - type: input
+    id: epico
+    attributes:
+      label: Épico
+      description: Número da issue [EPIC] pai (ex. #42). Depois de criar, adicione esta issue como sub-issue dela — este campo é só lembrete, não substitui o vínculo real.
+    validations:
+      required: true
+
+  - type: textarea
+    id: criterios
+    attributes:
+      label: Critérios de aceite
+      description: Cada linha vira um Scenario no .feature (ver skill epic-dispatch, passo 3 — BDD).
+      placeholder: |
+        - CNPJ validado antes de salvar
+        - Não permite CNPJ duplicado
+    validations:
+      required: true
+
+  - type: textarea
+    id: arquivos
+    attributes:
+      label: Arquivos (glob por repo)
+      description: |
+        Que arquivo/diretório este ticket vai tocar — usado pra prever conflito
+        de merge com outro ticket rodando em paralelo (ver escalonador.sh,
+        Test-GlobConflita). Formato: `repo: glob` um por linha. Ninguém mais
+        consegue preencher isso por você — nenhuma issue declara isso sozinha.
+      placeholder: |
+        custom_editor: git/*.odin
+        custom_editor: commit_graph*.odin
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: exclusivo
+    attributes:
+      label: Exclusivo
+      description: Marque se este ticket NUNCA pode rodar em paralelo com nenhum outro do mesmo épico, mesmo sem overlap de glob (ex. migração de schema compartilhado).
+      options:
+        - label: Exclusivo — sempre roda sozinho
+
+  - type: textarea
+    id: notas
+    attributes:
+      label: Notas / decisões já tomadas
+      description: Qualquer coisa que já virou ADR ou deveria virar (ver skill epic-dispatch, passo 1 e 3).

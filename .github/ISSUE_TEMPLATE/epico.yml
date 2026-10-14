@@ -1,0 +1,37 @@
+name: "[EPIC] Épico"
+description: Um conjunto de tickets a rodar via epic-dispatch (~/.claude/skills/epic-dispatch)
+title: "[EPIC] "
+labels: ["epic"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Depois de criar esta issue, quebre o trabalho em tickets usando o
+        template "Ticket de épico" e adicione cada um como **sub-issue de
+        verdade** desta issue (botão "Add sub-issue" na barra lateral, ou
+        `gh issue create --parent <este-número>`).
+
+        `gh-to-manifest.sh` só reconhece sub-issue nativa — um checklist em
+        texto aqui dentro não vira ticket rodável.
+
+  - type: textarea
+    id: contexto
+    attributes:
+      label: Contexto
+      description: Por que esse épico existe — o problema real, não a solução.
+    validations:
+      required: true
+
+  - type: textarea
+    id: fora-de-escopo
+    attributes:
+      label: Fora de escopo
+      description: O que este épico deliberadamente NÃO cobre (evita ticket fantasma depois).
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Antes de despachar
+      options:
+        - label: Todo ticket deste épico já existe como sub-issue (não como item de checklist)
+        - label: Dependência entre tickets está declarada via "Blocked by" (não só descrita em texto)
