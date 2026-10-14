@@ -23,6 +23,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "../wake"
 
 SCROLLBACK_MAX :: 5000
 READ_BUF_SIZE  :: 64 * 1024
@@ -160,17 +161,23 @@ destroy :: proc(t: ^Terminal) {
 // I/O threads
 // ---------------------------------------------------------------------------
 
+// Reader poll timeout: only bounds how long `quit` can go unnoticed when the
+// child survives SIGHUP (destroy kills it first, which normally ends the read
+// at once). Was 50 ms; 8 idle shells then cost 160 wake-ups/s (ADR 0016).
+READ_POLL_MS :: 500
+
 @(private)
 _reader_proc :: proc(t: ^Terminal) {
 	buf := make([]u8, READ_BUF_SIZE, t.allocator)
 	defer delete(buf, t.allocator)
 	for !_atomic_load(&t.quit) {
-		n, eof := pty_read(&t.pty, buf, 50)
+		n, eof := pty_read(&t.pty, buf, READ_POLL_MS)
 		if n > 0 { feed(t, buf[:n]) }
 		if eof { break }
 	}
 	_atomic_store(&t.exited, true)
 	_atomic_store(&t.dirty, true)
+	wake.request() // ADR 0016: the UI loop may be asleep
 }
 
 @(private)
@@ -209,6 +216,7 @@ feed :: proc(t: ^Terminal, data: []u8) {
 	has_out := len(t.out) > 0
 	sync.mutex_unlock(&t.mu)
 	_atomic_store(&t.dirty, true)
+	wake.request() // ADR 0016: new output → wake the sleeping UI loop
 	if has_out { _kick_writer(t) } // replies to queries (DA, DSR...)
 }
 

@@ -80,6 +80,9 @@ Window_Config :: struct {
 	height:      int,
 	fullscreen:  bool,
 	fps_target:  int,
+	// ADR 0016: sleep until an event when nothing is moving (false = render
+	// every frame at fps_target, the pre-0016 behavior).
+	event_driven: bool,
 	title:       string,
 }
 
@@ -469,6 +472,7 @@ config_defaults :: proc() -> Config {
 		width      = 1280,
 		height     = 720,
 		fps_target = 60,
+		event_driven = true,
 		title      = strings.clone("Editor"),
 	}
 

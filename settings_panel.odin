@@ -243,7 +243,10 @@ _settings_autosave :: proc(e: ^Editor, dt: f32) {
 		}
 		if !p.dirty || p.filename == "" { slot.idle = 0; continue }
 		slot.idle += dt
-		if slot.idle < delay { continue }
+		if slot.idle < delay {
+			frame_request_in(f64(delay - slot.idle)) // ADR 0016: save even if idle
+			continue
+		}
 		slot.idle = 0
 		if ok, _ := pane_save(&p); ok {
 			git.git_blame_invalidate(e.git_mgr, p.filename)

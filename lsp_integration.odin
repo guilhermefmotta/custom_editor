@@ -427,6 +427,8 @@ _pane_lsp_update :: proc(e: ^Editor, p: ^Pane, dt: f32) {
 			p.lsp.change_pending = false
 			p.lsp.change_timer   = 0
 			_flush_change(e, p)
+		} else {
+			frame_request_in(f64(CHANGE_DEBOUNCE - p.lsp.change_timer)) // ADR 0016
 		}
 	}
 
@@ -436,6 +438,8 @@ _pane_lsp_update :: proc(e: ^Editor, p: ^Pane, dt: f32) {
 			p.lsp.hover_pending = false
 			p.lsp.hover_timer   = 0
 			_flush_hover(e, p)
+		} else {
+			frame_request_in(f64(HOVER_DEBOUNCE - p.lsp.hover_timer)) // ADR 0016
 		}
 	}
 

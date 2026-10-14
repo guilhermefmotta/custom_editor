@@ -261,7 +261,7 @@ PALETTE_SEARCH_MAX_VIS :: 18
 palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 	// Advance search / workspace-symbol debounce timer
 	if (p.mode == .Search || p.mode == .Workspace_Symbols) && p.search_timer > 0 {
-		p.search_timer -= rl.GetFrameTime()
+		p.search_timer -= frame_dt // ADR 0016
 		if p.search_timer <= 0 {
 			p.search_timer = 0
 			if p.mode == .Search {

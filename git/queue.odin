@@ -73,6 +73,7 @@ package git
 import "core:mem"
 import "core:sync"
 import "core:thread"
+import "../wake"
 
 Job_Id :: distinct u64 // 0 = no job
 
@@ -478,6 +479,7 @@ _worker_proc :: proc(t: ^thread.Thread) {
 		job.err     = err
 		job.status  = .Failed if err != "" else .Done
 		sync.mutex_unlock(&q.mu)
+		wake.request() // ADR 0016: result ready → wake the UI loop
 	}
 }
 

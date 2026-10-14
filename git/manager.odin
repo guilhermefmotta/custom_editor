@@ -7,6 +7,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "../wake"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -314,6 +315,7 @@ _refresh_proc :: proc(t: ^thread.Thread) {
 	m.pending = Git_State{branch = branch, entries = entries, hunks = hunks}
 	m.pending_ready = true
 	sync.mutex_unlock(&m.mu)
+	wake.request() // ADR 0016: new status → wake the UI loop
 }
 
 // ---------------------------------------------------------------------------

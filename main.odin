@@ -32,6 +32,7 @@ when ODIN_OS != .Windows {
 }
 
 main :: proc() {
+	bench_mark_main() // -define:BENCH=true only (bench.odin)
 	elog_init()
 	defer elog_close()
 	// Paths captured before any repository switch changes the cwd (ADR 0014).
@@ -57,7 +58,7 @@ main :: proc() {
 	rl.SetConfigFlags(flags)
 	rl.InitWindow(1280, 720, "editor")
 	defer rl.CloseWindow()
-	rl.SetTargetFPS(60)
+	rl.SetTargetFPS(60) // re-set from editor.toml [window] fps_target below
 	rl.SetExitKey(.KEY_NULL) // disable ESC closing window — handled by dialogs
 
 	font_px := font_pixel_size()
@@ -92,8 +93,19 @@ main :: proc() {
 		lsp_on_open(&e, active_pane(&e))
 	}
 
+	// Event-driven render (ADR 0016): render at fps_target while something
+	// moves, sleep until an event / thread wake / deadline otherwise.
+	fps := e.cfg.window.fps_target if e.cfg.window.fps_target > 0 else 60
+	rl.SetTargetFPS(i32(fps))
+	frame_pacing.enabled = e.cfg.window.event_driven
+	frame_pacing_init()
+	defer frame_pacing_shutdown() // before CloseWindow (defers run LIFO)
+	bench_start(&e)
+	defer bench_shutdown()
+
 	for !rl.WindowShouldClose() && !e.should_quit {
-		dt := rl.GetFrameTime()
+		frame_begin()
+		dt := frame_dt
 
 		// Zoom (Ctrl+= / Ctrl+-) or moving to a display with another scale:
 		// rebuild the glyph atlas at the new pixel size so text stays 1:1 sharp
@@ -106,15 +118,24 @@ main :: proc() {
 		}
 
 		repos_handle_drop(&e) // folders dropped on the window → repo tabs
+		bench_inject(&e)      // -define:BENCH=true only
 		handle_input(&e, font)
 		lsp_update(&e, dt)
 		git_update(&e, dt)
 
 		rl.BeginDrawing()
 		render(&e, font)
+		bench_render_done()
 		rl.EndDrawing()
+		bench_frame_end()
 
 		mem.free_all(context.temp_allocator)
+
+		if frame_pacing.enabled {
+			wi := frame_collect(&e)
+			bench_trace(wi) // EDITOR_BENCH_TRACE=1: why each frame was drawn
+			frame_wait(frame_wait_policy(wi))
+		}
 	}
 
 	session_save(&e)

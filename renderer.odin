@@ -7,8 +7,13 @@ import dbg  "./debug"
 import conf "./config"
 import rl   "vendor:raylib"
 
+// Cursor blink phase for this frame (render → render_pane).
+@(private="file") _cursor_visible := true
+
 // Slow breathing pulse in [0, 1], used for subtle gutter-marker animations
 // (breakpoints, LSP warning dots) so they read as "live" without being loud.
+// ADR 0016: it never asks for frames — it breathes while the editor renders
+// for another reason and holds still when idle (no wake-ups just for it).
 _gutter_pulse :: proc() -> f32 {
 	return 0.5 + 0.5*math.sin(f32(rl.GetTime()) * 3.2)
 }
@@ -157,7 +162,12 @@ render :: proc(e: ^Editor, font: rl.Font) {
 
 	_apply_theme(e)
 	dlg_frame_tick()
-	ui_registry_update(e, rl.GetFrameTime())
+	// Cursor blink (ADR 0016): wakes only at the blink transitions, and stops
+	// (solid cursor) FRAME_BLINK_IDLE_STOP s after the last input.
+	blink_next: f64
+	_cursor_visible, blink_next = cursor_blink(e.cfg.cursor.blink, e.cfg.cursor.blink_rate, frame_since_input())
+	if blink_next != FRAME_NO_DEADLINE { frame_request_in(blink_next) }
+	ui_registry_update(e, frame_dt)
 
 	// Pump debug adapter messages every frame
 	dbg.debug_tick(&e.debug_mgr)
@@ -284,10 +294,13 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	adjust_scroll(p, vis_lines)
 
 	// Advance smooth scroll animation toward integer target
-	dt   := rl.GetFrameTime()
+	// frame_anim_dt: clamped, so a scroll right after a long sleep (ADR 0016)
+	// still eases in instead of jumping.
+	dt   := frame_anim_dt
 	diff := f32(p.scroll) - p.scroll_anim
 	if diff > 0.001 || diff < -0.001 {
 		p.scroll_anim += diff * min(dt * SCROLL_SPEED, 1.0)
+		frame_request_anim()
 	} else {
 		p.scroll_anim = f32(p.scroll)
 	}
@@ -549,7 +562,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		// in Normal/Visual/Replace (translucent so the glyph underneath still
 		// reads) and the usual thin beam in Insert — matches the real editor's
 		// modal convention instead of always using the modeless beam.
-		if is_active && li == cur_line {
+		if is_active && li == cur_line && _cursor_visible {
 			if _vim_cursor_is_block(e) {
 				rl.DrawRectangleV({text_x + f32(cur_col)*cw, y}, {cw, ch}, rl.Color{CURSOR_COL.r, CURSOR_COL.g, CURSOR_COL.b, 130})
 			} else {
@@ -557,7 +570,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			}
 		}
 		// Extra cursor beams
-		if is_active {
+		if is_active && _cursor_visible {
 			for &ec in p.extras {
 				ec_line, ec_col := buffer_pos_to_line_col(&p.buf, ec.pos)
 				if ec_line == li {

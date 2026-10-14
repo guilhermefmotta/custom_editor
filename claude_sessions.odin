@@ -29,6 +29,7 @@ import rl "vendor:raylib"
 
 CLAUDE_SESSIONS_ID :: "claude_sessions"
 CLAUDE_POLL_EVERY  :: f32(0.25)
+CLAUDE_POLL_IDLE   :: f32(2.0) // no session working (ADR 0016)
 
 @(private="file") _cs: Claude_Sessions
 @(private="file") _cs_ready: bool
@@ -256,7 +257,14 @@ _cs_goto :: proc(e: ^Editor, s: ^Claude_Session, review: bool) {
 _cs_update :: proc(e: ^Editor, dt: f32) {
 	if !_cs_ready || len(_cs.list) == 0 { return }
 	_csu.poll += dt
-	if _csu.poll < CLAUDE_POLL_EVERY { return }
+	// ADR 0016: the loop may sleep — ask for a frame at the next poll. A
+	// working session is polled every CLAUDE_POLL_EVERY; idle ones (waiting /
+	// stopped: their next change follows your input or terminal output,
+	// which wake the loop anyway) every CLAUDE_POLL_IDLE.
+	every := CLAUDE_POLL_IDLE
+	for s in _cs.list { if s.status == .Working { every = CLAUDE_POLL_EVERY; break } }
+	frame_request_in(f64(every - _csu.poll))
+	if _csu.poll < every { return }
 	_csu.poll = 0
 	for s in _cs.list {
 		_, notify := claude_session_poll(s)

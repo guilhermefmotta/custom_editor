@@ -160,6 +160,7 @@ _apply_window :: proc(cfg: ^Config, t: ^TOML_Table) {
 	if n, ok := toml_int(t, "height");     ok { w.height     = int(n) }
 	if b, ok := toml_bool(t, "fullscreen");ok { w.fullscreen = b }
 	if n, ok := toml_int(t, "fps_target"); ok { w.fps_target = int(n) }
+	if b, ok := toml_bool(t, "event_driven"); ok { w.event_driven = b }
 	if s, ok := toml_str(t, "title");      ok { _replace_str(&w.title, s) }
 }
 

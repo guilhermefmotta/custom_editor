@@ -139,6 +139,13 @@ _tp_on_open :: proc(e: ^Editor) {
 	_tp.focused = true
 }
 
+// Opens the panel with `n` shell tabs (benchmark: N idle terminals, ADR 0016).
+terminal_panel_open_tabs :: proc(e: ^Editor, n: int) -> int {
+	if !ui_panel_is_open(TERMINAL_PANEL_ID) { ui_panel_open(e, TERMINAL_PANEL_ID) }
+	for len(_tp.tabs) < n && _tp_new_tab() {}
+	return len(_tp.tabs)
+}
+
 // Shells keep running while the panel is hidden.
 @(private="file")
 _tp_on_close :: proc(e: ^Editor) { _tp.focused = false; _tp.selecting = false }

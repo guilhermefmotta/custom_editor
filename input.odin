@@ -40,7 +40,7 @@ key_rep :: proc(key: rl.KeyboardKey) -> bool {
 	}
 	if _rep_key == key {
 		if !rl.IsKeyDown(key) { _rep_key = .KEY_NULL; return false }
-		_rep_accum += rl.GetFrameTime()
+		_rep_accum += frame_dt // real dt (ADR 0016: GetFrameTime lags one frame and includes sleeps)
 		if !_rep_init {
 			if _rep_accum < REP_DELAY { return false }
 			_rep_init = true; _rep_accum = 0; return true
