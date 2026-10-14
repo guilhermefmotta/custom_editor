@@ -1,4 +1,4 @@
-# 0005 — Painel working tree: git_dialog vira host de Diff/Merge, stage/unstage all seguros em merge
+# 0009 — Painel working tree: git_dialog vira host de Diff/Merge, stage/unstage all seguros em merge
 
 Data: 2026-10-14 · Ticket #5 (épico #1)
 
