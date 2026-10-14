@@ -5,7 +5,21 @@ import re  "core:text/regex"
 import dbg "./debug"
 import rl  "vendor:raylib"
 
-ctrl  :: proc() -> bool { return rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) }
+// On macOS Command acts as Ctrl for every editor shortcut (Cmd+P, Cmd+Shift+F…);
+// the physical Ctrl key keeps working too.
+when ODIN_OS == .Darwin {
+	ctrl :: proc() -> bool {
+		return rl.IsKeyDown(.LEFT_SUPER) || rl.IsKeyDown(.RIGHT_SUPER) ||
+		       rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
+	}
+	ctrl_released :: proc() -> bool {
+		return rl.IsKeyReleased(.LEFT_SUPER) || rl.IsKeyReleased(.RIGHT_SUPER) ||
+		       rl.IsKeyReleased(.LEFT_CONTROL) || rl.IsKeyReleased(.RIGHT_CONTROL)
+	}
+} else {
+	ctrl :: proc() -> bool { return rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) }
+	ctrl_released :: proc() -> bool { return rl.IsKeyReleased(.LEFT_CONTROL) || rl.IsKeyReleased(.RIGHT_CONTROL) }
+}
 shift :: proc() -> bool { return rl.IsKeyDown(.LEFT_SHIFT)   || rl.IsKeyDown(.RIGHT_SHIFT) }
 alt   :: proc() -> bool { return rl.IsKeyDown(.LEFT_ALT)     || rl.IsKeyDown(.RIGHT_ALT) }
 

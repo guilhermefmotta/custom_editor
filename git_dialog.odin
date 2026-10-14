@@ -41,6 +41,9 @@ Git_Dialog :: struct {
 	selected:   int,
 	scroll:     int,
 	diff_scroll: int,
+	diff:        git.File_Diff, // whole-file side-by-side diff (Diff mode)
+	diff_path:   string,        // heap, repo-relative path shown in Diff mode
+	diff_change: int,           // index into diff.changed of the focused change
 	commit_buf: [dynamic]u8,
 	commit_sel_all: bool,
 	msg:        string, // heap
@@ -65,7 +68,17 @@ GITD_SECTION_H :: f32(18)
 GITD_COMMIT_H  :: f32(26)
 GITD_FOOTER_H  :: f32(26)
 GITD_LIST_MAX  :: 16
-GITD_DIFF_MAX  :: 30 // max rows used for initial panel sizing
+GITD_DIFF_LEAD :: 3  // rows of context kept above a change when jumping to it
+GITD_DIFF_GUTTER_CH :: 5 // line-number gutter width, in characters
+
+// Rows visible in the last drawn diff (for PageUp/PageDown)
+_gitd_diff_page_rows := 20
+
+GITD_DIFF_ADD_BG   := rl.Color{40, 70, 50, 255}
+GITD_DIFF_DEL_BG   := rl.Color{80, 40, 48, 255}
+GITD_DIFF_EMPTY_BG := rl.Color{30, 30, 44, 255}
+GITD_DIFF_MARK_ADD := rl.Color{166, 227, 161, 255}
+GITD_DIFF_MARK_DEL := rl.Color{243, 139, 168, 255}
 
 GITD_MERGE_W   :: f32(840) // wider for merge view
 GITD_HALF_W    :: (GITD_MERGE_W - 4) / 2
@@ -102,6 +115,7 @@ git_dialog_destroy :: proc(d: ^Git_Dialog) {
 	delete(d.commit_buf)
 	if d.msg != "" { delete(d.msg) }
 	_merge_destroy(&d.merge)
+	_gitd_diff_free(d)
 	_bp_free_branches(d)
 	delete(d.bp_branches)
 	delete(d.bp_filter)
@@ -122,6 +136,31 @@ git_dialog_open :: proc(d: ^Git_Dialog) {
 git_dialog_close :: proc(d: ^Git_Dialog) {
 	d.visible = false
 	_merge_destroy(&d.merge)
+	_gitd_diff_free(d)
+}
+
+_gitd_diff_free :: proc(d: ^Git_Dialog) {
+	git.file_diff_destroy(&d.diff)
+	if d.diff_path != "" { delete(d.diff_path); d.diff_path = "" }
+}
+
+// Opens the whole-file diff of rel_path, scrolled to its first change.
+_gitd_open_diff :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, rel_path: string) {
+	_gitd_diff_free(d)
+	d.diff        = git.git_diff_file_full(m, rel_path)
+	d.diff_path   = strings.clone(rel_path)
+	d.diff_change = 0
+	d.diff_scroll = 0
+	if len(d.diff.changed) > 0 { d.diff_scroll = max(0, d.diff.changed[0] - GITD_DIFF_LEAD) }
+	d.mode = .Diff
+}
+
+// Scrolls so change i sits a few rows below the top
+_gitd_diff_goto :: proc(d: ^Git_Dialog, i: int) {
+	n := len(d.diff.changed)
+	if n == 0 { return }
+	d.diff_change = (i % n + n) % n // wrap around both ways
+	d.diff_scroll = max(0, d.diff.changed[d.diff_change] - GITD_DIFF_LEAD)
 }
 
 // ---------------------------------------------------------------------------
@@ -375,10 +414,19 @@ git_dialog_handle_input :: proc(d: ^Git_Dialog, e: ^Editor) {
 	// --- Diff mode ---
 	if d.mode == .Diff {
 		if rl.IsKeyPressed(.ESCAPE) || rl.IsKeyPressed(.B) {
+			_gitd_diff_free(d)
 			d.mode = .Status; return
 		}
-		if key_rep(.DOWN) { d.diff_scroll += 1 }
-		if key_rep(.UP)   { d.diff_scroll = max(0, d.diff_scroll - 1) }
+		page := max(1, _gitd_diff_page_rows - 2)
+		if key_rep(.DOWN) || key_rep(.J) { d.diff_scroll += 1 }
+		if key_rep(.UP)   || key_rep(.K) { d.diff_scroll = max(0, d.diff_scroll - 1) }
+		if key_rep(.PAGE_DOWN) || (ctrl() && key_rep(.D)) { d.diff_scroll += page }
+		if key_rep(.PAGE_UP)   || (ctrl() && key_rep(.U)) { d.diff_scroll = max(0, d.diff_scroll - page) }
+		if rl.IsKeyPressed(.HOME) { d.diff_scroll = 0 }
+		if rl.IsKeyPressed(.END)  { d.diff_scroll = len(d.diff.rows) }
+		// Jump between changes: n / p (Shift+N also goes back)
+		if rl.IsKeyPressed(.N) { _gitd_diff_goto(d, d.diff_change + (-1 if shift() else 1)) }
+		if rl.IsKeyPressed(.P) { _gitd_diff_goto(d, d.diff_change - 1) }
 		wheel := rl.GetMouseWheelMove()
 		if wheel != 0 { d.diff_scroll = max(0, d.diff_scroll - int(wheel)*3) }
 		return
@@ -455,9 +503,7 @@ git_dialog_handle_input :: proc(d: ^Git_Dialog, e: ^Editor) {
 	}
 
 	if rl.IsKeyPressed(.D) {
-		if m.diff_text != "" { delete(m.diff_text) }
-		m.diff_text = git.git_diff_file(m, entry.path)
-		d.mode = .Diff; d.diff_scroll = 0
+		_gitd_open_diff(d, m, entry.path)
 		return
 	}
 
@@ -687,65 +733,109 @@ _gitd_draw_status :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw
 
 _gitd_draw_diff :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw, sh: f32) {
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
+	fs  := FONT_SIZE - 1
 	dy  := ref.y + 2
+	cw  := rl.MeasureTextEx(font, "0", fs, CHAR_SPACING).x
 
-	lines       := strings.split_lines(m.diff_text, context.temp_allocator)
-	total_lines := len(lines)
+	// Nearly full window: the whole file is shown, so use the space
+	pw := sw - 40
+	ph := sh - 40
+	px, py := dlg_begin((sw - pw) * 0.5, (sh - ph) * 0.5, pw, ph, GITD_BG, GITD_BORDER)
 
-	// Panel height: fit up to GITD_DIFF_MAX lines, clamped to screen
-	max_panel_h := GITD_HEADER_H + f32(GITD_DIFF_MAX)*dy + GITD_FOOTER_H + 6
-	panel_h     := min(max_panel_h, sh - 40)
+	rows := d.diff.rows[:]
+	n_changes := len(d.diff.changed)
 
-	px := (sw - GITD_W) * 0.5
-	py := (sh - panel_h) * 0.5
+	// Header: path, change counter, keys
+	rl.DrawRectangleV({px, py}, {pw, GITD_HEADER_H}, GITD_HEADER)
+	pos := fmt.tprintf("change %d/%d", d.diff_change + 1, n_changes) if n_changes > 0 else "no changes"
+	title := fmt.tprintf(" %s   %s   (n/p next/prev change, ↑↓ PgUp/PgDn scroll, Esc back)", d.diff_path, pos)
+	dlg_text(font, title, px + 10, py + (GITD_HEADER_H - ref.y) * 0.5, fs, CHAR_SPACING, GITD_BLUE, px + pw, 10)
 
-	px, py = dlg_begin(px, py, GITD_W, panel_h, GITD_BG, GITD_BORDER)
-
-	// Header
-	rl.DrawRectangleV({px, py}, {GITD_W, GITD_HEADER_H}, GITD_HEADER)
-	rl.DrawTextEx(font, " Diff  (↑↓ scroll, B/Esc back)", {px+10, py + (GITD_HEADER_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, GITD_BLUE)
-
-	footer_y    := py + panel_h - GITD_FOOTER_H
+	footer_y    := py + ph - GITD_FOOTER_H
 	content_top := py + GITD_HEADER_H
 	content_h   := footer_y - content_top
 
-	// Compute how many lines actually fit
-	vis_lines := int(content_h / dy)
-	if vis_lines < 1 { vis_lines = 1 }
+	vis := max(1, int(content_h / dy))
+	_gitd_diff_page_rows = vis
+	d.diff_scroll = clamp(d.diff_scroll, 0, max(0, len(rows) - vis))
 
-	max_scroll      := max(0, total_lines - vis_lines)
-	d.diff_scroll    = clamp(d.diff_scroll, 0, max_scroll)
+	if d.diff.binary || len(rows) == 0 {
+		msg := "Binary file — no text diff" if d.diff.binary else "No changes"
+		rl.DrawTextEx(font, to_cstring(msg), {px + 16, content_top + 12}, fs, CHAR_SPACING, GITD_SUBDUED)
+		dlg_end()
+		return
+	}
+
+	// Two columns: [gutter | text] old  ‖  [gutter | text] new
+	half   := (pw - 3) * 0.5
+	gutter := cw * f32(GITD_DIFF_GUTTER_CH) + 10
+	col_x  := [2]f32{px, px + half + 3}
+	rl.DrawRectangleV({px + half + 1, content_top}, {1, content_h}, GITD_BORDER)
 
 	cy := content_top
-	for i := 0; i < vis_lines && d.diff_scroll+i < total_lines; i += 1 {
-		line := lines[d.diff_scroll+i]
-		col  := GITD_TEXT
-		if len(line) > 0 {
-			switch line[0] {
-			case '+': col = GITD_GREEN;   rl.DrawRectangleV({px+1, cy}, {GITD_W-2, dy}, GITD_GREEN_BG)
-			case '-': col = GITD_RED;     rl.DrawRectangleV({px+1, cy}, {GITD_W-2, dy}, GITD_RED_BG)
-			case '@': col = GITD_BLUE
-			case 'd', 'i': col = GITD_SUBDUED
+	for i := d.diff_scroll; i < len(rows) && i < d.diff_scroll + vis; i += 1 {
+		row := rows[i]
+		sides := [2]git.Diff_Side{row.left, row.right}
+		for side, c in sides {
+			x := col_x[c]
+			bg: rl.Color
+			mark: rl.Color
+			switch side.kind {
+			case .Context: bg = GITD_BG
+			case .Add:     bg = GITD_DIFF_ADD_BG;   mark = GITD_DIFF_MARK_ADD
+			case .Delete:  bg = GITD_DIFF_DEL_BG;   mark = GITD_DIFF_MARK_DEL
+			case .Empty:   bg = GITD_DIFF_EMPTY_BG
+			}
+			if side.kind != .Context { rl.DrawRectangleV({x, cy}, {half, dy}, bg) }
+			if mark.a != 0 { rl.DrawRectangleV({x, cy}, {3, dy}, mark) }
+			if side.line > 0 {
+				num := fmt.tprintf("%d", side.line)
+				nw  := rl.MeasureTextEx(font, to_cstring(num), fs, CHAR_SPACING).x
+				rl.DrawTextEx(font, to_cstring(num), {x + gutter - 8 - nw, cy + 1}, fs, CHAR_SPACING, GITD_SUBDUED)
+			}
+			if side.text != "" {
+				dlg_text(font, _gitd_expand_tabs(side.text), x + gutter, cy + 1, fs, CHAR_SPACING,
+				         GITD_TEXT, x + half, 6)
 			}
 		}
-		dlg_text(font, line, px+8, cy, FONT_SIZE-1, CHAR_SPACING, col, px+GITD_W, 8)
 		cy += dy
 	}
 
-	// Scrollbar
-	if total_lines > vis_lines {
-		bar_track_h := content_h
-		bar_h := max(16, bar_track_h * f32(vis_lines) / f32(total_lines))
-		bar_y := content_top + bar_track_h * f32(d.diff_scroll) / f32(total_lines)
-		rl.DrawRectangleV({px + GITD_W - 4, bar_y}, {3, bar_h}, GITD_BORDER)
+	// Scrollbar with change markers, so changes are visible across the file
+	track_x := px + pw - 6
+	rl.DrawRectangleV({track_x, content_top}, {5, content_h}, GITD_HEADER)
+	total := f32(len(rows))
+	for start in d.diff.changed {
+		r := rows[start]
+		col := GITD_DIFF_MARK_DEL if r.right.kind == .Empty else GITD_DIFF_MARK_ADD
+		if r.left.kind == .Delete && r.right.kind == .Add { col = GITD_YELLOW }
+		rl.DrawRectangleV({track_x, content_top + content_h * f32(start) / total}, {5, 2}, col)
 	}
+	bar_h := max(16, content_h * f32(vis) / total)
+	bar_y := content_top + content_h * f32(d.diff_scroll) / total
+	rl.DrawRectangleLinesEx({track_x - 1, bar_y, 7, bar_h}, 1, GITD_SUBDUED)
 
 	// Footer
-	rl.DrawLineV({px, footer_y}, {px+GITD_W, footer_y}, GITD_BORDER)
-	scroll_info := fmt.tprintf("line %d/%d", d.diff_scroll+1, total_lines)
-	scroll_w := rl.MeasureTextEx(font, to_cstring(scroll_info), FONT_SIZE-2, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(scroll_info), {px+GITD_W-scroll_w-10, footer_y + (GITD_FOOTER_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, GITD_SUBDUED)
+	rl.DrawLineV({px, footer_y}, {px + pw, footer_y}, GITD_BORDER)
+	info := fmt.tprintf("line %d/%d", d.diff_scroll + 1, len(rows))
+	iw := rl.MeasureTextEx(font, to_cstring(info), FONT_SIZE - 2, CHAR_SPACING).x
+	rl.DrawTextEx(font, to_cstring(info), {px + pw - iw - 14, footer_y + (GITD_FOOTER_H - ref.y) * 0.5}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
 	dlg_end()
+}
+
+// Tabs as spaces for display (raylib draws \t as a missing glyph)
+_gitd_expand_tabs :: proc(s: string) -> string {
+	if strings.index_byte(s, '\t') < 0 { return s }
+	b := strings.builder_make(context.temp_allocator)
+	col := 0
+	for r in s {
+		if r == '\t' {
+			for _ in 0..<(4 - col % 4) { strings.write_byte(&b, ' '); col += 1 }
+		} else {
+			strings.write_rune(&b, r); col += 1
+		}
+	}
+	return strings.to_string(b)
 }
 
 // ---------------------------------------------------------------------------

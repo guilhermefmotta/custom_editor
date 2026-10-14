@@ -72,7 +72,7 @@ file_tree_destroy :: proc(ft: ^File_Tree) {
 	delete(ft.filter)
 	for r in ft.results { delete(r.name); delete(r.path) }
 	delete(ft.results)
-	if ft.search_active { os.walker_destroy(&ft.search_walker) }
+	if ft.search_active { _ft_search_walker_stop(ft) }
 	delete(ft.search_needle)
 	ft^ = {}
 }
@@ -88,7 +88,7 @@ file_tree_open :: proc(ft: ^File_Tree) {
 	clear(&ft.filter)
 	for r in ft.results { delete(r.name); delete(r.path) }
 	clear(&ft.results)
-	if ft.search_active { os.walker_destroy(&ft.search_walker) }
+	if ft.search_active { _ft_search_walker_stop(ft) }
 	ft.search_active = false
 	delete(ft.search_needle)
 	ft.search_needle = ""
@@ -275,10 +275,18 @@ _ft_search_step :: proc(ft: ^File_Tree) {
 	}
 }
 
+// Destroys the search walker and zeroes it: os.walker_destroy leaves the
+// iterator's closed DIR pointer set, so reusing the struct would closedir() it
+// again on the next search (same use-after-free as the file palette).
+_ft_search_walker_stop :: proc(ft: ^File_Tree) {
+	os.walker_destroy(&ft.search_walker)
+	ft.search_walker = {}
+}
+
 @(private="file")
 _ft_search_finish :: proc(ft: ^File_Tree) {
 	ft.search_active = false
-	os.walker_destroy(&ft.search_walker)
+	_ft_search_walker_stop(ft)
 	_ft_sort_results(ft)
 }
 
@@ -296,7 +304,7 @@ _ft_rebuild_search :: proc(ft: ^File_Tree) {
 	clear(&ft.results)
 	ft.selected = 0
 	ft.scroll   = 0
-	if ft.search_active { os.walker_destroy(&ft.search_walker) }
+	if ft.search_active { _ft_search_walker_stop(ft) }
 	ft.search_active = false
 	delete(ft.search_needle)
 	ft.search_needle = ""

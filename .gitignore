@@ -1,0 +1,12 @@
+# Local builds
+editor_mac
+editor_mac_dbg
+*.dSYM/
+
+# Runtime logs
+editor_*.log
+
+# Editor autosave / backup files
+\#*\#
+.#*
+*~

@@ -81,7 +81,7 @@ recents_jump :: proc(rd: ^Recents_Dialog, e: ^Editor) {
 
 recents_handle_input :: proc(rd: ^Recents_Dialog, e: ^Editor) {
 	// Release Ctrl → jump (Alt+Tab / Ctrl+Tab style)
-	if rl.IsKeyReleased(.LEFT_CONTROL) || rl.IsKeyReleased(.RIGHT_CONTROL) {
+	if ctrl_released() {
 		recents_jump(rd, e)
 		return
 	}

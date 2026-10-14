@@ -144,7 +144,7 @@ palette_init :: proc() -> Palette {
 
 palette_destroy :: proc(p: ^Palette) {
 	search_state_destroy(&p.search)
-	if p.scan_active { os.walker_destroy(&p.scan_walker) }
+	if p.scan_active { _palette_scan_stop(p) }
 	delete(p.search_expanded)
 	delete(p.query)
 	delete(p.cmds)
@@ -542,10 +542,20 @@ PALETTE_SCAN_BUDGET :: 3000
 _palette_scan_skip := [?]string{".git", "node_modules", "target", "__pycache__",
                                  ".cache", "build", "dist", ".next", "vendor"}
 
+// Destroys the scan walker and zeroes it. os.walker_destroy closes the
+// iterator's DIR but leaves the pointer set; reusing that struct makes the next
+// walker_init/walk closedir() it again (use-after-free -> segfault on macOS,
+// e.g. opening the file palette twice).
+_palette_scan_stop :: proc(p: ^Palette) {
+	os.walker_destroy(&p.scan_walker)
+	p.scan_walker = {}
+	p.scan_active = false
+}
+
 palette_scan_files :: proc(p: ^Palette) {
 	for f in p.files { delete(f) }
 	clear(&p.files)
-	if p.scan_active { os.walker_destroy(&p.scan_walker) }
+	if p.scan_active { _palette_scan_stop(p) }
 
 	os.walker_init(&p.scan_walker, ".")
 	p.scan_active = true
@@ -557,14 +567,14 @@ palette_scan_step :: proc(p: ^Palette) {
 	for n := 0; n < PALETTE_SCAN_BUDGET; n += 1 {
 		if len(p.files) >= PALETTE_SCAN_MAX_FILES {
 			p.scan_active = false
-			os.walker_destroy(&p.scan_walker)
+			_palette_scan_stop(p)
 			return
 		}
 
 		info, ok := os.walker_walk(&p.scan_walker)
 		if !ok {
 			p.scan_active = false
-			os.walker_destroy(&p.scan_walker)
+			_palette_scan_stop(p)
 			return
 		}
 

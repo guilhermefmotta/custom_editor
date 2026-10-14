@@ -52,7 +52,6 @@ Git_Manager :: struct {
 	refreshing:    bool,
 
 	current: Git_State, // main-thread only after git_update swaps
-	diff_text: string,  // full diff of selected file (main thread, heap)
 
 	refresh_thread: ^thread.Thread,
 	timer:          f32,
@@ -81,7 +80,6 @@ git_manager_destroy :: proc(m: ^Git_Manager) {
 	delete(m.root)
 	_free_state(&m.current)
 	_free_state(&m.pending)
-	if m.diff_text != "" { delete(m.diff_text); m.diff_text = "" }
 	for k, &v in m.blame_cache { delete(k); _free_blame_lines(&v) }
 	delete(m.blame_cache)
 }
@@ -202,18 +200,6 @@ git_list_branches :: proc(m: ^Git_Manager, allocator := context.allocator) -> [d
 		if line != "" { append(&result, strings.clone(line, allocator)) }
 	}
 	return result
-}
-
-// git_diff_file returns heap-owned unified diff for rel_path vs HEAD.
-git_diff_file :: proc(m: ^Git_Manager, rel_path: string) -> string {
-	// Try staged first, then unstaged
-	out, ok := git_run(m.root, {"diff", "HEAD", "--", rel_path})
-	if ok && out != "" { return out }
-	if ok { delete(out) }
-	out2, ok2 := git_run(m.root, {"diff", "--cached", "--", rel_path})
-	if ok2 { return out2 }
-	delete(out2)
-	return ""
 }
 
 // git_blame_get returns per-line blame for abs_path, computing and caching it
