@@ -78,13 +78,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Odin
+        env:
+          # Authenticated download: the anonymous API call this replaced hit the
+          # shared runners' rate limit and came back with no assets
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Use API to find correct asset — macOS arm asset naming is inconsistent across releases
-          ASSET_URL=$(curl -s "https://api.github.com/repos/odin-lang/Odin/releases/tags/${ODIN_VERSION}" | \
-            python3 -c "import json,sys; assets=json.load(sys.stdin).get('assets',[]); \
-            print(next((a['browser_download_url'] for a in assets if 'macos-arm64' in a['name']), ''))")
-          if [ -z "$ASSET_URL" ]; then echo "macOS arm64 asset not found"; exit 1; fi
-          curl -fsSL "$ASSET_URL" -o odin.tar.gz
+          # Asset naming varies across Odin releases; match on the platform
+          gh release download "${ODIN_VERSION}" --repo odin-lang/Odin --pattern '*macos-arm64*' --output odin.tar.gz
           mkdir -p "$HOME/odin"
           tar -xzf odin.tar.gz -C "$HOME/odin"
           ODIN_DIR=$(find "$HOME/odin" -maxdepth 2 -name "odin" -type f | xargs -I{} dirname {} | head -1)
@@ -109,7 +109,7 @@ jobs:
 
   # ── macOS amd64 (Intel) ───────────────────────────────────────────────────
   build-macos-intel:
-    runs-on: macos-13
+    runs-on: macos-15-intel # macos-13 runners were retired (jobs stayed queued)
     steps:
       - uses: actions/checkout@v4
 
