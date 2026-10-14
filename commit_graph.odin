@@ -13,6 +13,10 @@ package editor
 //   commit_graph_show_branch(e, branch)  open filtered by a branch ("" = all)
 //   commit_graph_select(e, hash)         open and select a commit (loads pages
 //                                        until it is found)
+//   commit_graph_reload(e)               reload the history (after a git op)
+//
+// Right click on a row (or Menu / Shift+F10) opens the commit context menu of
+// commit_ops.odin (ticket #9).
 
 import "base:runtime"
 import "core:fmt"
@@ -54,6 +58,8 @@ Commit_Graph :: struct {
 	err:         string, // owned
 	graph_nav:   Ui_List_Nav,
 	vis:         int,
+	list_r:      rl.Rectangle, // last drawn list area (context menu anchor)
+	row_h:       f32,
 
 	branch:      string, // owned; "" = all refs
 
@@ -135,6 +141,15 @@ commit_graph_select :: proc(e: ^Editor, hash: string) {
 		delete(_cg.want_hash)
 		_cg.want_hash = strings.clone(hash)
 	}
+}
+
+// Reloads the history keeping the branch filter (no-op when closed).
+commit_graph_reload :: proc(e: ^Editor) {
+	if !ui_panel_is_open(CG_ID) { return }
+	keep := strings.clone(_cg.branch, context.temp_allocator)
+	_cg_reset(e)
+	delete(_cg.branch); _cg.branch = strings.clone(keep)
+	if _cg_searching() { _cg.search_t = 0.001 }
 }
 
 // ---------------------------------------------------------------------------
@@ -346,10 +361,13 @@ _cg_input :: proc(e: ^Editor) -> bool {
 	}
 	if ctrl() && rl.IsKeyPressed(.B) { _cg_open_picker(e); return true }
 	if rl.IsKeyPressed(.F5) || (ctrl() && rl.IsKeyPressed(.R)) {
-		keep := strings.clone(_cg.branch, context.temp_allocator)
-		_cg_reset(e)
-		delete(_cg.branch); _cg.branch = strings.clone(keep)
-		if _cg_searching() { _cg.search_t = 0.001 }
+		commit_graph_reload(e)
+		return true
+	}
+	if _cg.focus == .Graph && (rl.IsKeyPressed(.MENU) || (shift() && rl.IsKeyPressed(.F10))) {
+		nav := _cg_nav()
+		y := _cg.list_r.y + f32(nav.selected - nav.scroll + 1) * _cg.row_h
+		commit_ops_open_menu(e, cg_selected_commit(), {_cg.list_r.x + 60, y})
 		return true
 	}
 	if rl.IsKeyPressed(.TAB) {
@@ -417,7 +435,7 @@ _cg_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		commit_detail_draw_diff(e, font, {px, py, pw, ph})
 		return
 	}
-	busy := _cg.picker_open
+	busy := _cg.picker_open || ui_panel_is_open("commit_ops")
 
 	// Header: title, branch filter, search box, status
 	rl.DrawRectangleRec({px, py, pw, HDR}, GITD_HEADER)
@@ -491,6 +509,8 @@ _cg_draw_list :: proc(e: ^Editor, font: rl.Font, r: rl.Rectangle, interactive: b
 	count := _cg_count()
 	vis   := max(1, int(r.height / row_h))
 	_cg.vis = vis
+	_cg.list_r = r
+	_cg.row_h = row_h
 	ui_list_clamp(nav, count, vis)
 	searching := _cg_searching()
 
@@ -589,6 +609,14 @@ _cg_draw_list :: proc(e: ^Editor, font: rl.Font, r: rl.Rectangle, interactive: b
 				}
 				_cg_last_click_row = row
 				_cg_last_click_t = now_t
+			}
+		}
+		if rl.IsMouseButtonPressed(.RIGHT) {
+			row := ui_list_row_at(nav^, r.y, row_h, mp.y, count, vis)
+			if row >= 0 {
+				nav.selected = row
+				_cg.focus = .Graph
+				commit_ops_open_menu(e, _cg_commit(row), mp)
 			}
 		}
 	}
