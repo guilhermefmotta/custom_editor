@@ -60,6 +60,7 @@ _Tp_Tab :: struct {
 	scroll: int,    // lines scrolled back (0 = live)
 	shell:  string, // owned, for the tab label
 	fresh:  bool,   // snapshot taken at least once
+	external: bool, // attached by another screen (terminal_panel_attach): never destroyed here
 }
 
 @(private="file")
@@ -86,7 +87,7 @@ _tp_has_tabs :: proc(e: ^Editor) -> bool { return len(_tp.tabs) > 0 }
 
 @(private="file")
 _tp_tab_destroy :: proc(tab: ^_Tp_Tab) {
-	term.destroy(tab.t)
+	if !tab.external { term.destroy(tab.t) }
 	term.snapshot_destroy(&tab.snap)
 	delete(tab.shell)
 	tab^ = {}
@@ -507,6 +508,43 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 terminal_panel_active :: proc() -> ^term.Terminal {
 	if len(_tp.tabs) == 0 { return nil }
 	return _tp.tabs[clamp(_tp.active, 0, len(_tp.tabs) - 1)].t
+}
+
+// --- Terminals owned by other screens (ticket #17: Claude sessions) ---
+// The owner creates/starts/destroys the term.Terminal (any argv/cwd/env via
+// term.start); the panel only shows it as a tab. Closing that tab (x, or
+// Enter after the process exits) just detaches it.
+
+// Shows `t` as a tab (added if needed), makes it active and opens/focuses
+// the panel. False when the tab limit is reached.
+terminal_panel_attach :: proc(e: ^Editor, t: ^term.Terminal, label: string) -> bool {
+	idx := -1
+	for tab, i in _tp.tabs { if tab.t == t { idx = i } }
+	if idx < 0 {
+		if len(_tp.tabs) >= TERMINAL_MAX_TABS {
+			ui_banner_show(fmt.tprintf("At most %d terminals", TERMINAL_MAX_TABS), .Warning)
+			return false
+		}
+		append(&_tp.tabs, _Tp_Tab{t = t, shell = strings.clone(label), external = true})
+		idx = len(_tp.tabs) - 1
+	}
+	_tp.active = idx
+	_tp.sel_on = false
+	ui_panel_open(e, TERMINAL_PANEL_ID)
+	_tp.focused = true
+	return true
+}
+
+// Removes the tab showing `t` (if any) without touching the process.
+terminal_panel_detach :: proc(e: ^Editor, t: ^term.Terminal) {
+	for tab, i in _tp.tabs {
+		if tab.t == t { _tp_close_tab(e, i); return }
+	}
+}
+
+// Is `t` the tab currently visible in the open panel?
+terminal_panel_shows :: proc(t: ^term.Terminal) -> bool {
+	return t != nil && ui_panel_is_open(TERMINAL_PANEL_ID) && terminal_panel_active() == t
 }
 
 // Box-drawing and block elements drawn as rectangles so lines connect

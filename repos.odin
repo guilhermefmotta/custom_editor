@@ -86,6 +86,10 @@ Repo_Set :: struct {
 
 @(private="file") _repo_hooks: [dynamic]Repo_Switch_Hook
 
+// Optional colored dot drawn at the left of each repository tab (set from
+// @(init) by another screen; ticket #17 shows the Claude session status).
+repos_tab_dot: proc(r: ^Repo) -> (col: rl.Color, ok: bool)
+
 // Subscribe to active-repo changes. Callable from @(init).
 repos_register_switch_hook :: proc "contextless" (hook: Repo_Switch_Hook) {
 	context = runtime.default_context()
@@ -627,6 +631,9 @@ _rt_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		col := TEXT if on else LINENUM
 		if !on && r.git.root != "" && len(r.git.current.entries) > 0 { col = GITD_YELLOW }
 		ui_text(font, label, x + 12, 0, REPO_BAR_H, size, col, x + w - 18)
+		if repos_tab_dot != nil {
+			if dc, ok := repos_tab_dot(r); ok { rl.DrawCircleV({x + 6, REPO_BAR_H * 0.5}, 3.5, dc) }
+		}
 		cr := rl.Rectangle{x + w - 18, (REPO_BAR_H - 14) * 0.5, 14, 14}
 		if ui_point_in(mp, cr) { rl.DrawRectangleRec(cr, ui_with_alpha(GITD_RED, 90)) }
 		ui_text(font, "×", cr.x + 3, 0, REPO_BAR_H, size, LINENUM, cr.x + cr.width)
