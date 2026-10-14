@@ -1,0 +1,4 @@
+{"data":{"project":{"mergeRequests":{"nodes":[
+ {"iid":"7","title":"Pipeline cache","webUrl":"https://gitlab.example.com/team/app/-/merge_requests/7","draft":false,"createdAt":"2026-10-11T10:00:00Z","sourceBranch":"ci/cache","targetBranch":"develop","author":{"username":"carol"},"headPipeline":{"status":"RUNNING"}},
+ {"iid":"6","title":"Draft: refactor","webUrl":"https://gitlab.example.com/team/app/-/merge_requests/6","draft":true,"createdAt":"2026-10-10T10:00:00Z","sourceBranch":"refactor","targetBranch":"develop","author":{"username":"dave"},"headPipeline":null}
+]}}}}

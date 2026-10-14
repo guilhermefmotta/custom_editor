@@ -1,0 +1,2 @@
+[{"id":1001,"user":{"login":"bob"},"body":"LGTM, one nit:\nrename `foo`","created_at":"2026-10-10T13:00:00Z","html_url":"https://github.com/acme/editor/pull/42#issuecomment-1001"},
+ {"id":1002,"user":{"login":"alice"},"body":"Done ✅","created_at":"2026-10-10T14:00:00Z","html_url":"x"}]
