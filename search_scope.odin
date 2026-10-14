@@ -1,7 +1,7 @@
 package editor
 
 // ===========================================================================
-// Branch-scoped text search (ticket #12, ADR 0002).
+// Branch-scoped text search (ticket #12, ADR 0011).
 //
 // search_start with s.scope.kind == .Branch runs search_branch_run on the
 // search thread (never the UI thread): the branch tree is listed with

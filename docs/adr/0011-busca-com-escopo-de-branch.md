@@ -1,4 +1,4 @@
-# 0002 — Busca de texto com escopo de branch
+# 0011 — Busca de texto com escopo de branch
 
 Data: 2026-10-14 · Épico #1 · Ticket #12
 

@@ -1,7 +1,7 @@
 package editor
 
 // ===========================================================================
-// Opening a branch-scoped search result (ticket #12, ADR 0002).
+// Opening a branch-scoped search result (ticket #12, ADR 0011).
 //
 //   search_open_result(e, &r, scope)   // palette Enter on a .Search row
 //
