@@ -5,6 +5,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "./wake"
 
 MAX_SEARCH_RESULTS :: 500
 SEARCH_CHUNK       :: 4 << 20 // 4 MB per read
@@ -156,6 +157,7 @@ search_worker_proc :: proc(data: rawptr) {
 		s.elapsed_ms = time.duration_milliseconds(time.tick_since(t0))
 		s.phase = .Done
 		sync.mutex_unlock(&s.mu)
+		wake.request() // ADR 0016: search finished → wake the UI loop
 	}
 
 	if args.scope.kind == .Branch {

@@ -266,7 +266,10 @@ ui_registry_handle_input :: proc(e: ^Editor) -> bool {
 // Every-frame update hooks (open or not — the panel decides).
 ui_registry_update :: proc(e: ^Editor, dt: f32) {
 	for p in ui_panels() { if p.update != nil { p.update(e, dt) } }
-	ui_banner_update(&ui_banner, f64(rl.GetTime()))
+	now := f64(rl.GetTime())
+	ui_banner_update(&ui_banner, now)
+	// ADR 0016: wake up to hide an expiring banner even when idle
+	if ui_banner.visible && ui_banner.until > 0 { frame_request_in(ui_banner.until - now) }
 }
 
 // Draw open panels of `layer`, lowest priority first so the highest ends on top.

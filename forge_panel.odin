@@ -592,6 +592,7 @@ _forge_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	ui_text(font, hdr, px + 80, py, HDR, FONT_SIZE - 3, LINENUM, px + W - 110)
 	if _fp.waiting != {} {
 		dots := int(rl.GetTime() * 3) % 4
+		frame_request_in(0.1) // ADR 0016: keep the dots moving while waiting
 		ui_text(font, fmt.tprintf("loading%s", strings.repeat(".", dots, context.temp_allocator)), px + W - 100, py, HDR, FONT_SIZE - 3, DIAG_WARN_COL, px + W)
 	}
 

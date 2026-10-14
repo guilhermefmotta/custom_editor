@@ -2,6 +2,7 @@ package debug
 
 import "core:net"
 import "core:sync"
+import "../wake"
 
 // ---------------------------------------------------------------------------
 // Transport modes
@@ -57,6 +58,7 @@ rq_push :: proc(q: ^Read_Queue, msg: Inbox_Msg) {
 	sync.mutex_lock(&q.mu)
 	append(&q.items, msg)
 	sync.mutex_unlock(&q.mu)
+	wake.request() // ADR 0016: adapter message → wake the UI loop
 }
 
 rq_drain :: proc(q: ^Read_Queue, out: ^[dynamic]Inbox_Msg) {

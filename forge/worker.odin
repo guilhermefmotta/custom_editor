@@ -18,6 +18,7 @@ import "base:runtime"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "../wake"
 
 Op :: enum u8 {
 	Detect,           // find repo root + remote, resolve auth, current branch
@@ -169,6 +170,7 @@ _worker :: proc(t: ^thread.Thread) {
 		append(&c.results, res)
 		c.pending -= 1
 		sync.mutex_unlock(&c.mutex)
+		wake.request() // ADR 0016: result ready → wake the UI loop
 	}
 }
 
