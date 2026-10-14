@@ -272,6 +272,9 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 		}
 	}
 
+	// Scope picker (search_scope_picker.odin) owns the keyboard while open.
+	if p.mode == .Search && search_scope_picker_input(p, e, PALETTE_SEARCH_MAX_VIS) { return }
+
 	if rl.IsKeyPressed(.ESCAPE) { p.sel_all = false; palette_close(p); return }
 
 	// Ctrl+Enter toggles the selected result's file group open/closed —
@@ -433,8 +436,10 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 		r := p.search.results[rows[sel].result_idx]
 		sync.mutex_unlock(&p.search.mu)
 
-		search_jump(e, &r)
+		// Workspace / checked-out branch: jump. Other branches ask first
+		// (checkout & edit / read-only) — search_scope_open.odin.
 		palette_close(p)
+		search_open_result(e, &r, p.search.scope)
 
 	case .Marks:
 		if p.marks == nil { return }
@@ -513,19 +518,11 @@ location_jump :: proc(e: ^Editor, li: Location_Item) {
 search_jump :: proc(e: ^Editor, r: ^Search_Result) {
 	p := active_pane(e)
 	if p.filename != r.file {
-		editor_open(e, r.file)
+		if !editor_open(e, r.file) { return }
 		p = active_pane(e)
 	}
-	target := max(0, r.line - 1)
-	total  := buffer_line_count(&p.buf)
-	if target >= total { target = total - 1 }
-	ls := buffer_line_start(&p.buf, target)
-	ll := buffer_line_length(&p.buf, target)
-	p.cursor     = ls + min(max(0, r.col - 1), ll)
-	p.sel_anchor = p.cursor
-	// Center scroll on result
-	p.scroll      = max(0, target - 10)
-	p.scroll_anim = f32(p.scroll)
+	// Line + searched term selected (highlighted); see search_scope_open.odin.
+	search_place_cursor(p, r.line, r.col, r.match_len)
 }
 
 // ---- File scanner ----
@@ -620,6 +617,7 @@ palette_count :: proc(p: ^Palette, e: ^Editor, q: string) -> int {
 		for f in p.files { if pal_match(f, q) { n += 1 } }
 		return n
 	case .Search:
+		if search_scope_picker_is_open() { return search_scope_picker_count() }
 		sync.mutex_lock(&p.search.mu)
 		rows := _search_build_rows(p)
 		n := len(rows)
@@ -798,6 +796,9 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	rl.DrawLineV({panel_x, panel_y + QUERY_H - 1}, {panel_x + PANEL_W, panel_y + QUERY_H - 1}, PANEL_BOR)
 
 	icon := ">" if p.mode == .Search else ("*" if p.mode == .Themes else "?")
+	if p.mode == .Search {
+		search_scope_draw_chip(font, p.search.scope, panel_x + PANEL_W - 48, panel_y, QUERY_H, ACCENT, SUBDUED, PANEL_BG)
+	}
 	rl.DrawTextEx(font, to_cstring(icon), {panel_x + 14, panel_y + 14}, FONT_SIZE, CHAR_SPACING, ACCENT)
 
 	if len(q) > 0 {
@@ -895,6 +896,10 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		}
 
 	case .Search:
+		if search_scope_picker_is_open() {
+			search_scope_picker_draw(font, panel_x, item_y, PANEL_W, ITEM_H, max_vis, TEXT, SUBDUED, ACCENT, SEL_BG_P)
+			break
+		}
 		// Accordion, JetBrains-style: each file starts as a collapsed
 		// header row (path:line (count), project name on the right, +/-
 		// fold indicator). Ctrl+Enter expands it into one full-line row per
@@ -902,6 +907,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		// original indentation (Search_Result.ctx is whitespace-trimmed,
 		// fine for the collapsed view but not for an expanded code look).
 		proj := path_basename(p.cwd)
+		if p.search.scope.kind == .Branch { proj = p.search.scope.name }
 		sync.mutex_lock(&p.search.mu)
 		rows := _search_build_rows(p)
 		for ri := 0; ri < len(rows); ri += 1 {
@@ -929,7 +935,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 					row_txt_max = txt_max - pw - 12
 				}
 				r0    := p.search.results[row.result_idx]
-				rel   := path_rel(row.file, p.cwd)
+				rel   := r0.path if r0.path != "" else path_rel(row.file, p.cwd)
 				label := fmt.tprintf("%s:%d  (%d)", rel, r0.line, row.group_cnt)
 				dlg_text(font, label, panel_x + 26, ty, FONT_SIZE - 2, CHAR_SPACING, MATCH_COL, row_txt_max, 0)
 			} else {
@@ -937,7 +943,9 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 				num_str := fmt.tprintf("%d", r.line)
 				dlg_text(font, num_str, panel_x + 30, ty, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, row_txt_max, 0)
 				nx := panel_x + 30 + rl.MeasureTextEx(font, to_cstring(num_str), FONT_SIZE - 2, CHAR_SPACING).x + 12
-				line_txt, lok := _search_read_line(r.file, r.line)
+				// Branch results aren't on disk: use the line captured from the blob.
+				line_txt, lok := r.line_text, r.line_text != ""
+				if r.path == "" { line_txt, lok = _search_read_line(r.file, r.line) }
 				if !lok { line_txt = r.ctx } // fall back to the trimmed snippet if the file vanished/changed
 				_dlg_text_hl(font, line_txt, q, nx, ty, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, ACCENT, row_txt_max, 0)
 			}
@@ -1052,12 +1060,19 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		phase   := p.search.phase
 		n_res   := len(p.search.results)
 		n_files := p.search.n_files
+		ms      := p.search.elapsed_ms
+		serr    := strings.clone(p.search.err, context.temp_allocator)
 		sync.mutex_unlock(&p.search.mu)
+		scope_lbl := search_scope_label(p.search.scope)
 
-		switch phase {
-		case .Idle:    footer_text = "Type query and press Enter to search"
-		case .Running: footer_text = fmt.tprintf("Searching... %d files  |  %d results so far", n_files, n_res)
-		case .Done:    footer_text = fmt.tprintf("%d results in %d files  |  Enter jump  |  Ctrl+Enter expand  |  Esc close", n_res, n_files)
+		switch {
+		case search_scope_picker_is_open():
+			footer_text = fmt.tprintf("Scope: type to filter \"%s\"  |  Enter choose  |  Esc/Tab back", search_scope_picker_filter())
+		case serr != "":
+			footer_text = fmt.tprintf("[%s] %s", scope_lbl, serr)
+		case phase == .Idle:    footer_text = "Type query and press Enter to search  |  Tab scope"
+		case phase == .Running: footer_text = fmt.tprintf("[%s] Searching... %d files  |  %d results so far", scope_lbl, n_files, n_res)
+		case phase == .Done:    footer_text = fmt.tprintf("[%s] %d results in %d files (%.0f ms)  |  Enter open  |  Ctrl+Enter expand  |  Tab scope", scope_lbl, n_res, n_files, ms)
 		}
 	case .Marks:
 		n_m := 0
@@ -1108,6 +1123,10 @@ cmd_find_file :: proc(e: ^Editor, p: ^Palette) {
 }
 
 cmd_search_workspace :: proc(e: ^Editor, p: ^Palette) {
+	// Scope persists across openings; refresh the git root + branch list.
+	search_scope_picker_close()
+	search_set_scope(&p.search, p.search.scope, e.git_mgr.root)
+	search_scope_refresh_branches(e)
 	p.mode         = .Search
 	p.selected     = 0
 	p.scroll       = 0
