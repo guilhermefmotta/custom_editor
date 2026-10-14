@@ -46,6 +46,7 @@ main :: proc() {
 	rl.SetExitKey(.KEY_NULL) // disable ESC closing window — handled by dialogs
 
 	font_px := font_pixel_size()
+	font_gen := settings_font_gen
 	font, custom := load_font(font_px)
 	defer if custom do rl.UnloadFont(font)
 
@@ -70,10 +71,12 @@ main :: proc() {
 
 		// Zoom (Ctrl+= / Ctrl+-) or moving to a display with another scale:
 		// rebuild the glyph atlas at the new pixel size so text stays 1:1 sharp
-		if px := font_pixel_size(); px != font_px {
+		// (also when the settings screen picks another font file)
+		if px := font_pixel_size(); px != font_px || font_gen != settings_font_gen {
 			if custom do rl.UnloadFont(font)
 			font, custom = load_font(px)
 			font_px = px
+			font_gen = settings_font_gen
 		}
 
 		handle_input(&e, font)
@@ -114,7 +117,15 @@ load_font :: proc(pixel_size: i32) -> (font: rl.Font, custom: bool) {
 	cps[i] = 0x2261; i += 1 // ≡
 	cps[i] = 0x229E; i += 1 // ⊞
 
-	for path in FONT_PATHS {
+	// settings_font_path (settings_panel.odin) first, then the built-in list
+	for path, i in FONT_PATHS {
+		if i == 0 && settings_font_path != "" {
+			f := rl.LoadFontEx(to_cstring(settings_font_path), pixel_size, raw_data(cps[:]), NUM_CP)
+			if f.glyphCount > 0 {
+				rl.SetTextureFilter(f.texture, .BILINEAR)
+				return f, true
+			}
+		}
 		f := rl.LoadFontEx(to_cstring(path), pixel_size, raw_data(cps[:]), NUM_CP)
 		if f.glyphCount > 0 {
 			rl.SetTextureFilter(f.texture, .BILINEAR)
