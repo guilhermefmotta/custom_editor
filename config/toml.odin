@@ -114,7 +114,7 @@ _TK :: enum u8 {
 }
 
 _Tok :: struct { kind: _TK, val: string, line: int }
-_Lex :: struct { src: string, pos, line: int }
+_Lex :: struct { src: string, pos, line: int, bad: bool } // bad: unterminated string seen
 
 @(private)
 _la :: proc(l: ^_Lex, off: int = 0) -> u8 {
@@ -248,20 +248,28 @@ _lex_next :: proc(l: ^_Lex) -> _Tok {
 		l.pos += 1
 		if _la(l, 0) == '"' && _la(l, 1) == '"' {
 			l.pos += 2
-			s, ok := _read_ml_basic(l); if !ok { return {.EOF, "", ln} }
+			s, ok := _read_ml_basic(l); if !ok { l.bad = true; return {.EOF, "", ln} }
 			return {.Str, s, ln}
 		}
-		s, ok := _read_basic(l); if !ok { return {.EOF, "", ln} }
+		s, ok := _read_basic(l); if !ok { l.bad = true; return {.EOF, "", ln} }
 		return {.Str, s, ln}
 	case '\'':
 		l.pos += 1
 		if _la(l, 0) == '\'' && _la(l, 1) == '\'' {
 			l.pos += 2
-			s, ok := _read_ml_literal(l); if !ok { return {.EOF, "", ln} }
+			s, ok := _read_ml_literal(l); if !ok { l.bad = true; return {.EOF, "", ln} }
 			return {.Str, s, ln}
 		}
-		s, ok := _read_literal(l); if !ok { return {.EOF, "", ln} }
+		s, ok := _read_literal(l); if !ok { l.bad = true; return {.EOF, "", ln} }
 		return {.Str, s, ln}
+	}
+
+	// Numbers before bare keys: digits and '-' are bare-key characters, so
+	// without this `size = 14` lexed as the key "14" and every integer/float
+	// value was silently dropped. A digit run followed by more bare chars
+	// (e.g. `2fa`) is still a bare key.
+	if (ch >= '0' && ch <= '9') || ((ch == '-' || ch == '+') && _la(l, 1) >= '0' && _la(l, 1) <= '9') {
+		if tok, ok := _lex_number(l, ln); ok { return tok }
 	}
 
 	if _is_bare(ch) {
@@ -274,32 +282,39 @@ _lex_next :: proc(l: ^_Lex) -> _Tok {
 		return {.Key, word, ln}
 	}
 
-	if ch == '-' || ch == '+' || (ch >= '0' && ch <= '9') {
-		start := l.pos; is_f := false
-		if ch == '-' || ch == '+' { l.pos += 1 }
-		if _la(l) == '0' && (l.pos+1 < len(l.src)) {
-			next := _la(l, 1)
-			if next == 'x' || next == 'o' || next == 'b' {
-				l.pos += 2
-				for l.pos < len(l.src) && _is_bare(l.src[l.pos]) { l.pos += 1 }
-				n, _ := strconv.parse_i64(l.src[start:l.pos])
-				return {.Int, fmt.aprintf("%d", n), ln}
-			}
-		}
-		for l.pos < len(l.src) {
-			c2 := l.src[l.pos]
-			if c2 >= '0' && c2 <= '9' || c2 == '_' { l.pos += 1 } else
-			if c2 == '.' || c2 == 'e' || c2 == 'E' { is_f = true; l.pos += 1 } else
-			if (c2 == '+' || c2 == '-') && l.pos > start+1 { l.pos += 1 } else { break }
-		}
-		raw := l.src[start:l.pos]
-		clean, _ := strings.replace_all(raw, "_", "", context.temp_allocator)
-		if is_f { return {.Float, strings.clone(clean), ln} }
-		return {.Int, strings.clone(clean), ln}
-	}
 
+	l.bad = true // character that can't start any token
 	l.pos += 1
 	return _lex_next(l)
+}
+
+// Lex an integer/float at l.pos. Returns ok=false (and leaves l.pos alone)
+// when the run continues with bare-key characters, i.e. it is really a key.
+@(private)
+_lex_number :: proc(l: ^_Lex, ln: int) -> (_Tok, bool) {
+	start := l.pos; is_f := false
+	ch := l.src[l.pos]
+	if ch == '-' || ch == '+' { l.pos += 1 }
+	if _la(l) == '0' && (l.pos+1 < len(l.src)) {
+		next := _la(l, 1)
+		if next == 'x' || next == 'o' || next == 'b' {
+			l.pos += 2
+			for l.pos < len(l.src) && _is_bare(l.src[l.pos]) { l.pos += 1 }
+			n, _ := strconv.parse_i64(l.src[start:l.pos])
+			return {.Int, fmt.aprintf("%d", n), ln}, true
+		}
+	}
+	for l.pos < len(l.src) {
+		c2 := l.src[l.pos]
+		if c2 >= '0' && c2 <= '9' || c2 == '_' { l.pos += 1 } else
+		if c2 == '.' || c2 == 'e' || c2 == 'E' { is_f = true; l.pos += 1 } else
+		if (c2 == '+' || c2 == '-') && l.pos > start+1 { l.pos += 1 } else { break }
+	}
+	if l.pos < len(l.src) && _is_bare(l.src[l.pos]) { l.pos = start; return {}, false }
+	raw := l.src[start:l.pos]
+	clean, _ := strings.replace_all(raw, "_", "", context.temp_allocator)
+	if is_f { return {.Float, strings.clone(clean), ln}, true }
+	return {.Int, strings.clone(clean), ln}, true
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +325,14 @@ _Par :: struct {
 	l:    _Lex,
 	cur:  _Tok,
 	peek: _Tok,
+	errors:     int, // statements the lenient parser had to skip
+	first_err:  int, // line of the first one (0 = none)
+}
+
+@(private)
+_par_err :: proc(p: ^_Par, line: int) {
+	if p.errors == 0 { p.first_err = line }
+	p.errors += 1
 }
 
 _par_init :: proc(p: ^_Par, src: string) {
@@ -457,6 +480,23 @@ _par_inline_tbl :: proc(p: ^_Par) -> (TOML_Value, bool) {
 // ---------------------------------------------------------------------------
 
 toml_parse :: proc(src: string) -> (root: ^TOML_Table, ok: bool) {
+	root, _, _ = _toml_parse(src)
+	return root, true
+}
+
+// toml_validate: strict check on top of the lenient parser (which skips bad
+// statements so a typo never stops the editor from starting). ok=false when
+// anything had to be skipped; line is the first offending line. Used before
+// rewriting a config file so a save never "fixes" a broken file by dropping
+// what it couldn't parse.
+toml_validate :: proc(src: string) -> (ok: bool, line: int) {
+	root, errs, first := _toml_parse(src)
+	toml_destroy_table(root)
+	return errs == 0, first
+}
+
+@(private)
+_toml_parse :: proc(src: string) -> (root: ^TOML_Table, errors: int, first_err: int) {
 	p: _Par
 	_par_init(&p, src)
 	root = new(TOML_Table); root^ = make(TOML_Table)
@@ -469,6 +509,7 @@ toml_parse :: proc(src: string) -> (root: ^TOML_Table, ok: bool) {
 			_par_adv(&p)
 			keys, kok := _par_key(&p)
 			if !kok || !_par_expect(&p, .DblRBrack) {
+				_par_err(&p, p.cur.line)
 				if kok { for k in keys { delete(k) }; delete(keys) }
 				_par_skip_nl(&p); continue
 			}
@@ -497,6 +538,7 @@ toml_parse :: proc(src: string) -> (root: ^TOML_Table, ok: bool) {
 			_par_adv(&p)
 			keys, kok := _par_key(&p)
 			if !kok || !_par_expect(&p, .RBrack) {
+				_par_err(&p, p.cur.line)
 				if kok { for k in keys { delete(k) }; delete(keys) }
 				_par_skip_nl(&p); continue
 			}
@@ -507,23 +549,30 @@ toml_parse :: proc(src: string) -> (root: ^TOML_Table, ok: bool) {
 
 		if p.cur.kind == .Key || p.cur.kind == .Str ||
 		   p.cur.kind == .Int || p.cur.kind == .Bool {
+			line := p.cur.line
 			keys, kok := _par_key(&p)
-			if !kok { _par_skip_nl(&p); continue }
+			if !kok { _par_err(&p, line); _par_skip_nl(&p); continue }
 			if !_par_expect(&p, .Eq) {
+				_par_err(&p, line)
 				for k in keys { delete(k) }; delete(keys)
 				_par_skip_nl(&p); continue
 			}
 			val, vok := _par_val(&p)
-			if vok { _tbl_set(cur_tbl, keys, val) }
+			if vok { _tbl_set(cur_tbl, keys, val) } else { _par_err(&p, line) }
+			if p.cur.kind != .NL && p.cur.kind != .EOF { _par_err(&p, p.cur.line) } // trailing junk
 			for k in keys { delete(k) }; delete(keys)
 			_par_skip_nl(&p); continue
 		}
 
-		_par_adv(&p)
+		// Unexpected token at statement start: skip it (freeing owned text).
+		_par_err(&p, p.cur.line)
+		bad := _par_adv(&p)
+		#partial switch bad.kind { case .Str, .Int, .Float: delete(bad.val) }
 		_par_skip_nl(&p)
 	}
 
-	return root, true
+	if p.l.bad { _par_err(&p, p.l.line) }
+	return root, p.errors, p.first_err
 }
 
 toml_load_file :: proc(path: string) -> (^TOML_Table, bool) {

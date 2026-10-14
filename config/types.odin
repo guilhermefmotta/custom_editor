@@ -401,7 +401,7 @@ config_destroy :: proc(c: ^Config) {
 @(private)
 _lsp_config_destroy :: proc(c: ^LSP_Config) {
 	for &s in c.servers {
-		delete(s.id); delete(s.name); delete(s.command); delete(s.init_options)
+		delete(s.id); delete(s.name); delete(s.command); delete(s.init_options); delete(s.install_url)
 		for a in s.args     { delete(a) }; delete(s.args)
 		for l in s.languages { delete(l) }; delete(s.languages)
 		for k, v in s.env    { delete(k); delete(v) }; delete(s.env)
