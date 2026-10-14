@@ -7,8 +7,13 @@ import dbg  "./debug"
 import conf "./config"
 import rl   "vendor:raylib"
 
+// Cursor blink phase for this frame (render → render_pane).
+@(private="file") _cursor_visible := true
+
 // Slow breathing pulse in [0, 1], used for subtle gutter-marker animations
 // (breakpoints, LSP warning dots) so they read as "live" without being loud.
+// ADR 0016: it never asks for frames — it breathes while the editor renders
+// for another reason and holds still when idle (no wake-ups just for it).
 _gutter_pulse :: proc() -> f32 {
 	return 0.5 + 0.5*math.sin(f32(rl.GetTime()) * 3.2)
 }
@@ -157,6 +162,12 @@ render :: proc(e: ^Editor, font: rl.Font) {
 
 	_apply_theme(e)
 	dlg_frame_tick()
+	// Cursor blink (ADR 0016): wakes only at the blink transitions, and stops
+	// (solid cursor) FRAME_BLINK_IDLE_STOP s after the last input.
+	blink_next: f64
+	_cursor_visible, blink_next = cursor_blink(e.cfg.cursor.blink, e.cfg.cursor.blink_rate, frame_since_input())
+	if blink_next != FRAME_NO_DEADLINE { frame_request_in(blink_next) }
+	ui_registry_update(e, frame_dt)
 
 	// Pump debug adapter messages every frame
 	dbg.debug_tick(&e.debug_mgr)
@@ -181,7 +192,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 			mid := sw * e.split_ratio
 			rl.DrawRectangleV({mid - DIVIDER_W * 0.5, 0}, {DIVIDER_W, usable_h}, DIVIDER_COL)
 		case .Horizontal:
-			mid := usable_h * e.split_ratio
+			// below the repo tab strip (repos_bar_h), matching get_pane_rect
+			top := repos_bar_h(e)
+			mid := top + (usable_h - top) * e.split_ratio
 			rl.DrawRectangleV({0, mid - DIVIDER_W * 0.5}, {sw, DIVIDER_W}, DIVIDER_COL)
 		case .None:
 		}
@@ -192,6 +205,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 			rl.DrawRectangleV({dx, 0}, {DIVIDER_W, usable_h}, DIVIDER_COL)
 		}
 	}
+
+	// Registered dock panels (ui_registry.odin) — above panes, below dialogs
+	ui_registry_draw(e, font, .Dock, sw, sh)
 
 	// Global message line — doubles as the Vim Command_Line input (:, /, ?)
 	// so what you're typing is actually visible while typing it.
@@ -254,6 +270,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	debug_eval_draw(&e.debug_eval, e, font, sw, sh)
 	debug_attach_draw(&e.debug_attach, e, font, sw, sh)
 
+	// Registered overlay panels + banner (ui_registry.odin)
+	ui_registry_draw(e, font, .Overlay, sw, sh)
+
 	// Palette overlay — always on top
 	palette_render(&e.palette, e, font)
 }
@@ -275,10 +294,13 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	adjust_scroll(p, vis_lines)
 
 	// Advance smooth scroll animation toward integer target
-	dt   := rl.GetFrameTime()
+	// frame_anim_dt: clamped, so a scroll right after a long sleep (ADR 0016)
+	// still eases in instead of jumping.
+	dt   := frame_anim_dt
 	diff := f32(p.scroll) - p.scroll_anim
 	if diff > 0.001 || diff < -0.001 {
 		p.scroll_anim += diff * min(dt * SCROLL_SPEED, 1.0)
+		frame_request_anim()
 	} else {
 		p.scroll_anim = f32(p.scroll)
 	}
@@ -540,7 +562,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		// in Normal/Visual/Replace (translucent so the glyph underneath still
 		// reads) and the usual thin beam in Insert — matches the real editor's
 		// modal convention instead of always using the modeless beam.
-		if is_active && li == cur_line {
+		if is_active && li == cur_line && _cursor_visible {
 			if _vim_cursor_is_block(e) {
 				rl.DrawRectangleV({text_x + f32(cur_col)*cw, y}, {cw, ch}, rl.Color{CURSOR_COL.r, CURSOR_COL.g, CURSOR_COL.b, 130})
 			} else {
@@ -548,7 +570,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			}
 		}
 		// Extra cursor beams
-		if is_active {
+		if is_active && _cursor_visible {
 			for &ec in p.extras {
 				ec_line, ec_col := buffer_pos_to_line_col(&p.buf, ec.pos)
 				if ec_line == li {

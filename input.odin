@@ -40,7 +40,7 @@ key_rep :: proc(key: rl.KeyboardKey) -> bool {
 	}
 	if _rep_key == key {
 		if !rl.IsKeyDown(key) { _rep_key = .KEY_NULL; return false }
-		_rep_accum += rl.GetFrameTime()
+		_rep_accum += frame_dt // real dt (ADR 0016: GetFrameTime lags one frame and includes sleeps)
 		if !_rep_init {
 			if _rep_accum < REP_DELAY { return false }
 			_rep_init = true; _rep_accum = 0; return true
@@ -235,6 +235,10 @@ handle_panels :: proc(e: ^Editor) -> bool {
 		palette_open(&e.palette)
 		return true
 	}
+
+	// Registered panels/shortcuts (ui_registry.odin) — topmost open panel
+	// gets input before the editor.
+	if ui_registry_handle_input(e) { return true }
 
 	// Ctrl+E (with or without Shift) → open the evaluate-expression dialog
 	// (modal popup, IntelliJ-style) with selected text pre-filled.

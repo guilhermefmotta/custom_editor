@@ -213,6 +213,9 @@ vim_handle_normal :: proc(e: ^Editor, p: ^Pane) {
 	// since Vim mode doesn't call handle_edit_shortcuts the way Normal does.
 	if ctrl() && rl.IsKeyPressed(.P)   { palette_open_files(&e.palette, e); return }
 	if ctrl() && rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return }
+	// Shift+Tab: list of recently opened files/tabs. On macOS Cmd counts as
+	// Ctrl and the system takes Cmd+Tab, so Ctrl+Tab alone isn't reachable there.
+	if shift() && !ctrl() && rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return }
 
 	if key_rep(.LEFT)  { p.cursor = max(0, p.cursor-1); p.sel_anchor = p.cursor }
 	if key_rep(.RIGHT) { p.cursor = min(buffer_len(&p.buf), p.cursor+1); p.sel_anchor = p.cursor }

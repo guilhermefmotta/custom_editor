@@ -25,6 +25,7 @@ Workspace_Dialog :: struct {
 	current_dir: string,            // owned; directory we are listing right now
 	error_msg:   string,            // static string (no heap)
 	workspace:   string,            // owned; currently active workspace root
+	marked:      [dynamic]string,   // owned; folders picked for multi-open (ticket #13)
 }
 
 WS_MAX_VIS     :: 18
@@ -42,11 +43,14 @@ WS_FOOTER_H :: f32(28)
 workspace_dialog_init :: proc(d: ^Workspace_Dialog) {
 	d.input   = make([dynamic]u8)
 	d.entries = make([dynamic]WS_Entry)
+	d.marked  = make([dynamic]string)
 }
 
 workspace_dialog_destroy :: proc(d: ^Workspace_Dialog) {
 	_ws_free_entries(d)
 	delete(d.entries)
+	for m in d.marked { delete(m) }
+	delete(d.marked)
 	delete(d.input)
 	if d.current_dir != "" { delete(d.current_dir) }
 	if d.workspace   != "" { delete(d.workspace) }
@@ -60,6 +64,8 @@ workspace_dialog_open :: proc(d: ^Workspace_Dialog) {
 	d.error_msg = ""
 	d.sel_all   = false
 	clear(&d.input)
+	for m in d.marked { delete(m) }
+	clear(&d.marked)
 
 	// Pre-fill with cwd + trailing slash so listing starts immediately
 	cwd, err := os.get_working_directory(context.temp_allocator)
@@ -86,6 +92,24 @@ workspace_dialog_close :: proc(d: ^Workspace_Dialog) {
 //   2. current_dir (last successfully listed directory) as fallback —
 //      covers the case where the user navigated via Enter keys.
 workspace_dialog_confirm :: proc(d: ^Workspace_Dialog, e: ^Editor) {
+	// Several folders marked (Shift+Enter / Ctrl+Space): open them all, one
+	// repository tab each (ticket #13).
+	if len(d.marked) > 0 {
+		paths := make([]string, len(d.marked), context.temp_allocator)
+		for m, i in d.marked { paths[i] = strings.clone(m, context.temp_allocator) }
+		n, err := repos_open_many(e, paths)
+		if n == 0 {
+			d.error_msg = "Cannot open the selected folders"
+			if err != "" { ui_banner_show(err, .Error, 6) }
+			return
+		}
+		if err != "" { ui_banner_show(err, .Warning, 6) }
+		e.msg = fmt.tprintf("Opened %d folder(s)", n)
+		_ws_set_workspace(d, paths[0])
+		workspace_dialog_close(d)
+		return
+	}
+
 	// Candidate 1: what the user typed (strip trailing slash for stat)
 	typed := _ws_norm_seps(string(d.input[:]))
 	typed_clean := _ws_clean_for_stat(typed)
@@ -106,32 +130,59 @@ workspace_dialog_confirm :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 		return
 	}
 
-	err := os.change_directory(target)
-	if err != nil {
+	// The folder becomes a repository tab (and the cwd, file tree, palette
+	// and git screens follow it — repos.odin). The file list is still
+	// scanned lazily by "Find File in Workspace".
+	r, err := repos_open(e, target)
+	if err != "" || r == nil {
 		d.error_msg = "Cannot open: check permissions"
+		ui_banner_show(err, .Error, 6)
 		return
 	}
-
-	if d.workspace != "" { delete(d.workspace) }
-	d.workspace = strings.clone(target)
-
-	// Refresh palette cwd — the file list itself is scanned lazily, the first
-	// time "Find File in Workspace" is actually opened (cmd_find_file), not
-	// eagerly here. Eagerly walking the whole tree on every workspace open
-	// used to freeze the editor on large (tens-of-GB) workspaces.
-	if e.palette.cwd != "" { delete(e.palette.cwd) }
-	e.palette.cwd, _ = os.get_working_directory(context.allocator)
-
-	// Always open the file tree so the user sees the new workspace immediately
-	// (this only lists one directory level, bounded by FT_MAX_CHILDREN — cheap
-	// regardless of total workspace size).
-	file_tree_open(&e.file_tree)
+	_ws_set_workspace(d, target)
+	// Show the file tree of the new folder (now, or when the switch completes).
+	if r == repos_active(e) && !e.repos.pending { file_tree_open(&e.file_tree) } else { r.tree_open = true }
 
 	name := path_basename(target)
 	if name == "" { name = target }
 	e.msg = fmt.tprintf("Workspace → %s", name)
 
 	workspace_dialog_close(d)
+}
+
+@(private="file")
+_ws_set_workspace :: proc(d: ^Workspace_Dialog, path: string) {
+	if d.workspace != "" { delete(d.workspace) }
+	d.workspace = strings.clone(path)
+}
+
+// Shift+Enter / Ctrl+Space: mark or unmark the selected folder for
+// multi-open. Returns the number of marked folders.
+workspace_dialog_toggle_mark :: proc(d: ^Workspace_Dialog) -> int {
+	if d.selected < 0 || d.selected >= len(d.entries) { return len(d.marked) }
+	en := d.entries[d.selected]
+	if !en.is_dir || en.name == ".." { d.error_msg = "Select a folder to mark"; return len(d.marked) }
+	full := _ws_entry_path(d, en.name)
+	for m, i in d.marked {
+		if m == full { delete(m); ordered_remove(&d.marked, i); return len(d.marked) }
+	}
+	append(&d.marked, strings.clone(full))
+	return len(d.marked)
+}
+
+@(private="file")
+_ws_entry_path :: proc(d: ^Workspace_Dialog, name: string) -> string {
+	dir := _ws_clean_for_stat(d.current_dir)
+	if strings.has_suffix(dir, "/") { return strings.concatenate({dir, name}, context.temp_allocator) }
+	return strings.concatenate({dir, "/", name}, context.temp_allocator)
+}
+
+@(private="file")
+_ws_is_marked :: proc(d: ^Workspace_Dialog, name: string) -> bool {
+	if len(d.marked) == 0 { return false }
+	full := _ws_entry_path(d, name)
+	for m in d.marked { if m == full { return true } }
+	return false
 }
 
 // ---------------------------------------------------------------
@@ -142,6 +193,12 @@ workspace_dialog_handle_input :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 	// Escape: close
 	if rl.IsKeyPressed(.ESCAPE) {
 		workspace_dialog_close(d)
+		return
+	}
+
+	// Shift+Enter / Ctrl+Space: mark the selected folder (multi-open)
+	if (shift() && rl.IsKeyPressed(.ENTER)) || (ctrl() && rl.IsKeyPressed(.SPACE)) {
+		workspace_dialog_toggle_mark(d)
 		return
 	}
 
@@ -163,21 +220,10 @@ workspace_dialog_handle_input :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 		return
 	}
 
-	// Up / Down: move selection
-	if key_rep(.UP) {
-		if d.selected > 0 {
-			d.selected -= 1
-			if d.selected < d.scroll { d.scroll = d.selected }
-		}
-		return
-	}
-	if key_rep(.DOWN) {
-		if d.selected < len(d.entries)-1 {
-			d.selected += 1
-			if d.selected >= d.scroll + WS_MAX_VIS {
-				d.scroll = d.selected - WS_MAX_VIS + 1
-			}
-		}
+	// Up/Down, PgUp/PgDn, Home/End, mouse wheel: shared list component (ui_list.odin)
+	nav := Ui_List_Nav{d.selected, d.scroll}
+	if ui_list_handle_nav(&nav, len(d.entries), WS_MAX_VIS, wheel_anywhere = true) {
+		d.selected, d.scroll = nav.selected, nav.scroll
 		return
 	}
 
@@ -499,11 +545,17 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 		PANEL_BOR,
 	)
 
-	rl.DrawTextEx(font, "Open Workspace",
+	rl.DrawTextEx(font, "Open Folder(s)",
 		{panel_x + 12, panel_y + (WS_HEADER_H - ref.y)*0.5},
 		FONT_SIZE, CHAR_SPACING, ACCENT)
 
-	if d.workspace != "" {
+	if len(d.marked) > 0 {
+		ws_label := fmt.tprintf("%d folder(s) marked - Ctrl+Enter opens all", len(d.marked))
+		ws_w     := rl.MeasureTextEx(font, to_cstring(ws_label), FONT_SIZE - 3, CHAR_SPACING).x
+		rl.DrawTextEx(font, to_cstring(ws_label),
+			{panel_x + WS_PANEL_W - ws_w - 10, panel_y + (WS_HEADER_H - ref.y + 2)*0.5},
+			FONT_SIZE - 3, CHAR_SPACING, ACCENT)
+	} else if d.workspace != "" {
 		ws_label := fmt.tprintf("  current: %s", path_basename(d.workspace) if path_basename(d.workspace) != "" else d.workspace)
 		ws_w     := rl.MeasureTextEx(font, to_cstring(ws_label), FONT_SIZE - 3, CHAR_SPACING).x
 		rl.DrawTextEx(font, to_cstring(ws_label),
@@ -584,6 +636,10 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 			rl.DrawTextEx(font, "↑", {ix, text_y}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 			rl.DrawTextEx(font, to_cstring(entry.name), {ix + ref.x + 4, text_y}, FONT_SIZE - 1, CHAR_SPACING, SUBDUED)
 		} else if entry.is_dir {
+			if _ws_is_marked(d, entry.name) {
+				rl.DrawRectangleV({panel_x + 3, iy + 3}, {5, WS_ITEM_H - 6}, ACCENT)
+				rl.DrawRectangleV({panel_x, iy}, {WS_PANEL_W, WS_ITEM_H}, ui_with_alpha(ACCENT, 28))
+			}
 			// Folder: simple coloured square icon + "/"
 			icon_sz := f32(10)
 			iy_mid  := iy + (WS_ITEM_H - icon_sz)*0.5
@@ -637,7 +693,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	count_str := fmt.tprintf("%d dirs  %d files", n_dirs, n_files)
 	count_w   := rl.MeasureTextEx(font, to_cstring(count_str), FONT_SIZE - 3, CHAR_SPACING).x
 
-	footer_hint := "↑↓ navigate  Enter open dir  Tab autocomplete  Ctrl+Enter set workspace  Esc cancel"
+	footer_hint := "Enter open dir  Shift+Enter mark  Tab complete  Ctrl+Enter open folder(s)  Esc"
 	col := WARN_COL if d.error_msg != "" else SUBDUED
 	rl.DrawTextEx(font, to_cstring(footer_hint),
 		{panel_x + 10, footer_y + (WS_FOOTER_H - ref.y + 2)*0.5},

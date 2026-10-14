@@ -1,0 +1,5 @@
+{"data":{"repository":{"pullRequests":{"nodes":[
+ {"number":42,"title":"Add forge panel","url":"https://github.com/acme/editor/pull/42","isDraft":false,"createdAt":"2026-10-10T12:00:00Z","headRefName":"feature/forge","baseRefName":"main","author":{"login":"alice"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}},
+ {"number":41,"title":"WIP: vim registers","url":"https://github.com/acme/editor/pull/41","isDraft":true,"createdAt":"2026-10-09T08:30:00Z","headRefName":"exp/vim","baseRefName":"main","author":{"login":"bob"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},
+ {"number":40,"title":"Docs only","url":"https://github.com/acme/editor/pull/40","isDraft":false,"createdAt":"2026-10-08T08:30:00Z","headRefName":"docs","baseRefName":"main","author":null,"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}
+]}}}}

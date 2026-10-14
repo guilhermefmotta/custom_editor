@@ -30,6 +30,9 @@ Config_Paths :: struct {
 
 default_config_paths :: proc() -> Config_Paths {
 	home := os.get_env("HOME", context.temp_allocator)
+	// Windows usually has no HOME; without this the user file resolved to
+	// "/.config/editor/editor.toml" (root of the current drive).
+	if home == "" { home = os.get_env("USERPROFILE", context.temp_allocator) }
 	return {
 		system    = "/etc/editor/editor.toml",
 		user      = fmt.tprintf("%s/.config/editor/editor.toml", home),
@@ -157,6 +160,7 @@ _apply_window :: proc(cfg: ^Config, t: ^TOML_Table) {
 	if n, ok := toml_int(t, "height");     ok { w.height     = int(n) }
 	if b, ok := toml_bool(t, "fullscreen");ok { w.fullscreen = b }
 	if n, ok := toml_int(t, "fps_target"); ok { w.fps_target = int(n) }
+	if b, ok := toml_bool(t, "event_driven"); ok { w.event_driven = b }
 	if s, ok := toml_str(t, "title");      ok { _replace_str(&w.title, s) }
 }
 

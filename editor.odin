@@ -72,7 +72,12 @@ Editor :: struct {
 	recents:         Recents_Dialog,
 	workspace_dlg:   Workspace_Dialog,
 	lsp_dialog:      LSP_Dialog,
-	git_mgr:         git.Git_Manager,
+	// Git of the ACTIVE repository (ADR 0014): points into repos.list[active]
+	// (or repos.none — root "" — when no repo is open). Never nil after
+	// editor_init/repos_init. Screens keep using e.git_mgr.root/.queue/.current.
+	git_mgr:         ^git.Git_Manager,
+	repos:           Repo_Set,     // open repositories (tabs), see repos.odin
+	recent_repos:    Recent_Repos, // recently opened repository folders
 	git_dialog:      Git_Dialog,
 	nav_hist:        Nav_History,
 	def_picker:      Goto_Def_Picker,
@@ -108,6 +113,7 @@ editor_init :: proc() -> Editor {
 	e.file_tree       = file_tree_init()
 	e.outline         = outline_init()
 	e.recents         = recents_init()
+	repos_init(&e)
 	workspace_dialog_init(&e.workspace_dlg)
 	git_dialog_init(&e.git_dialog)
 	e.nav_hist       = nav_history_init()
@@ -154,7 +160,8 @@ editor_destroy :: proc(e: ^Editor) {
 	workspace_dialog_destroy(&e.workspace_dlg)
 	lsp_dialog_destroy(&e.lsp_dialog)
 	git_dialog_destroy(&e.git_dialog)
-	git.git_manager_destroy(&e.git_mgr)
+	repos_destroy(e) // every repo's git manager (incl. the active one) + stashed views
+	recent_repos_destroy(&e.recent_repos)
 	nav_history_destroy(&e.nav_hist)
 	goto_def_picker_destroy(&e.def_picker)
 	rename_dialog_destroy(&e.rename_dlg)
@@ -186,6 +193,12 @@ editor_open :: proc(e: ^Editor, path: string) -> bool {
 		}
 	}
 	p := active_pane(e)
+	// A file shown without a tab entry (opened outside editor_open) becomes a
+	// tab first, so the new file opens beside it instead of replacing it.
+	if len(p.tabs) == 0 && p.filename != "" {
+		append(&p.tabs, Pane_Tab{filename = strings.clone(p.filename), cursor = p.cursor, scroll = p.scroll})
+		p.cur_tab = 0
+	}
 	if len(p.tabs) == 0 {
 		// First file ever: open normally and register as tab 0
 		if !pane_open(p, path) { return false }
@@ -209,7 +222,7 @@ editor_save :: proc(e: ^Editor) -> bool {
 	}
 	ok, msg := pane_save(p)
 	e.msg = msg
-	if ok { git.git_blame_invalidate(&e.git_mgr, p.filename) }
+	if ok { git.git_blame_invalidate(e.git_mgr, p.filename) }
 	return ok
 }
 
@@ -396,7 +409,15 @@ goto_dialog_confirm :: proc(e: ^Editor) {
 
 // ---- Pane rect ----
 
+// The repo tab strip (repos.odin) takes the top REPO_BAR_H when a repo is open.
 get_pane_rect :: proc(e: ^Editor, idx: int, sw, sh: f32) -> (x, y, w, h: f32) {
+	top := repos_bar_h(e)
+	x, y, w, h = _get_pane_rect(e, idx, sw, sh - top)
+	return x, y + top, w, h
+}
+
+@(private="file")
+_get_pane_rect :: proc(e: ^Editor, idx: int, sw, sh: f32) -> (x, y, w, h: f32) {
 	n := len(e.panes)
 	if n <= 1 { return 0, 0, sw, sh }
 	if n == 2 {

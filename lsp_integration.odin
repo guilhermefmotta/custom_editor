@@ -340,6 +340,26 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 	return nil, ""
 }
 
+// Stops every language server whose project root is `root` or below it
+// (closing a repository tab, ADR 0014). Servers are per project root and
+// started on demand, so N open repos never means N servers up front.
+lsp_stop_clients_under :: proc(e: ^Editor, root: string) -> (stopped: int) {
+	if root == "" { return 0 }
+	for &entry in e.lsp_mgr.entries {
+		for i := len(entry.clients) - 1; i >= 0; i -= 1 {
+			rc := entry.clients[i]
+			under := rc.root == root || (strings.has_prefix(rc.root, root) && len(rc.root) > len(root) &&
+				(rc.root[len(root)] == '/' || rc.root[len(root)] == '\\'))
+			if !under { continue }
+			lsp.client_destroy(rc.client)
+			delete(rc.root)
+			ordered_remove(&entry.clients, i)
+			stopped += 1
+		}
+	}
+	return
+}
+
 lsp_destroy :: proc(e: ^Editor) {
 	lsp.lsp_manager_destroy(&e.lsp_mgr)
 	for &p in e.panes { pane_lsp_destroy(&p.lsp) }
@@ -407,6 +427,8 @@ _pane_lsp_update :: proc(e: ^Editor, p: ^Pane, dt: f32) {
 			p.lsp.change_pending = false
 			p.lsp.change_timer   = 0
 			_flush_change(e, p)
+		} else {
+			frame_request_in(f64(CHANGE_DEBOUNCE - p.lsp.change_timer)) // ADR 0016
 		}
 	}
 
@@ -416,6 +438,8 @@ _pane_lsp_update :: proc(e: ^Editor, p: ^Pane, dt: f32) {
 			p.lsp.hover_pending = false
 			p.lsp.hover_timer   = 0
 			_flush_hover(e, p)
+		} else {
+			frame_request_in(f64(HOVER_DEBOUNCE - p.lsp.hover_timer)) // ADR 0016
 		}
 	}
 
@@ -1320,7 +1344,7 @@ lsp_format_document :: proc(e: ^Editor) {
 	p := active_pane(e)
 	c := _get_client(e, p)
 	if c == nil || !c.caps.has_formatting { e.msg = "LSP: format not supported"; return }
-	lsp.manager_format(&e.lsp_mgr, p.filename, 4, true, lsp.Response_Callback{
+	lsp.manager_format(&e.lsp_mgr, p.filename, e.cfg.editor.tab_size, true, lsp.Response_Callback{
 		proc_ = _on_format_response, user = e,
 	})
 }

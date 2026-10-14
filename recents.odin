@@ -1,5 +1,8 @@
 package editor
 
+import "core:fmt"
+import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import rl "vendor:raylib"
 
@@ -152,4 +155,84 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 	hint := "Tab next  *  Shift+Tab prev  *  release Ctrl jump  *  Esc cancel"
 	rl.DrawTextEx(font, to_cstring(hint), {panel_x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	dlg_end()
+}
+
+// ---------------------------------------------------------------------------
+// Recent repositories (ticket #13, ADR 0014)
+//
+// Folders opened as repository tabs, most recent first, deduplicated, capped
+// at RECENT_REPOS_MAX. Persisted one absolute path per line in the user
+// config dir (recent_repos_default_path), shared by every launch directory —
+// unlike Recents_Dialog above, which is the in-session recent FILES switcher.
+// ---------------------------------------------------------------------------
+
+RECENT_REPOS_MAX :: 20
+
+Recent_Repos :: struct {
+	paths: [dynamic]string, // owned, most recent first
+	file:  string,          // owned; "" = not persisted (tests)
+}
+
+recent_repos_destroy :: proc(r: ^Recent_Repos) {
+	for p in r.paths { delete(p) }
+	delete(r.paths)
+	delete(r.file)
+	r^ = {}
+}
+
+// Moves/inserts `path` at the front, dropping duplicates and the overflow.
+recent_repos_push :: proc(r: ^Recent_Repos, path: string) {
+	if path == "" { return }
+	s := strings.clone(path) // path may alias an entry
+	recent_repos_remove(r, path)
+	inject_at(&r.paths, 0, s)
+	for len(r.paths) > RECENT_REPOS_MAX { delete(pop(&r.paths)) }
+}
+
+recent_repos_remove :: proc(r: ^Recent_Repos, path: string) {
+	for i in 0 ..< len(r.paths) {
+		if r.paths[i] == path {
+			delete(r.paths[i])
+			ordered_remove(&r.paths, i)
+			return
+		}
+	}
+}
+
+// ~/.config/editor/recent_repos (USERPROFILE on Windows), temp-allocated.
+recent_repos_default_path :: proc() -> string {
+	home := os.get_env("HOME", context.temp_allocator)
+	if home == "" { home = os.get_env("USERPROFILE", context.temp_allocator) }
+	if home == "" { return "" }
+	return fmt.tprintf("%s/.config/editor/recent_repos", home)
+}
+
+// Loads `file` (missing file = empty list) and remembers it for saving.
+recent_repos_load :: proc(r: ^Recent_Repos, file: string) {
+	for p in r.paths { delete(p) }
+	clear(&r.paths)
+	delete(r.file)
+	r.file = strings.clone(file)
+	if file == "" { return }
+	data, err := os.read_entire_file(file, context.temp_allocator)
+	if err != nil { return }
+	for line in strings.split_lines(string(data), context.temp_allocator) {
+		l := strings.trim_space(line)
+		if l == "" { continue }
+		dup := false
+		for p in r.paths { if p == l { dup = true; break } }
+		if dup { continue }
+		append(&r.paths, strings.clone(l))
+		if len(r.paths) >= RECENT_REPOS_MAX { break }
+	}
+}
+
+recent_repos_save :: proc(r: ^Recent_Repos) -> bool {
+	if r.file == "" { return false }
+	sb: strings.Builder
+	strings.builder_init(&sb, context.temp_allocator)
+	for p in r.paths { strings.write_string(&sb, p); strings.write_byte(&sb, '\n') }
+	dir := filepath.dir(r.file)
+	if dir != "" && !os.exists(dir) { _ = os.make_directory_all(dir) }
+	return os.write_entire_file(r.file, transmute([]u8)strings.to_string(sb)) == nil
 }

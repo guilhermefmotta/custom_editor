@@ -1,6 +1,7 @@
 package lsp
 
 import "core:sync"
+import "../wake"
 
 // ---------------------------------------------------------------------------
 // Write queue — mutex + condvar for efficient blocking write thread
@@ -58,6 +59,7 @@ rq_push :: proc(q: ^Read_Queue, msg: Inbox_Message) {
 	sync.mutex_lock(&q.mu)
 	append(&q.items, msg)
 	sync.mutex_unlock(&q.mu)
+	wake.request() // ADR 0016: server message → wake the UI loop
 }
 
 // Drain all pending items into out. Caller owns the returned bodies.

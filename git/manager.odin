@@ -7,6 +7,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "../wake"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -57,6 +58,10 @@ Git_Manager :: struct {
 	timer:          f32,
 
 	blame_cache: map[string][dynamic]Blame_Line, // abs path → per-line blame (main thread, lazy)
+
+	// Async request queue for every new git query/operation (ADR 0001, see
+	// queue.odin). Worker thread starts on the first request.
+	queue: Git_Queue,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +74,7 @@ git_manager_init :: proc(m: ^Git_Manager, root: string) {
 	m.current.hunks   = make(map[string][dynamic]Hunk)
 	m.blame_cache     = make(map[string][dynamic]Blame_Line)
 	m.timer           = 0 // refresh immediately on first update
+	git_queue_init(&m.queue, root)
 }
 
 git_manager_destroy :: proc(m: ^Git_Manager) {
@@ -77,6 +83,7 @@ git_manager_destroy :: proc(m: ^Git_Manager) {
 		thread.destroy(m.refresh_thread)
 		m.refresh_thread = nil
 	}
+	git_queue_destroy(&m.queue)
 	delete(m.root)
 	_free_state(&m.current)
 	_free_state(&m.pending)
@@ -87,6 +94,18 @@ git_manager_destroy :: proc(m: ^Git_Manager) {
 // git_manager_update: call once per frame from main thread.
 // Swaps pending→current when refresh is done, triggers next refresh on timer.
 git_manager_update :: proc(m: ^Git_Manager, dt: f32) {
+	if m.root == "" { return }
+
+	git_queue_update(&m.queue) // run callbacks of finished async jobs
+	git_manager_update_status(m, dt)
+}
+
+// Status half of git_manager_update (swap finished refresh, kick the next one
+// on the timer) WITHOUT pumping the queue callbacks. Used for repositories
+// open in the background (ADR 0014): their status stays fresh for the repo
+// tabs, while queue callbacks only ever run for the active repository.
+// `interval` is the delay before the next refresh.
+git_manager_update_status :: proc(m: ^Git_Manager, dt: f32, interval: f32 = 4.0) {
 	if m.root == "" { return }
 
 	// Check if background refresh finished
@@ -113,7 +132,7 @@ git_manager_update :: proc(m: ^Git_Manager, dt: f32) {
 	if m.refresh_thread == nil {
 		m.timer -= dt
 		if m.timer <= 0 {
-			m.timer = 4.0
+			m.timer = interval
 			_start_refresh(m)
 		}
 	}
@@ -296,6 +315,7 @@ _refresh_proc :: proc(t: ^thread.Thread) {
 	m.pending = Git_State{branch = branch, entries = entries, hunks = hunks}
 	m.pending_ready = true
 	sync.mutex_unlock(&m.mu)
+	wake.request() // ADR 0016: new status → wake the UI loop
 }
 
 // ---------------------------------------------------------------------------
