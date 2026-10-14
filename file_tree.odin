@@ -455,12 +455,15 @@ file_tree_browse_input :: proc(ft: ^File_Tree, e: ^Editor) {
 		// Ctrl+H: history of the selected file (ticket #10).
 		if ctrl() && rl.IsKeyPressed(.H) {
 			if ft.selected < len(ft.nodes) && !ft.nodes[ft.selected].is_dir {
-				// INTEGRAÇÃO: file_history_open(e, path)
-				// path = ft.git_idx.repo_rel[tree_git_key(ft.nodes[ft.selected].path)] (repo-relative)
-				// or ft.nodes[ft.selected].path (cwd-relative). Until #10 is merged this
-				// only opens the panel by its agreed id (no-op when it does not exist).
+				// Node paths are cwd-relative; the history panel wants an absolute path
+				path := ft.nodes[ft.selected].path
+				if !filepath.is_abs(path) {
+					if cwd, err := os.get_working_directory(context.temp_allocator); err == nil {
+						path, _ = filepath.join({cwd, path}, context.temp_allocator)
+					}
+				}
 				file_tree_close(ft)
-				ui_panel_open(e, "file_history")
+				file_history_open(e, path)
 			}
 			return
 		}

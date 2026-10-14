@@ -1,4 +1,4 @@
-# ADR 0002 — Árvore de arquivos: status do git e arquivos apagados somente leitura (#11)
+# ADR 0005 — Árvore de arquivos: status do git e arquivos apagados somente leitura (#11)
 
 ## Contexto
 A árvore (`file_tree.odin`) precisa mostrar o status do git por arquivo/pasta,
