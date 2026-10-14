@@ -182,7 +182,9 @@ render :: proc(e: ^Editor, font: rl.Font) {
 			mid := sw * e.split_ratio
 			rl.DrawRectangleV({mid - DIVIDER_W * 0.5, 0}, {DIVIDER_W, usable_h}, DIVIDER_COL)
 		case .Horizontal:
-			mid := usable_h * e.split_ratio
+			// below the repo tab strip (repos_bar_h), matching get_pane_rect
+			top := repos_bar_h(e)
+			mid := top + (usable_h - top) * e.split_ratio
 			rl.DrawRectangleV({0, mid - DIVIDER_W * 0.5}, {sw, DIVIDER_W}, DIVIDER_COL)
 		case .None:
 		}

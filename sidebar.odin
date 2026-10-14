@@ -31,6 +31,7 @@ SIDEBAR_DOUBLE_CLICK :: 0.35
 
 @(init)
 _sidebar_register :: proc "contextless" () {
+	repos_register_switch_hook(_sb_on_repo_switch) // ADR 0014
 	ui_register_panel(Ui_Panel{
 		id       = SIDEBAR_ID,
 		title    = "Branches & Refs",
@@ -109,6 +110,15 @@ _Sidebar :: struct {
 
 // Last branch passed to sidebar_on_branch_activate (owned by the sidebar).
 sidebar_active_branch: string
+
+// Active repository changed: the branch filter belonged to the old one.
+@(private="file")
+_sb_on_repo_switch :: proc(e: ^Editor, phase: Repo_Switch_Phase) {
+	if phase == .Leaving && sidebar_active_branch != "" {
+		delete(sidebar_active_branch)
+		sidebar_active_branch = ""
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Public procs
@@ -281,7 +291,7 @@ _sb_on_result :: proc(e: ^Editor, r: ^git.Refs_Op_Result) {
 		_sb_confirm(.Force_Delete, _sb.op, "Branch not fully merged",
 			fmt.tprintf("%s. Delete it anyway? Its commits may be lost.", r.message), confirm = "Force delete", danger = true)
 	}
-	git.git_manager_refresh_now(&e.git_mgr)
+	git.git_manager_refresh_now(e.git_mgr)
 	sidebar_refresh(e)
 }
 

@@ -412,7 +412,7 @@ _poll_checkout :: proc(e: ^Editor) {
 		_pending_reset(); ui_panel_close(e, SEARCH_PANEL_ID)
 		return
 	}
-	git.git_manager_refresh_now(&e.git_mgr)
+	git.git_manager_refresh_now(e.git_mgr)
 	search_scope_refresh_branches(e)
 	if o.conflicted {
 		ui_banner_show(o.msg, .Warning)

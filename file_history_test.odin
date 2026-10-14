@@ -302,6 +302,8 @@ test_fh_open_targets_panel :: proc(t: ^testing.T) {
 	_fht_commit(t, dir, "f.txt", "alpha\n", "first")
 
 	e: Editor
+	mgr: git.Git_Manager
+	e.git_mgr = &mgr
 	e.git_mgr.root = dir
 	git.git_queue_init(&e.git_mgr.queue, dir)
 	defer git.git_queue_destroy(&e.git_mgr.queue)

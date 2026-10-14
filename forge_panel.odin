@@ -27,6 +27,7 @@ FORGE_PANEL_ID :: "forge"
 
 @(init)
 _forge_panel_register :: proc "contextless" () {
+	repos_register_switch_hook(_forge_on_repo_switch) // ADR 0014
 	ui_register_panel(Ui_Panel{
 		id       = FORGE_PANEL_ID,
 		title    = "Forge",
@@ -42,6 +43,13 @@ _forge_panel_register :: proc "contextless" () {
 	})
 	ui_register_command(Command{"Forge: Set Token", "Save a GitHub/GitLab token for this repository's host in the OS keychain", _forge_cmd_set_token, nil})
 	ui_register_command(Command{"Forge: Refresh", "Reload pull requests and pipelines", _forge_cmd_refresh, nil})
+}
+
+// The forge client is bound to the repository it was started in: stop it
+// when the active repository changes (on_open restarts it for the new one).
+@(private="file")
+_forge_on_repo_switch :: proc(e: ^Editor, phase: Repo_Switch_Phase) {
+	if phase == .Leaving { _forge_shutdown() }
 }
 
 @(fini)

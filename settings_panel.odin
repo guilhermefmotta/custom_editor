@@ -246,7 +246,7 @@ _settings_autosave :: proc(e: ^Editor, dt: f32) {
 		if slot.idle < delay { continue }
 		slot.idle = 0
 		if ok, _ := pane_save(&p); ok {
-			git.git_blame_invalidate(&e.git_mgr, p.filename)
+			git.git_blame_invalidate(e.git_mgr, p.filename)
 			e.msg = "Auto saved"
 		} else {
 			e.msg = "Auto save failed"

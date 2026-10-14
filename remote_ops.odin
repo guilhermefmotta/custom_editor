@@ -185,7 +185,7 @@ _ro_finish :: proc(e: ^Editor, ok: bool, msg: string, kind: Ui_Banner_Kind) {
 	copy(_ro.last[:], msg[:n])
 	_ro.last_len = n
 	ui_banner_show(msg, kind, 4 if ok else 8)
-	git.git_manager_refresh_now(&e.git_mgr)
+	git.git_manager_refresh_now(e.git_mgr)
 }
 
 @(private = "file")

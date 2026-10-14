@@ -18,13 +18,19 @@ GIT_MODIFIED :: rl.Color{250, 179, 135, 255} // Catppuccin peach
 GIT_DELETED  :: rl.Color{243, 139, 168, 255} // Catppuccin red
 
 // ---------------------------------------------------------------------------
-// Init — find git root and start manager (call after editor_lsp_init)
+// Init — open the startup repository (ADR 0014)
 // ---------------------------------------------------------------------------
 
+// Called once at startup after the session/args were applied. When nothing
+// opened a repository, the folder of the active file (or the cwd) is opened
+// as one if it lives inside a git repository — the pre-multi-repo behavior of
+// launching the editor from a project directory. Otherwise the welcome
+// screen shows.
 editor_git_init :: proc(e: ^Editor) {
+	if len(e.repos.list) > 0 { return }
 	root := _git_find_root(e)
 	if root == "" { return }
-	git.git_manager_init(&e.git_mgr, root)
+	if _, err := repos_open(e, root); err != "" { ui_banner_show(err, .Error, 8) }
 }
 
 _git_find_root :: proc(e: ^Editor) -> string {
@@ -49,9 +55,11 @@ _git_find_root :: proc(e: ^Editor) -> string {
 // git_update — call once per frame from main thread
 // ---------------------------------------------------------------------------
 
+// Active repo: full update (status + queue callbacks). Background repos:
+// status only (repos_git_update). Also drives a pending repo switch.
 git_update :: proc(e: ^Editor, dt: f32) {
-	if e.git_mgr.root == "" { return }
-	git.git_manager_update(&e.git_mgr, dt)
+	git.git_manager_update(e.git_mgr, dt) // no-op without a repository
+	repos_git_update(e, dt)
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +131,7 @@ git_blame_gutter_width :: proc(e: ^Editor, cw: f32) -> f32 {
 // the annotation reads as one block per commit, not noise per line.
 git_draw_blame_gutter :: proc(e: ^Editor, filename: string, li: int, ox: f32, y: f32, ch: f32, font: rl.Font) {
 	if !e.blame_enabled || filename == "" { return }
-	lines := git.git_blame_get(&e.git_mgr, filename)
+	lines := git.git_blame_get(e.git_mgr, filename)
 	if li < 0 || li >= len(lines) { return }
 	bl := lines[li]
 	if bl.author == "" { return } // no blame info for this line (e.g. binary/empty file)
