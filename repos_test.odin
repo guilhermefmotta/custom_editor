@@ -311,3 +311,22 @@ test_repos_find_git_root_and_norm :: proc(t: ^testing.T) {
 	testing.expect_value(t, r.root, asub)
 	testing.expect_value(t, r.git.root, repos_norm_root(a, context.temp_allocator))
 }
+
+// Startup with no session repositories opens the most recent repository that
+// still exists (skipping missing ones) instead of stopping at the welcome screen.
+@(test)
+test_repos_startup_opens_most_recent :: proc(t: ^testing.T) {
+	a := _rt_repo(t, "startup_a"); defer _rt_free_dir(a)
+	b := _rt_repo(t, "startup_b"); defer _rt_free_dir(b)
+	e := _rt_editor(); repos_init(&e); defer _rt_editor_destroy(&e)
+	recent_repos_push(&e.recent_repos, a)
+	recent_repos_push(&e.recent_repos, b)
+	recent_repos_push(&e.recent_repos, "/no/such/repo-gone") // most recent, but missing
+
+	repos_open_startup_default(&e, "") // working directory isn't a repository
+
+	testing.expect_value(t, len(e.repos.list), 1)
+	if len(e.repos.list) == 1 {
+		testing.expect_value(t, e.repos.list[0].root, repos_norm_root(b, context.temp_allocator))
+	}
+}

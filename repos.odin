@@ -243,6 +243,22 @@ repos_open :: proc(e: ^Editor, path: string, activate := true) -> (r: ^Repo, err
 // Opens every folder (files in the list are opened in the editor), each in
 // its own tab, and activates the first folder. Returns how many folders
 // opened and the first error.
+// Startup fallback when the session restored no repository: the repository
+// containing the working directory, else the most recent one that still exists.
+// Nothing found → a hint instead of a blocking screen.
+repos_open_startup_default :: proc(e: ^Editor, cwd: string) {
+	if cwd != "" && repos_find_git_root(cwd) != "" {
+		if _, oerr := repos_open(e, cwd); oerr == "" { return }
+	}
+	for i in 0 ..< len(e.recent_repos.paths) {
+		// Copy: opening a repository reorders the recent list
+		path := strings.clone(e.recent_repos.paths[i], context.temp_allocator)
+		if !os.is_dir(path) { continue }
+		if _, oerr := repos_open(e, path); oerr == "" { return }
+	}
+	ui_banner_show("No repository open - Ctrl/Cmd+Alt+O opens folders (or \"Repo: Welcome\")", .Info, 10)
+}
+
 repos_open_many :: proc(e: ^Editor, paths: []string) -> (opened: int, first_err: string) {
 	first: ^Repo
 	files := make([dynamic]string, context.temp_allocator)

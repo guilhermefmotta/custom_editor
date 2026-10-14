@@ -28,6 +28,7 @@ _Welcome :: struct {
 	nav:        Ui_List_Nav,
 	dismissed:  bool,
 	last_count: int,
+	started:    bool,
 }
 @(private="file") _wl: _Welcome
 
@@ -84,6 +85,10 @@ _cmd_repo_init :: proc(e: ^Editor, p: ^Palette) { palette_close(p); repo_dialog_
 @(private="file")
 _wl_update :: proc(e: ^Editor, dt: f32) {
 	if e.git_mgr == nil { return }
+	// Not shown on its own at startup: the editor opens straight into the last
+	// work (repos_open_startup_default). Later (last repo closed, or "Repo:
+	// Welcome") it behaves as before.
+	if !_wl.started { _wl.started = true; _wl.dismissed = true }
 	n := len(e.repos.list)
 	prev := _wl.last_count
 	_wl.last_count = n
@@ -143,6 +148,9 @@ _wl_input :: proc(e: ^Editor) -> bool {
 
 @(private="file")
 _wl_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
+	// Overlays are drawn after the native dialogs: while the folder dialog is
+	// open the welcome screen would cover it (looked like "Open Folder" did nothing)
+	if e.workspace_dlg.open { return }
 	rl.DrawRectangle(0, 0, i32(sw), i32(sh), BG)
 	W  := min(f32(620), sw - 40)
 	n  := len(e.recent_repos.paths)
