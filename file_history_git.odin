@@ -1,7 +1,7 @@
 package editor
 
 // ===========================================================================
-// File history + blame — git side (ticket #10, ADR 0002).
+// File history + blame — git side (ticket #10, ADR 0004).
 //
 // Everything here runs on the git queue worker (Git_Work_Proc enqueued with
 // git.git_request_custom); the UI thread only polls the results. Inside a work
@@ -102,7 +102,7 @@ fh_blame_work :: proc(root: string, args: []string, user: rawptr) -> (git.Git_Pa
 	}
 
 	// `git blame --contents -` would need stdin, which git_run (popen "r")
-	// can't feed: the buffer goes through a temp file instead (ADR 0002).
+	// can't feed: the buffer goes through a temp file instead (ADR 0004).
 	tmp_path := ""
 	if has_content {
 		f, ferr := os.create_temp_file("", "editor-blame-*.tmp")
