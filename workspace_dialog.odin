@@ -163,21 +163,10 @@ workspace_dialog_handle_input :: proc(d: ^Workspace_Dialog, e: ^Editor) {
 		return
 	}
 
-	// Up / Down: move selection
-	if key_rep(.UP) {
-		if d.selected > 0 {
-			d.selected -= 1
-			if d.selected < d.scroll { d.scroll = d.selected }
-		}
-		return
-	}
-	if key_rep(.DOWN) {
-		if d.selected < len(d.entries)-1 {
-			d.selected += 1
-			if d.selected >= d.scroll + WS_MAX_VIS {
-				d.scroll = d.selected - WS_MAX_VIS + 1
-			}
-		}
+	// Up/Down, PgUp/PgDn, Home/End, mouse wheel: shared list component (ui_list.odin)
+	nav := Ui_List_Nav{d.selected, d.scroll}
+	if ui_list_handle_nav(&nav, len(d.entries), WS_MAX_VIS, wheel_anywhere = true) {
+		d.selected, d.scroll = nav.selected, nav.scroll
 		return
 	}
 

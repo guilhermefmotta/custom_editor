@@ -236,6 +236,10 @@ handle_panels :: proc(e: ^Editor) -> bool {
 		return true
 	}
 
+	// Registered panels/shortcuts (ui_registry.odin) — topmost open panel
+	// gets input before the editor.
+	if ui_registry_handle_input(e) { return true }
+
 	// Ctrl+E (with or without Shift) → open the evaluate-expression dialog
 	// (modal popup, IntelliJ-style) with selected text pre-filled.
 	if ctrl() && rl.IsKeyPressed(.E) {
