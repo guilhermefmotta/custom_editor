@@ -120,7 +120,7 @@ _wt_on_open :: proc(e: ^Editor) {
 	_wt.nav = {}
 	_wt.focus_commit = false
 	_rep_key = .KEY_NULL
-	git.git_manager_refresh_now(&e.git_mgr)
+	git.git_manager_refresh_now(e.git_mgr)
 	_wt_request_state(e)
 }
 
@@ -267,7 +267,7 @@ _wt_update :: proc(e: ^Editor, dt: f32) {
 	_wt.e = e
 	if _wt.need_refresh {
 		_wt.need_refresh = false
-		git.git_manager_refresh_now(&e.git_mgr)
+		git.git_manager_refresh_now(e.git_mgr)
 		_wt_request_state(e)
 		_wt_request_hunks(e)
 	}
@@ -540,7 +540,7 @@ WT_COMMIT_LINES :: 4
 _wt_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	if e.git_dialog.visible { return } // diff / merge view on top (drawn earlier by the renderer)
 	_wt.e = e
-	m    := &e.git_mgr
+	m    := e.git_mgr
 	busy := _wt.confirm.open || _wt.menu.open
 	fs   := FONT_SIZE - 1
 	ref  := rl.MeasureTextEx(font, "M", fs, CHAR_SPACING)

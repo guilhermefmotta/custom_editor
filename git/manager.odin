@@ -96,6 +96,16 @@ git_manager_update :: proc(m: ^Git_Manager, dt: f32) {
 	if m.root == "" { return }
 
 	git_queue_update(&m.queue) // run callbacks of finished async jobs
+	git_manager_update_status(m, dt)
+}
+
+// Status half of git_manager_update (swap finished refresh, kick the next one
+// on the timer) WITHOUT pumping the queue callbacks. Used for repositories
+// open in the background (ADR 0014): their status stays fresh for the repo
+// tabs, while queue callbacks only ever run for the active repository.
+// `interval` is the delay before the next refresh.
+git_manager_update_status :: proc(m: ^Git_Manager, dt: f32, interval: f32 = 4.0) {
+	if m.root == "" { return }
 
 	// Check if background refresh finished
 	sync.mutex_lock(&m.mu)
@@ -121,7 +131,7 @@ git_manager_update :: proc(m: ^Git_Manager, dt: f32) {
 	if m.refresh_thread == nil {
 		m.timer -= dt
 		if m.timer <= 0 {
-			m.timer = 4.0
+			m.timer = interval
 			_start_refresh(m)
 		}
 	}

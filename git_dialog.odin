@@ -113,7 +113,7 @@ git_dialog_open_branch_picker :: proc(e: ^Editor) {
 	d := &e.git_dialog
 	d.visible = true
 	d.mode    = .Status
-	_bp_open(d, &e.git_mgr)
+	_bp_open(d, e.git_mgr)
 	_rep_key = .KEY_NULL
 }
 
@@ -196,7 +196,7 @@ _gitd_set_msg :: proc(d: ^Git_Dialog, ok: bool, msg: string) {
 
 git_dialog_handle_input :: proc(d: ^Git_Dialog, e: ^Editor) {
 	if !d.visible { return }
-	m := &e.git_mgr
+	m := e.git_mgr
 
 	// Branch picker takes full priority
 	if d.bp_open { _git_bp_input(d, m); return }
@@ -275,7 +275,7 @@ _git_bp_input :: proc(d: ^Git_Dialog, m: ^git.Git_Manager) {
 
 git_dialog_draw :: proc(d: ^Git_Dialog, e: ^Editor, font: rl.Font) {
 	if !d.visible { return }
-	m := &e.git_mgr
+	m := e.git_mgr
 
 	sw := f32(rl.GetScreenWidth())
 	sh := f32(rl.GetScreenHeight())

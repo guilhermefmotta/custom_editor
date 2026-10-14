@@ -298,7 +298,7 @@ _co_on_result :: proc(e: ^Editor, r: ^git.Commit_Op_Result) {
 
 @(private="file")
 _co_after_op :: proc(e: ^Editor) {
-	git.git_manager_refresh_now(&e.git_mgr)
+	git.git_manager_refresh_now(e.git_mgr)
 	commit_graph_reload(e)
 }
 

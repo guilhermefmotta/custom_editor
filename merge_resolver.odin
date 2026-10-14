@@ -269,7 +269,7 @@ _mr_on_resolved :: proc(r: ^git.Git_Result, user: rawptr) {
 	if res == nil { _mr_set_msg(false, r.err if r.err != "" else "resolve failed"); return }
 	if !res.ok { _mr_set_msg(false, res.message); return }
 	_mr_set_msg(true, res.message)
-	git.git_manager_refresh_now(&e.git_mgr)
+	git.git_manager_refresh_now(e.git_mgr)
 	_mr.op = res.state.operation
 	if _mr.current >= 0 && _mr.current < len(_mr.resolved) { _mr.resolved[_mr.current] = true }
 	_mr_select(e, _mr_next_file(_mr.current))
@@ -338,7 +338,7 @@ _mr_abort :: proc(e: ^Editor) {
 // After a commit / abort: everything that shows merge state refreshes now.
 @(private="file")
 _mr_after_repo_change :: proc(e: ^Editor) {
-	git.git_manager_refresh_now(&e.git_mgr)
+	git.git_manager_refresh_now(e.git_mgr)
 	sidebar_refresh(e)
 	_mr.bg_timer = 0
 }
