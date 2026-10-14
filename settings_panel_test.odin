@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:sync"
 import "core:testing"
 import conf "./config"
 
@@ -69,8 +70,14 @@ test_settings_cycle_values :: proc(t: ^testing.T) {
 	testing.expect(t, settings_cycle_value(&e, .Theme, 1) != e.cfg.theme_name)
 }
 
+// Tests that change globals (FONT_SIZE, theme, keymap) run one at a time: the
+// test runner is multi-threaded and they would race on that shared state.
+_settings_globals_mu: sync.Mutex
+
 @(test)
 test_settings_apply_updates_config :: proc(t: ^testing.T) {
+	sync.mutex_lock(&_settings_globals_mu)
+	defer sync.mutex_unlock(&_settings_globals_mu)
 	e := _test_editor()
 	defer _test_editor_destroy(&e)
 	path := _test_path("apply")
@@ -121,6 +128,8 @@ test_settings_apply_updates_config :: proc(t: ^testing.T) {
 
 @(test)
 test_settings_invalid_value_keeps_file :: proc(t: ^testing.T) {
+	sync.mutex_lock(&_settings_globals_mu)
+	defer sync.mutex_unlock(&_settings_globals_mu)
 	e := _test_editor()
 	defer _test_editor_destroy(&e)
 	path := _test_path("invalid")
