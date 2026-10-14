@@ -53,6 +53,9 @@ test_settings_rows_cover_required_keys :: proc(t: ^testing.T) {
 
 @(test)
 test_settings_cycle_values :: proc(t: ^testing.T) {
+	// _test_editor_destroy resets settings_font_path: same lock as the others
+	sync.mutex_lock(&_settings_globals_mu)
+	defer sync.mutex_unlock(&_settings_globals_mu)
 	e := _test_editor()
 	defer _test_editor_destroy(&e)
 	names := settings_theme_names(&e)
