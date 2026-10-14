@@ -14,7 +14,7 @@ package editor
 //
 // Open it with:
 //   - palette "Git: File History" (Ctrl/Cmd+Alt+Y) / "Git: Blame"
-//     (Ctrl/Cmd+Alt+B) on the active pane's file;
+//     (Ctrl/Cmd+Alt+L) on the active pane's file;
 //   - code (file tree, other screens): file_history_open(e, abs_path) /
 //     file_blame_open(e, abs_path).
 //
@@ -46,7 +46,7 @@ _file_history_register :: proc "contextless" () {
 	ui_register_command(Command{"Git: File History", "Commits that changed the current file, with the diff of each", _fh_cmd_history, nil},
 	                    shortcut = {key = .Y, mods = {.Ctrl, .Alt}})
 	ui_register_command(Command{"Git: Blame", "Author, date and commit of every line of the current file", _fh_cmd_blame, nil},
-	                    shortcut = {key = .B, mods = {.Ctrl, .Alt}})
+	                    shortcut = {key = .L, mods = {.Ctrl, .Alt}}) // Ctrl+Alt+B is the sidebar
 }
 
 // ---------------------------------------------------------------------------
