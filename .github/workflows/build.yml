@@ -43,6 +43,9 @@ jobs:
             libxinerama-dev \
             libasound2-dev
 
+      - name: Build libvterm (vendored, static)
+        run: bash terminal/libvterm/build.sh
+
       - name: Build
         run: odin build . -out:editor -o:speed
 
@@ -79,6 +82,13 @@ jobs:
           $odinBin = Get-ChildItem -Path "$env:USERPROFILE\odin" -Recurse -Filter "odin.exe" |
                      Select-Object -First 1 -ExpandProperty DirectoryName
           "$odinBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set up MSVC (for libvterm)
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build libvterm (vendored, static)
+        shell: cmd
+        run: terminal\libvterm\build.bat
 
       - name: Build
         # Odin's Windows link line explicitly includes libucrt.lib (its own
