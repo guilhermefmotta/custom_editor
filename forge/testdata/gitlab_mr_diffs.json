@@ -1,0 +1,2 @@
+[{"old_path":"src/a.odin","new_path":"src/a.odin","new_file":false,"renamed_file":false,"deleted_file":false,"diff":"@@ -1,2 +1,2 @@\n-old line\n+new line\n context\n"},
+ {"old_path":"docs/new.md","new_path":"docs/new.md","new_file":true,"renamed_file":false,"deleted_file":false,"diff":"@@ -0,0 +1 @@\n+# hello"}]
