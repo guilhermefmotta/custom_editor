@@ -1,9 +1,12 @@
 package editor
 
+import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
+import git "./git"
 import rl "vendor:raylib"
 
 File_Tree_Mode :: enum { Browse, Rename, Confirm_Delete, Make_Dir }
@@ -14,6 +17,7 @@ File_Tree_Node :: struct {
 	is_dir:   bool,
 	depth:    int,
 	expanded: bool,
+	ghost:    bool, // deleted in git: not on disk, injected from the status (#11)
 }
 
 File_Tree :: struct {
@@ -34,6 +38,14 @@ File_Tree :: struct {
 	search_active:  bool,
 	search_needle:  string,    // heap — lowercased, owned by the walker's lifetime
 	search_visited: int,
+
+	// Git badges (#11). Index rebuilt from e.git_mgr.current by file_tree_git_sync.
+	git_idx:       Tree_Git_Index,
+	git_hash:      u64,  // content hash of the indexed status
+	git_has_index: bool, // false → rebuild on next sync (e.g. tree reopened)
+	git_stale:     bool, // status changed while rows could not be rebuilt
+	changed_only:  bool, // "only changed" filter: rows built from the status, all folders expanded
+	collapsed:     map[string]bool, // folders collapsed by hand in changed_only (keys heap)
 }
 
 FT_SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
@@ -74,6 +86,9 @@ file_tree_destroy :: proc(ft: ^File_Tree) {
 	delete(ft.results)
 	if ft.search_active { _ft_search_walker_stop(ft) }
 	delete(ft.search_needle)
+	tree_git_index_destroy(&ft.git_idx)
+	_ft_clear_collapsed(ft)
+	delete(ft.collapsed)
 	ft^ = {}
 }
 
@@ -92,9 +107,28 @@ file_tree_open :: proc(ft: ^File_Tree) {
 	ft.search_active = false
 	delete(ft.search_needle)
 	ft.search_needle = ""
+	ft.git_has_index = false // re-index next frame (cwd may have changed)
+	_ft_reload_rows(ft)
+}
+
+_ft_clear_nodes :: proc(ft: ^File_Tree) {
 	for n in ft.nodes { delete(n.name); delete(n.path) }
 	clear(&ft.nodes)
-	_ft_load_children(ft, ".", 0, 0)
+}
+
+_ft_clear_collapsed :: proc(ft: ^File_Tree) {
+	for k in ft.collapsed { delete(k) }
+	clear(&ft.collapsed)
+}
+
+// Rebuilds ft.nodes from scratch: the disk tree, or the changed-only view.
+_ft_reload_rows :: proc(ft: ^File_Tree) {
+	_ft_clear_nodes(ft)
+	if ft.changed_only {
+		_ft_build_changed(ft)
+	} else {
+		_ft_load_children(ft, ".", 0, 0)
+	}
 }
 
 file_tree_close :: proc(ft: ^File_Tree) {
@@ -140,17 +174,19 @@ _ft_single_subdir :: proc(path: string) -> (child_name: string, ok: bool) {
 }
 
 _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_idx: int) -> int {
-	f, ferr := os.open(dir_path)
-	if ferr != nil { return 0 }
-	defer os.close(f)
-
-	it := os.read_directory_iterator_create(f)
-	defer os.read_directory_iterator_destroy(&it)
-
 	dirs  := make([dynamic]File_Tree_Node, context.temp_allocator)
 	files := make([dynamic]File_Tree_Node, context.temp_allocator)
 
-	for {
+	// A folder that only holds deleted files does not exist on disk any more.
+	f, ferr := os.open(dir_path)
+	on_disk := ferr == nil
+	defer if on_disk { os.close(f) }
+
+	it: os.Read_Directory_Iterator
+	if on_disk { it = os.read_directory_iterator_create(f) }
+	defer if on_disk { os.read_directory_iterator_destroy(&it) }
+
+	for on_disk {
 		fi, _, ok := os.read_directory_iterator(&it)
 		if !ok { break }
 		// NOTE: on Linux the iterator owns fi memory — it auto-frees prev fi on
@@ -168,6 +204,8 @@ _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_i
 			disp_name := name
 			real_path := full
 			for {
+				// A folder with deleted files has hidden children: keep it its own row.
+				if del_f, del_d := tree_git_deleted_children(&ft.git_idx, real_path); len(del_f) + len(del_d) > 0 { break }
 				child, chain_ok := _ft_single_subdir(real_path)
 				if !chain_ok { break }
 				disp_name = strings.concatenate({disp_name, "/", child}, context.temp_allocator)
@@ -192,6 +230,10 @@ _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_i
 		if len(dirs) + len(files) >= FT_MAX_CHILDREN { ft.status_msg = "Showing first 500 entries"; break }
 	}
 
+	// Deleted files are gone from disk: inject them (and folders that only
+	// hold deleted files) from the git status.
+	_ft_inject_deleted(ft, dir_path, depth, &dirs, &files)
+
 	_ft_sort_nodes :: proc(arr: ^[dynamic]File_Tree_Node) {
 		for i in 1..<len(arr) {
 			key := arr[i]; j := i - 1
@@ -211,6 +253,7 @@ _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_i
 _ft_toggle_dir :: proc(ft: ^File_Tree, idx: int) {
 	n := &ft.nodes[idx]
 	if !n.is_dir { return }
+	if ft.changed_only && !_ft_in_untracked_dir(ft, n.path) { _ft_toggle_changed_dir(ft, idx); return }
 
 	if n.expanded {
 		child_depth := n.depth + 1
@@ -364,10 +407,7 @@ file_tree_browse_input :: proc(ft: ^File_Tree, e: ^Editor) {
 		if rl.IsKeyPressed(.ENTER) {
 			if ft.selected < len(ft.results) {
 				r := ft.results[ft.selected]
-				if !r.is_dir {
-					editor_open(e, r.path)
-					file_tree_close(ft)
-				}
+				if !r.is_dir { _ft_open_node(ft, e, r) }
 			}
 			return
 		}
@@ -395,14 +435,39 @@ file_tree_browse_input :: proc(ft: ^File_Tree, e: ^Editor) {
 		}
 		if rl.IsKeyPressed(.ENTER) {
 			if ft.selected < len(ft.nodes) {
-				nd := &ft.nodes[ft.selected]
+				nd := ft.nodes[ft.selected]
 				if nd.is_dir {
 					_ft_toggle_dir(ft, ft.selected)
 				} else {
-					editor_open(e, nd.path)
-					file_tree_close(ft)
+					_ft_open_node(ft, e, nd)
 				}
 			}
+			return
+		}
+
+		// Ctrl+G: "only changed" filter — changed files with folders expanded.
+		if ctrl() && rl.IsKeyPressed(.G) {
+			file_tree_toggle_changed_only(ft)
+			ft.status_msg = "Only changed files" if ft.changed_only else ""
+			return
+		}
+
+		// Ctrl+H: history of the selected file (ticket #10).
+		if ctrl() && rl.IsKeyPressed(.H) {
+			if ft.selected < len(ft.nodes) && !ft.nodes[ft.selected].is_dir {
+				// INTEGRAÇÃO: file_history_open(e, path)
+				// path = ft.git_idx.repo_rel[tree_git_key(ft.nodes[ft.selected].path)] (repo-relative)
+				// or ft.nodes[ft.selected].path (cwd-relative). Until #10 is merged this
+				// only opens the panel by its agreed id (no-op when it does not exist).
+				file_tree_close(ft)
+				ui_panel_open(e, "file_history")
+			}
+			return
+		}
+
+		// Deleted (ghost) rows are not on disk: nothing to rename or delete.
+		if ctrl() && (rl.IsKeyPressed(.R) || rl.IsKeyPressed(.D)) && ft.selected < len(ft.nodes) && ft.nodes[ft.selected].ghost {
+			ft.status_msg = "Deleted in git — not on disk"
 			return
 		}
 
@@ -551,7 +616,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 
 	title: string
 	switch ft.mode {
-	case .Browse:         title = "File Tree"
+	case .Browse:         title = "File Tree — only changed" if ft.changed_only else "File Tree"
 	case .Rename:         title = fmt.tprintf("Rename: %s", string(ft.input_buf[:]))
 	case .Make_Dir:       title = fmt.tprintf("New Dir: %s", string(ft.input_buf[:]))
 	case .Confirm_Delete:
@@ -612,12 +677,18 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 			ix     := panel_x + 10
 			icon_h := f32(12)
 			iy_mid := iy + (ITEM_H - icon_h) * 0.5
+			badge_w := f32(26)
 			if r.is_dir {
+				gk := tree_git_dir_kind(&ft.git_idx, r.path)
 				_ft_draw_folder_icon(ix, iy_mid, icon_h, rl.Color{148, 226, 213, 255})
-				dlg_text(font, r.path, ix + icon_h + 8, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
+				dlg_text(font, r.path, ix + icon_h + 8, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W - badge_w, 6)
+				_ft_draw_git_badge(font, gk, true, panel_x + PANEL_W, iy, ITEM_H)
 			} else {
+				gk := tree_git_file_kind(&ft.git_idx, r.path)
+				tc := TEXT if gk == .None else tree_git_color(gk)
 				_ft_draw_file_icon(ix, iy_mid, icon_h, LINENUM)
-				dlg_text(font, r.path, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
+				dlg_text(font, r.path, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, tc, panel_x + PANEL_W - badge_w, 6)
+				_ft_draw_git_badge(font, gk, false, panel_x + PANEL_W, iy, ITEM_H)
 			}
 		}
 	} else {
@@ -636,16 +707,25 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 			icon_h := f32(12)
 			iy_mid := iy + (ITEM_H - icon_h) * 0.5
 			_ = ch
+			badge_w := f32(26)
 			if nd.is_dir {
+				gk := tree_git_dir_kind(&ft.git_idx, nd.path)
 				fc := DIR_COL if nd.expanded else rl.Color{148, 226, 213, 255}
 				_ft_draw_folder_icon(ix, iy_mid, icon_h, fc)
 				// +/- expand indicator
 				arr := "-" if nd.expanded else "+"
 				rl.DrawTextEx(font, to_cstring(arr), {ix + icon_h + 2, iy + 3}, FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
-				dlg_text(font, nd.name, ix + icon_h + 12, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W, 6)
+				dlg_text(font, nd.name, ix + icon_h + 12, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W - badge_w, 6)
+				// Folder with changes below: dot in the most important change's color.
+				_ft_draw_git_badge(font, gk, true, panel_x + PANEL_W, iy, ITEM_H)
 			} else {
+				gk := tree_git_file_kind(&ft.git_idx, nd.path)
+				if nd.ghost { gk = .Deleted }
+				tc := TEXT if gk == .None else tree_git_color(gk)
 				_ft_draw_file_icon(ix, iy_mid, icon_h, LINENUM)
-				dlg_text(font, nd.name, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, TEXT, panel_x + PANEL_W, 6)
+				dlg_text(font, nd.name, ix + icon_h + 5, iy + 3, FONT_SIZE - 2, CHAR_SPACING, tc, panel_x + PANEL_W - badge_w, 6)
+				if gk == .Deleted { _ft_draw_strike(font, nd.name, ix + icon_h + 5, iy, ITEM_H, tc) }
+				_ft_draw_git_badge(font, gk, false, panel_x + PANEL_W, iy, ITEM_H)
 			}
 		}
 	}
@@ -665,7 +745,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		} else if searching {
 			footer = fmt.tprintf("Searching... %d found", total) if ft.search_active else "↑↓ navigate  Enter open  Esc clear filter"
 		} else {
-			footer = "Enter open  ←→ expand  Ctrl+R rename  Ctrl+D del  Ctrl+N dir  Esc"
+			footer = "Enter open  ←→ expand  Ctrl+G changed  Ctrl+H history  Ctrl+R ren  Ctrl+D del  Ctrl+N dir"
 		}
 	case .Rename:   footer = "Type new name · Enter confirm · Esc cancel"
 	case .Make_Dir: footer = "Type directory name · Enter confirm · Esc cancel"
@@ -675,5 +755,378 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	}
 	_ = ch
 	rl.DrawTextEx(font, to_cstring(footer), {panel_x + 10, fy + 7}, FONT_SIZE - 3, CHAR_SPACING, col)
+	dlg_end()
+}
+
+// ===========================================================================
+// Git badges, deleted files and "only changed" filter (#11)
+// ===========================================================================
+
+// Appends deleted children of `dir_path` that are not already listed.
+_ft_inject_deleted :: proc(ft: ^File_Tree, dir_path: string, depth: int, dirs, files: ^[dynamic]File_Tree_Node) {
+	del_files, del_dirs := tree_git_deleted_children(&ft.git_idx, dir_path)
+	if len(del_files) + len(del_dirs) == 0 { return }
+	base := tree_git_key(dir_path)
+	_join :: proc(base, name: string) -> string {
+		return name if base == "." else strings.concatenate({base, "/", name}, context.temp_allocator)
+	}
+	outer_d: for name in del_dirs {
+		p := _join(base, name)
+		for d in dirs { if tree_git_key(d.path) == p { continue outer_d } }
+		append(dirs, File_Tree_Node{name = strings.clone(name), path = strings.clone(p), is_dir = true, depth = depth, ghost = true})
+	}
+	outer_f: for name in del_files {
+		p := _join(base, name)
+		for f in files { if tree_git_key(f.path) == p { continue outer_f } }
+		append(files, File_Tree_Node{name = strings.clone(name), path = strings.clone(p), depth = depth, ghost = true})
+	}
+}
+
+// Rows of the "only changed" view: every changed path (deleted included),
+// folders expanded unless in `collapsed`. Dirs first, then files, each
+// sorted by name — same order as the disk tree. An untracked folder ("?? d/")
+// is a folder row whose content is read from disk on demand. Strings are
+// allocated with `allocator`.
+tree_git_changed_rows :: proc(paths: []string, untracked_dirs: []string, collapsed: map[string]bool, allocator := context.allocator) -> [dynamic]File_Tree_Node {
+	rows := make([dynamic]File_Tree_Node, allocator)
+	sorted := slice.clone(paths, context.temp_allocator)
+	slice.sort(sorted)
+	_emit :: proc(rows: ^[dynamic]File_Tree_Node, items: []string, prefix: string, depth: int,
+	              udirs: []string, collapsed: map[string]bool, allocator: runtime.Allocator) {
+		// items: paths relative to `prefix`, sorted; same first component → contiguous
+		Group :: struct { name: string, sub: []string }
+		dirs  := make([dynamic]Group, context.temp_allocator)
+		files := make([dynamic]string, context.temp_allocator)
+		i := 0
+		for i < len(items) {
+			it := items[i]
+			slash := strings.index_byte(it, '/')
+			if slash < 0 {
+				full := it if prefix == "" else strings.concatenate({prefix, "/", it}, context.temp_allocator)
+				if slice.contains(udirs, full) {
+					append(&dirs, Group{name = it})
+				} else {
+					append(&files, it)
+				}
+				i += 1
+				continue
+			}
+			comp := it[:slash]
+			j := i
+			sub := make([dynamic]string, context.temp_allocator)
+			for j < len(items) && strings.has_prefix(items[j], comp) && len(items[j]) > len(comp) && items[j][len(comp)] == '/' {
+				append(&sub, items[j][len(comp)+1:])
+				j += 1
+			}
+			// merge with a same-named untracked/earlier group
+			merged := false
+			for &g in dirs {
+				if g.name == comp {
+					both := make([dynamic]string, context.temp_allocator)
+					append(&both, ..g.sub); append(&both, ..sub[:])
+					slice.sort(both[:])
+					g.sub = both[:]; merged = true; break
+				}
+			}
+			if !merged { append(&dirs, Group{name = comp, sub = sub[:]}) }
+			i = j
+		}
+		slice.sort_by(dirs[:], proc(a, b: Group) -> bool { return a.name < b.name })
+		slice.sort(files[:])
+		for g in dirs {
+			full := g.name if prefix == "" else strings.concatenate({prefix, "/", g.name}, context.temp_allocator)
+			is_udir := slice.contains(udirs, full)
+			open := len(g.sub) > 0 && !(full in collapsed)
+			append(rows, File_Tree_Node{
+				name = strings.clone(g.name, allocator), path = strings.clone(full, allocator),
+				is_dir = true, depth = depth, expanded = open && !is_udir,
+			})
+			if open && !is_udir { _emit(rows, g.sub, full, depth + 1, udirs, collapsed, allocator) }
+		}
+		for name in files {
+			full := name if prefix == "" else strings.concatenate({prefix, "/", name}, context.temp_allocator)
+			append(rows, File_Tree_Node{name = strings.clone(name, allocator), path = strings.clone(full, allocator), depth = depth})
+		}
+	}
+	_emit(&rows, sorted, "", 0, untracked_dirs, collapsed, allocator)
+	return rows
+}
+
+_ft_build_changed :: proc(ft: ^File_Tree) {
+	paths := make([dynamic]string, context.temp_allocator)
+	for k in ft.git_idx.files { append(&paths, k) }
+	rows := tree_git_changed_rows(paths[:], ft.git_idx.untracked_dirs[:], ft.collapsed, context.temp_allocator)
+	for r in rows {
+		n := r
+		n.name = strings.clone(r.name)
+		n.path = strings.clone(r.path)
+		n.ghost = !n.is_dir && ft.git_idx.files[r.path] == .Deleted
+		append(&ft.nodes, n)
+	}
+}
+
+// True when `path` is (inside) an untracked folder — its rows come from disk.
+_ft_in_untracked_dir :: proc(ft: ^File_Tree, path: string) -> bool {
+	k := tree_git_key(path)
+	for u in ft.git_idx.untracked_dirs {
+		if k == u || (strings.has_prefix(k, u) && len(k) > len(u) && k[len(u)] == '/') { return true }
+	}
+	return false
+}
+
+// Changed-only view: collapse/expand by remembering the folder and rebuilding.
+_ft_toggle_changed_dir :: proc(ft: ^File_Tree, idx: int) {
+	p := ft.nodes[idx].path
+	if p in ft.collapsed {
+		key := p
+		for k in ft.collapsed { if k == p { key = k; break } }
+		delete_key(&ft.collapsed, p)
+		delete(key)
+	} else {
+		ft.collapsed[strings.clone(p)] = true
+	}
+	_ft_refresh_rows_keep(ft)
+}
+
+// Toggles the "only changed" filter (rows built from the git status).
+file_tree_toggle_changed_only :: proc(ft: ^File_Tree) {
+	ft.changed_only = !ft.changed_only
+	_ft_clear_collapsed(ft)
+	ft.selected = 0
+	ft.scroll   = 0
+	_ft_reload_rows(ft)
+}
+
+// Rebuilds the rows (status changed) keeping expanded folders and selection.
+_ft_refresh_rows_keep :: proc(ft: ^File_Tree) {
+	sel_path := ""
+	if ft.selected < len(ft.nodes) { sel_path = strings.clone(ft.nodes[ft.selected].path, context.temp_allocator) }
+	expanded := make(map[string]bool, allocator = context.temp_allocator)
+	for n in ft.nodes { if n.is_dir && n.expanded { expanded[strings.clone(n.path, context.temp_allocator)] = true } }
+
+	_ft_reload_rows(ft)
+	if !ft.changed_only {
+		for i := 0; i < len(ft.nodes); i += 1 {
+			n := ft.nodes[i]
+			if n.is_dir && !n.expanded && n.path in expanded { _ft_toggle_dir(ft, i) }
+		}
+	}
+	ft.selected = min(ft.selected, max(0, len(ft.nodes) - 1))
+	for n, i in ft.nodes { if n.path == sel_path { ft.selected = i; break } }
+	if ft.selected < ft.scroll { ft.scroll = ft.selected }
+	if ft.selected >= ft.scroll + FILE_TREE_MAX_VIS { ft.scroll = ft.selected - FILE_TREE_MAX_VIS + 1 }
+}
+
+// Called every frame (tree_head_view panel's update hook). Re-indexes the
+// manager's status when it changed and refreshes the visible rows, so the
+// badges follow the manager's own refresh — no extra git process.
+file_tree_git_sync :: proc(e: ^Editor) {
+	ft := &e.file_tree
+	if e.git_mgr.root == "" {
+		if len(ft.git_idx.files) > 0 { tree_git_index_clear(&ft.git_idx) }
+		return
+	}
+	entries := e.git_mgr.current.entries[:]
+	h := tree_git_status_hash(entries)
+	if !ft.git_has_index || h != ft.git_hash {
+		cwd, err := os.get_working_directory(context.temp_allocator)
+		if err != nil { cwd = "." }
+		tree_git_index_build(&ft.git_idx, entries, e.git_mgr.root, cwd)
+		ft.git_hash      = h
+		ft.git_has_index = true
+		ft.git_stale     = true
+	}
+	// Rebuild rows only while browsing (never under a rename/delete prompt
+	// or the recursive filter, whose rows come from the disk walker).
+	if ft.git_stale && ft.open && ft.mode == .Browse && len(ft.filter) == 0 {
+		ft.git_stale = false
+		_ft_refresh_rows_keep(ft)
+	} else if !ft.open {
+		ft.git_stale = false // file_tree_open loads fresh rows
+	}
+}
+
+// Opens a selected file row: deleted ones show the HEAD version read-only.
+_ft_open_node :: proc(ft: ^File_Tree, e: ^Editor, nd: File_Tree_Node) {
+	if nd.ghost || (!os.exists(nd.path) && tree_git_file_kind(&ft.git_idx, nd.path) == .Deleted) {
+		repo_path, ok := ft.git_idx.repo_rel[tree_git_key(nd.path)]
+		if !ok { ft.status_msg = "Deleted file not in git status"; return }
+		file_tree_close(ft)
+		tree_head_view_open(e, repo_path)
+		return
+	}
+	if nd.is_dir { return }
+	editor_open(e, nd.path)
+	file_tree_close(ft)
+}
+
+// Draws the change letter at the right edge of a row and returns the color
+// the name should use (TEXT when clean). Deleted rows get a strike-through.
+_ft_draw_git_badge :: proc(font: rl.Font, kind: Tree_Git_Kind, is_dir: bool, right, iy, item_h: f32) {
+	if kind == .None { return }
+	col := tree_git_color(kind)
+	if is_dir {
+		rl.DrawCircleV({right - 14, iy + item_h * 0.5}, 3.5, col)
+		return
+	}
+	letter := tree_git_letter(kind)
+	lw := rl.MeasureTextEx(font, to_cstring(letter), FONT_SIZE - 3, CHAR_SPACING).x
+	rl.DrawTextEx(font, to_cstring(letter), {right - 10 - lw, iy + 4}, FONT_SIZE - 3, CHAR_SPACING, col)
+}
+
+_ft_draw_strike :: proc(font: rl.Font, text: string, x, iy, item_h: f32, col: rl.Color) {
+	w := rl.MeasureTextEx(font, to_cstring(text), FONT_SIZE - 2, CHAR_SPACING).x
+	rl.DrawLineEx({x, iy + item_h * 0.5}, {x + w, iy + item_h * 0.5}, 1, col)
+}
+
+// ---------------------------------------------------------------------------
+// Read-only HEAD view of a deleted file
+// ---------------------------------------------------------------------------
+
+TREE_HEAD_VIEW_ID :: "tree_head_view"
+
+@(private="file")
+_Tree_Head_View :: struct {
+	path:   string,           // repo-relative (heap)
+	job:    git.Job_Id,
+	lines:  [dynamic]string,  // heap (each line cloned)
+	msg:    string,           // heap; loading/error text
+	scroll: int,
+}
+
+@(private="file") _thv: _Tree_Head_View
+
+@(init)
+_tree_head_view_register :: proc "contextless" () {
+	ui_register_panel(Ui_Panel{
+		id       = TREE_HEAD_VIEW_ID,
+		title    = "HEAD (read-only)",
+		priority = 60,
+		layer    = .Overlay,
+		draw     = _thv_draw,
+		input    = _thv_input,
+		update   = _thv_update, // also keeps the file tree's git badges in sync
+		on_close = _thv_on_close,
+	})
+}
+
+@(fini)
+_tree_head_view_fini :: proc "contextless" () {
+	context = runtime.default_context()
+	_thv_reset()
+}
+
+@(private="file")
+_thv_reset :: proc() {
+	for l in _thv.lines { delete(l) }
+	delete(_thv.lines)
+	delete(_thv.path)
+	delete(_thv.msg)
+	_thv = {}
+}
+
+// Shows `repo_path` as of HEAD in a read-only overlay (deleted files).
+tree_head_view_open :: proc(e: ^Editor, repo_path: string) {
+	if _thv.job != 0 { git.git_release(&e.git_mgr.queue, _thv.job) }
+	_thv_reset()
+	_thv.path = strings.clone(repo_path)
+	_thv.msg  = strings.clone("loading...")
+	_thv.job  = git.git_request_file_at(&e.git_mgr.queue, "HEAD", repo_path)
+	ui_panel_open(e, TREE_HEAD_VIEW_ID)
+}
+
+@(private="file")
+_thv_on_close :: proc(e: ^Editor) {
+	if e != nil && _thv.job != 0 { git.git_release(&e.git_mgr.queue, _thv.job) }
+	_thv_reset()
+}
+
+@(private="file")
+_thv_update :: proc(e: ^Editor, dt: f32) {
+	file_tree_git_sync(e)
+	if _thv.job == 0 { return }
+	blob, st, err := git.git_poll_as(&e.git_mgr.queue, _thv.job, git.File_Blob)
+	switch st {
+	case .Queued, .Running:
+		return
+	case .Done:
+		delete(_thv.msg); _thv.msg = ""
+		if !blob.present {
+			_thv.msg = strings.clone("file does not exist in HEAD")
+		} else if blob.binary {
+			_thv.msg = strings.clone("binary file")
+		} else {
+			text, _ := strings.replace_all(blob.text, "\t", "    ", context.temp_allocator)
+			for l in strings.split_lines(text, context.temp_allocator) { append(&_thv.lines, strings.clone(strings.trim_right(l, "\r"))) }
+		}
+	case .Failed, .Unknown:
+		delete(_thv.msg)
+		_thv.msg = strings.clone(err if err != "" else "failed to read HEAD version")
+	}
+	git.git_release(&e.git_mgr.queue, _thv.job)
+	_thv.job = 0
+}
+
+@(private="file")
+_thv_vis_rows :: proc() -> int {
+	sh := f32(rl.GetScreenHeight())
+	ref_h := FONT_SIZE + LINE_SPACING
+	return max(1, int((sh * 0.86 - 70) / ref_h))
+}
+
+@(private="file")
+_thv_input :: proc(e: ^Editor) -> bool {
+	if rl.IsKeyPressed(.ESCAPE) || rl.IsKeyPressed(.Q) { ui_panel_close(e, TREE_HEAD_VIEW_ID); return true }
+	vis := _thv_vis_rows()
+	max_scroll := max(0, len(_thv.lines) - vis)
+	if key_rep(.DOWN) || key_rep(.J) { _thv.scroll += 1 }
+	if key_rep(.UP)   || key_rep(.K) { _thv.scroll -= 1 }
+	if key_rep(.PAGE_DOWN) { _thv.scroll += vis }
+	if key_rep(.PAGE_UP)   { _thv.scroll -= vis }
+	if rl.IsKeyPressed(.HOME) { _thv.scroll = 0 }
+	if rl.IsKeyPressed(.END)  { _thv.scroll = max_scroll }
+	wheel := rl.GetMouseWheelMove()
+	if wheel != 0 { _thv.scroll -= int(wheel * 3) }
+	_thv.scroll = clamp(_thv.scroll, 0, max_scroll)
+	return true // modal: the buffer underneath must not receive edits
+}
+
+@(private="file")
+_thv_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
+	HEADER_H :: f32(34)
+	FOOTER_H :: f32(26)
+	w := min(sw - 40, 1000)
+	h := sh * 0.86
+	x := (sw - w) * 0.5
+	y := sh * 0.07
+	rl.DrawRectangle(0, 0, i32(sw), i32(sh), rl.Color{0, 0, 0, 150})
+	x, y = dlg_begin(x, y, w, h, GITD_BG, GITD_BORDER)
+
+	rl.DrawRectangleV({x, y}, {w, HEADER_H}, GITD_HEADER)
+	title := fmt.tprintf("%s  @ HEAD  (read-only, deleted)", _thv.path)
+	dlg_text(font, title, x + 10, y + 8, FONT_SIZE, CHAR_SPACING, GITD_RED, x + w, 10)
+
+	row_h := FONT_SIZE + LINE_SPACING
+	ly := y + HEADER_H + 6
+	if _thv.msg != "" {
+		rl.DrawTextEx(font, to_cstring(_thv.msg), {x + 12, ly}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
+	} else {
+		vis := _thv_vis_rows()
+		gut := rl.MeasureTextEx(font, "00000", FONT_SIZE - 2, CHAR_SPACING).x
+		for vi in 0..<vis {
+			li := _thv.scroll + vi
+			if li >= len(_thv.lines) { break }
+			ry := ly + f32(vi) * row_h
+			if ry + row_h > y + h - FOOTER_H { break }
+			num := fmt.tprintf("%5d", li + 1)
+			rl.DrawTextEx(font, to_cstring(num), {x + 6, ry}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
+			dlg_text(font, _thv.lines[li], x + 16 + gut, ry, FONT_SIZE - 2, CHAR_SPACING, GITD_TEXT, x + w, 8)
+		}
+	}
+
+	fy := y + h - FOOTER_H
+	rl.DrawRectangleV({x, fy}, {w, FOOTER_H}, GITD_HEADER)
+	foot := fmt.tprintf("%d lines  ↑↓ PgUp PgDn Home End scroll  Esc close", len(_thv.lines))
+	rl.DrawTextEx(font, to_cstring(foot), {x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, GITD_SUBDUED)
 	dlg_end()
 }
