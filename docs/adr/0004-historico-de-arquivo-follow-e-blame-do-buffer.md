@@ -1,4 +1,4 @@
-# 0002 — Histórico de arquivo com `--follow` e blame do buffer via arquivo temporário
+# 0004 — Histórico de arquivo com `--follow` e blame do buffer via arquivo temporário
 
 Data: 2026-10-14 · Épico #1 · Ticket #10 (tela `file_history`)
 
