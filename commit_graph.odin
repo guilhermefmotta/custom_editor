@@ -5,7 +5,7 @@ package editor
 // Graph of every ref (or one branch) in colored lanes with branch/tag/HEAD
 // badges, author and relative date; incremental paging through the git queue
 // (pages are kept alive and fed to the pure lane layout of
-// commit_graph_layout.odin, ADR 0002); search by message/author/hash; detail
+// commit_graph_layout.odin, ADR 0006); search by message/author/hash; detail
 // of the selected commit with its changed files and the whole-file diff of one
 // file at a time (commit_detail.odin). Only visible rows are drawn.
 //

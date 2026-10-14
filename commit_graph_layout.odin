@@ -1,6 +1,6 @@
 package editor
 
-// Pure (no raylib) lane layout for the commit graph — see ADR 0002.
+// Pure (no raylib) lane layout for the commit graph — see ADR 0006.
 //
 // Commits arrive in graph order (children before parents, `git log
 // --date-order`), page by page. graph_layout_add assigns each commit a lane

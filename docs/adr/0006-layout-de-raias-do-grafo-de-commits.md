@@ -1,4 +1,4 @@
-# 0002 — Layout de raias incremental do grafo de commits
+# 0006 — Layout de raias incremental do grafo de commits
 
 Data: 2026-10-14 · Épico #1 · Ticket #4 (decisão local da tela `commit_graph`)
 
