@@ -301,10 +301,15 @@ claude_launch_argv :: proc(settings_path: string, allocator := context.allocator
 	cmd := os.get_env(CLAUDE_CMD_ENV, context.temp_allocator)
 	if cmd == "" { cmd = "claude" }
 	when ODIN_OS == .Windows {
-		out := make([]string, 3, allocator)
+		// Separate arguments: the spawner quotes each one as needed. One
+		// pre-quoted string got its inner quotes escaped as \" (which cmd.exe
+		// doesn't understand), so claude received the path with literal quotes.
+		out := make([]string, 5, allocator)
 		out[0] = strings.clone("cmd.exe", allocator)
 		out[1] = strings.clone("/c", allocator)
-		out[2] = fmt.aprintf(`%s --settings "%s"`, cmd, settings_path, allocator = allocator)
+		out[2] = strings.clone(cmd, allocator)
+		out[3] = strings.clone("--settings", allocator)
+		out[4] = strings.clone(settings_path, allocator)
 	} else {
 		sh := os.get_env("SHELL", context.temp_allocator)
 		if sh == "" { sh = "/bin/sh" }

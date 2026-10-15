@@ -1,9 +1,11 @@
 package editor
 
+import "core:encoding/base64"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:unicode/utf16"
 import lsp  "./lsp"
 import conf "./config"
 
@@ -97,6 +99,26 @@ _register_lsp_from_config :: proc(e: ^Editor) {
 // you pin a version or point at a mirror without editing source. Overriding
 // replaces the OS/arch auto-detection for that server too, since a URL you
 // supply is assumed to already be right for your platform.
+// PowerShell argv running `script` via -EncodedCommand (base64 of UTF-16LE).
+// Passing the script as a -Command argument went through Windows command-line
+// quoting, which dropped the script's own double quotes ($DEST=C:\... then ran
+// as a command). Output is forced to UTF-8 so accented messages stay readable.
+_ps_argv :: proc(script: string) -> []string {
+	full := strings.concatenate({"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ", script}, context.temp_allocator)
+	u16s := make([]u16, len(full) * 2 + 1, context.temp_allocator)
+	n := utf16.encode_string(u16s, full)
+	raw := make([]u8, n * 2, context.temp_allocator)
+	for i in 0 ..< n {
+		raw[2 * i]     = u8(u16s[i] & 0xFF)
+		raw[2 * i + 1] = u8(u16s[i] >> 8)
+	}
+	enc := base64.encode(raw, allocator = context.temp_allocator)
+	args := []string{"powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc}
+	out := make([]string, len(args))
+	for a, i in args { out[i] = strings.clone(a) }
+	return out
+}
+
 _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, label: string) {
 	_s :: proc(strs: []string) -> []string {
 		out := make([]string, len(strs))
@@ -118,7 +140,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`& "$DEST\venv\Scripts\pip.exe" install python-lsp-server; ` +
 				`Copy-Item "$DEST\venv\Scripts\pylsp.exe" "$DEST\pylsp.exe" -Force`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Installing pylsp into editor-local venv...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -140,7 +162,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
 				`$env:GOBIN=$DEST; go install golang.org/x/tools/gopls@latest`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Installing gopls into editor-local dir...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -166,7 +188,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`$gz=New-Object System.IO.Compression.GZipStream($in,[IO.Compression.CompressionMode]::Decompress); ` +
 				`$gz.CopyTo($out); $gz.Close(); $out.Close(); $in.Close(); Remove-Item "$DEST\ra.gz"`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Downloading rust-analyzer into editor-local dir...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -192,7 +214,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`npm install --prefix "$DEST" typescript-language-server typescript; ` +
 				`Copy-Item "$DEST\node_modules\.bin\typescript-language-server.cmd" "$DEST\typescript-language-server.cmd" -Force`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Installing typescript-language-server into editor-local dir...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -217,7 +239,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`$launcher = 'java -Declipse.application=org.eclipse.jdt.ls.core.id1 -Dosgi.bundles.defaultStartLevel=4 -Declipse.product=org.eclipse.jdt.ls.core.product -Dlog.level=ALL -noverify -Xmx1G --add-modules=ALL-SYSTEM --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED -jar "{0}" -configuration "{1}\config_win" %*' -f $jar, $DEST; ` +
 				`Set-Content -Path "$DEST\jdtls.cmd" -Value $launcher`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Installing jdtls into editor-local dir (requires Java 17+)...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -248,7 +270,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`Expand-Archive -Force "$DEST\luals.zip" "$DEST\extracted"; ` +
 				`Copy-Item "$DEST\extracted\bin\lua-language-server.exe" "$DEST\lua-language-server.exe" -Force`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Downloading lua-language-server into editor-local dir...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -278,7 +300,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`Expand-Archive -Force "$DEST\zls.zip" "$DEST\extracted"; ` +
 				`Copy-Item "$DEST\extracted\zls.exe" "$DEST\zls.exe" -Force`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Downloading zls into editor-local dir...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -304,7 +326,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`$url="`, install_url, `"; ` +
 				`Invoke-WebRequest -Uri $url -OutFile "$DEST\lemminx.exe"`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Downloading LemMinX into editor-local dir...")
 		} else {
 			cmd_str := strings.concatenate({
@@ -325,7 +347,7 @@ _install_cmd_for_id :: proc(id: string, install_url: string) -> (cmd: []string, 
 				`$DEST="`, dest, `"; New-Item -ItemType Directory -Force -Path $DEST | Out-Null; ` +
 				`dotnet tool install --tool-path "$DEST" csharp-ls`,
 			})
-			return _s({"powershell", "-NoProfile", "-Command", cmd_str}),
+			return _ps_argv(cmd_str),
 			       strings.clone("Installing csharp-ls into editor-local dir...")
 		} else {
 			cmd_str := strings.concatenate({

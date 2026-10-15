@@ -54,9 +54,11 @@ main :: proc() {
 	flags: rl.ConfigFlags = {.WINDOW_RESIZABLE, .MSAA_4X_HINT}
 	// Retina: render at the display's real pixel density instead of 1x
 	// upscaled by macOS (which made everything blurry)
-	// Windows: same thing at display scaling > 100% (125%/150%) — without it
-	// the window is drawn at 100% and bitmap-stretched, blurring all text.
-	when ODIN_OS == .Darwin || ODIN_OS == .Windows { flags += {.WINDOW_HIGHDPI} }
+	// macOS only. On Windows raylib's WINDOW_HIGHDPI reports the window size
+	// already multiplied by the display scale without scaling the drawing, so
+	// at 125% everything came out small and dialogs off-center. Text size on
+	// Windows is set with the font zoom (Ctrl + = / -) instead.
+	when ODIN_OS == .Darwin { flags += {.WINDOW_HIGHDPI} }
 	rl.SetConfigFlags(flags)
 	rl.InitWindow(1280, 720, "editor")
 	defer rl.CloseWindow()
