@@ -304,3 +304,15 @@ test_file_tree_commands_in_palette :: proc(t: ^testing.T) {
 	testing.expect(t, toggle, "File Tree: Toggle registered")
 	testing.expect(t, changed, "File Tree: Show Changed Files registered")
 }
+
+// Font size is reachable from the palette (and Cmd/Ctrl + = - 0 in every keymap)
+@(test)
+test_font_zoom_commands_in_palette :: proc(t: ^testing.T) {
+	n := 0
+	for c in ui_registered_commands() {
+		switch c.name {
+		case "Font: Increase Size", "Font: Decrease Size", "Font: Reset Size": n += 1
+		}
+	}
+	testing.expect_value(t, n, 3)
+}

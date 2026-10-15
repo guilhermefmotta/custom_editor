@@ -327,6 +327,13 @@ handle_navigation :: proc(e: ^Editor) -> bool {
 		return true
 	}
 
+	// Font size in every keymap mode (it used to live in the normal keymap only)
+	if ctrl() && !alt() {
+		if rl.IsKeyPressed(.EQUAL) || rl.IsKeyPressed(.KP_ADD)      { font_zoom(e, +FONT_ZOOM_STEP); return true }
+		if rl.IsKeyPressed(.MINUS) || rl.IsKeyPressed(.KP_SUBTRACT) { font_zoom(e, -FONT_ZOOM_STEP); return true }
+		if !shift() && (rl.IsKeyPressed(.ZERO) || rl.IsKeyPressed(.KP_0)) { font_zoom_reset(e); return true }
+	}
+
 	// Close the current file tab (asks if unsaved). macOS: the physical Cmd+W —
 	// Ctrl+W stays Vim's window prefix / Emacs's kill-region. Elsewhere: Ctrl+W
 	// in the normal keymap only (Vim/Emacs keep theirs; use :q / "Close Tab").
@@ -523,8 +530,6 @@ handle_edit_shortcuts :: proc(e: ^Editor, p: ^Pane) -> bool {
 		if rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return true }
 		if rl.IsKeyPressed(.Q)   { e.should_quit = true; return true }
 		if rl.IsKeyPressed(.SLASH) { do_comment_toggle(p); lsp_on_text_changed(e, p); return true }
-		if rl.IsKeyPressed(.EQUAL) { FONT_SIZE = clamp(FONT_SIZE + 2, 8, 72); return true }
-		if rl.IsKeyPressed(.MINUS) { FONT_SIZE = clamp(FONT_SIZE - 2, 8, 72); return true }
 		if key_rep(.LEFT)      { mc_clear(p); move_word_left(p,  shift()); return true }
 		if key_rep(.RIGHT)     { mc_clear(p); move_word_right(p, shift()); return true }
 		if rl.IsKeyPressed(.HOME) { mc_clear(p); move_doc_start(p, shift()); return true }
