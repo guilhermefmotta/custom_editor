@@ -57,7 +57,7 @@ workspace_dialog_destroy :: proc(d: ^Workspace_Dialog) {
 	d^ = {}
 }
 
-workspace_dialog_open :: proc(d: ^Workspace_Dialog) {
+workspace_dialog_open :: proc(d: ^Workspace_Dialog, start_dir := "") {
 	d.open      = true
 	d.selected  = 0
 	d.scroll    = 0
@@ -67,8 +67,10 @@ workspace_dialog_open :: proc(d: ^Workspace_Dialog) {
 	for m in d.marked { delete(m) }
 	clear(&d.marked)
 
-	// Pre-fill with cwd + trailing slash so listing starts immediately
+	// Pre-fill with the start folder (default: cwd) + trailing slash so the
+	// listing starts immediately
 	cwd, err := os.get_working_directory(context.temp_allocator)
+	if start_dir != "" && os.is_dir(start_dir) { cwd, err = start_dir, nil }
 	if err == nil {
 		cwd = _ws_norm_seps(cwd)
 		append(&d.input, cwd)
@@ -395,6 +397,8 @@ _ws_refresh :: proc(d: ^Workspace_Dialog) {
 
 		name   := fi.name
 		is_dir := fi.type == .Directory
+		// A link to a folder is navigable like a folder
+		if fi.type == .Symlink && os.is_dir(fi.fullpath) { is_dir = true }
 
 		// Filter by prefix (case-sensitive, matches shell autocomplete behaviour)
 		if len(prefix) > 0 && !strings.has_prefix(name, prefix) { continue }

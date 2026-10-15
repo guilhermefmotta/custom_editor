@@ -86,14 +86,10 @@ main :: proc() {
 			if _, err := repos_open_many(&e, dirs[:]); err != "" { ui_banner_show(err, .Error, 8) }
 		}
 	} else {
-		session_restore(&e)
-		// Open straight into work: with no repository restored, use the working
-		// directory's repository, else the most recent one. The welcome screen
-		// is only shown on request ("Repo: Welcome").
-		if len(e.repos.list) == 0 {
-			cwd, _ := os.get_working_directory(context.temp_allocator)
-			repos_open_startup_default(&e, cwd)
-		}
+		// Start idle on the welcome screen (open / clone / init / recents):
+		// nothing opens on its own, not even the working directory. The last
+		// session's tabs come back when each repository is opened again.
+		session_load_views(&e)
 	}
 
 	editor_lsp_init(&e)

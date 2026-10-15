@@ -3,6 +3,7 @@ package editor
 import "base:runtime"
 import "core:fmt"
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import "core:testing"
 import "core:time"
@@ -312,21 +313,40 @@ test_repos_find_git_root_and_norm :: proc(t: ^testing.T) {
 	testing.expect_value(t, r.git.root, repos_norm_root(a, context.temp_allocator))
 }
 
-// Startup with no session repositories opens the most recent repository that
-// still exists (skipping missing ones) instead of stopping at the welcome screen.
+// Startup doesn't open repositories: their saved tabs are kept aside and come
+// back when each one is opened (welcome / recents / drop). Repositories not
+// opened this run keep their saved tabs when the session is written again.
 @(test)
-test_repos_startup_opens_most_recent :: proc(t: ^testing.T) {
-	a := _rt_repo(t, "startup_a"); defer _rt_free_dir(a)
-	b := _rt_repo(t, "startup_b"); defer _rt_free_dir(b)
+test_repos_saved_views_apply_on_open :: proc(t: ^testing.T) {
+	a := _rt_repo(t, "views_a"); defer _rt_free_dir(a)
+	b := _rt_repo(t, "views_b"); defer _rt_free_dir(b)
+	fa, _ := filepath.join({a, "f.txt"}, context.temp_allocator)
+	fb, _ := filepath.join({a, "g.txt"}, context.temp_allocator)
+	_ = os.write_entire_file(fa, transmute([]u8)string("f\n"))
+	_ = os.write_entire_file(fb, transmute([]u8)string("g\n"))
+	ra := repos_norm_root(a, context.temp_allocator)
+	rb := repos_norm_root(b, context.temp_allocator)
+	data := fmt.tprintf(`{{"active":0,"split":"none","split_ratio":0.5,"panes":[],"active_repo":0,"repos":[` +
+		`{{"root":%q,"active":0,"split":"none","split_ratio":0.5,"panes":[{{"filename":%q,"cursor":0,"scroll":0,"cur_tab":1,"tabs":[{{"filename":%q,"cursor":0,"scroll":0}},{{"filename":%q,"cursor":0,"scroll":0}}]}}]}},` +
+		`{{"root":%q,"active":0,"split":"none","split_ratio":0.5,"panes":[]}}]}}`, ra, fb, fa, fb, rb)
+
 	e := _rt_editor(); repos_init(&e); defer _rt_editor_destroy(&e)
-	recent_repos_push(&e.recent_repos, a)
-	recent_repos_push(&e.recent_repos, b)
-	recent_repos_push(&e.recent_repos, "/no/such/repo-gone") // most recent, but missing
+	session_load_views_from(&e, data)
+	testing.expect_value(t, len(e.repos.list), 0) // nothing opened at startup
+	testing.expect_value(t, len(e.repos.saved_views), 2)
 
-	repos_open_startup_default(&e, "") // working directory isn't a repository
-
-	testing.expect_value(t, len(e.repos.list), 1)
-	if len(e.repos.list) == 1 {
-		testing.expect_value(t, e.repos.list[0].root, repos_norm_root(b, context.temp_allocator))
+	r, err := repos_open(&e, a, activate = false)
+	testing.expect_value(t, err, "")
+	if r != nil {
+		testing.expect(t, r.has_view)
+		if len(r.panes) == 1 {
+			testing.expect_value(t, len(r.panes[0].tabs), 2)
+			testing.expect_value(t, r.panes[0].cur_tab, 1)
+		}
 	}
+	testing.expect_value(t, len(e.repos.saved_views), 1) // consumed for a, b kept
+
+	// b wasn't opened: its saved entry is written back with the session
+	out := session_build(&e)
+	testing.expect(t, strings.contains(out, rb))
 }

@@ -1096,7 +1096,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 
 cmd_open_workspace :: proc(e: ^Editor, p: ^Palette) {
 	palette_close(p)
-	workspace_dialog_open(&e.workspace_dlg)
+	workspace_dialog_open(&e.workspace_dlg, workspace_start_dir(e))
 }
 
 _prefill_from_selection :: proc(p: ^Palette, e: ^Editor) {

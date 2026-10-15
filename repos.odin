@@ -82,6 +82,11 @@ Repo_Set :: struct {
 	close_armed: ^Repo, // dirty repo: second close request discards
 
 	ops: git.Git_Queue, // clone / init (not bound to a repository)
+
+	// Last session's view (tabs/panes) of each repository, by root, as the
+	// session's JSON object text. Startup doesn't open repositories (it shows
+	// the welcome screen); a repository opened later gets its saved view back.
+	saved_views: map[string]string,
 }
 
 @(private="file") _repo_hooks: [dynamic]Repo_Switch_Hook
@@ -127,6 +132,8 @@ repos_destroy :: proc(e: ^Editor) {
 	for r in e.repos.list { _repo_free(r, nil) }
 	delete(e.repos.list)
 	if e.repos.none != nil { _repo_free(e.repos.none, nil) }
+	for k, v in e.repos.saved_views { delete(k); delete(v) }
+	delete(e.repos.saved_views)
 	e.repos = {}
 	e.git_mgr = nil
 }
@@ -234,6 +241,7 @@ repos_open :: proc(e: ^Editor, path: string, activate := true) -> (r: ^Repo, err
 		git.git_manager_init(&r.git, groot)
 	}
 	append(&e.repos.list, r)
+	session_apply_saved_view(e, r) // tabs from the last session, if any
 	recent_repos_push(&e.recent_repos, root)
 	if e.repos.live { recent_repos_save(&e.recent_repos) }
 	if activate { repos_switch(e, len(e.repos.list) - 1) }
@@ -243,20 +251,18 @@ repos_open :: proc(e: ^Editor, path: string, activate := true) -> (r: ^Repo, err
 // Opens every folder (files in the list are opened in the editor), each in
 // its own tab, and activates the first folder. Returns how many folders
 // opened and the first error.
-// Startup fallback when the session restored no repository: the repository
-// containing the working directory, else the most recent one that still exists.
-// Nothing found → a hint instead of a blocking screen.
-repos_open_startup_default :: proc(e: ^Editor, cwd: string) {
-	if cwd != "" && repos_find_git_root(cwd) != "" {
-		if _, oerr := repos_open(e, cwd); oerr == "" { return }
+// Where "Open Folder" starts browsing: next to the most recent repository
+// (usually the projects folder), else the home folder — not the process's
+// working directory, which on Windows is the executable's folder.
+workspace_start_dir :: proc(e: ^Editor) -> string {
+	context.allocator = context.temp_allocator // result lives for this frame
+	for p in e.recent_repos.paths {
+		parent := filepath.dir(p)
+		if parent != "" && os.is_dir(parent) { return parent }
 	}
-	for i in 0 ..< len(e.recent_repos.paths) {
-		// Copy: opening a repository reorders the recent list
-		path := strings.clone(e.recent_repos.paths[i], context.temp_allocator)
-		if !os.is_dir(path) { continue }
-		if _, oerr := repos_open(e, path); oerr == "" { return }
-	}
-	ui_banner_show("No repository open - Ctrl/Cmd+Alt+O opens folders (or \"Repo: Welcome\")", .Info, 10)
+	home := os.get_env("HOME", context.temp_allocator)
+	if home == "" { home = os.get_env("USERPROFILE", context.temp_allocator) }
+	return home
 }
 
 repos_open_many :: proc(e: ^Editor, paths: []string) -> (opened: int, first_err: string) {
@@ -596,7 +602,7 @@ _cmd_repo_close :: proc(e: ^Editor, p: ^Palette) {
 @(private="file")
 _cmd_repo_open :: proc(e: ^Editor, p: ^Palette) {
 	palette_close(p)
-	workspace_dialog_open(&e.workspace_dlg)
+	workspace_dialog_open(&e.workspace_dlg, workspace_start_dir(e))
 }
 @(private="file")
 _cmd_repo_nth :: proc(e: ^Editor, p: ^Palette) {
@@ -672,7 +678,7 @@ _rt_input :: proc(e: ^Editor) -> bool {
 	for p in ui_panels() { if p.open && p.layer == .Overlay { return false } } // drawn over the strip
 	left, mid := rl.IsMouseButtonPressed(.LEFT), rl.IsMouseButtonPressed(.MIDDLE)
 	if !left && !mid { return rl.IsMouseButtonDown(.LEFT) }
-	if left && ui_point_in(mp, _rt_plus) { workspace_dialog_open(&e.workspace_dlg); return true }
+	if left && ui_point_in(mp, _rt_plus) { workspace_dialog_open(&e.workspace_dlg, workspace_start_dir(e)); return true }
 	for i in 0 ..< min(_rt_n, len(e.repos.list)) {
 		if !ui_point_in(mp, _rt_rects[i]) { continue }
 		if mid || ui_point_in(mp, _rt_close[i]) { repos_close(e, i) } else { repos_switch(e, i) }

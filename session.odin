@@ -102,8 +102,78 @@ session_build :: proc(e: ^Editor, allocator := context.temp_allocator) -> string
 		}
 		strings.write_string(&sb, "}")
 	}
+	// Repositories from an earlier session that weren't opened this time keep
+	// their saved tabs (written back as they were loaded)
+	n := len(e.repos.list)
+	for root, text in e.repos.saved_views {
+		if repos_index_of(&e.repos, root) >= 0 { continue }
+		if n > 0 { strings.write_string(&sb, ",") }
+		strings.write_string(&sb, text)
+		n += 1
+	}
 	strings.write_string(&sb, "]}")
 	return strings.to_string(sb)
+}
+
+// Reads the last session's per-repository views without opening anything
+// (startup shows the welcome screen). See Repo_Set.saved_views.
+session_load_views :: proc(e: ^Editor) {
+	data, err := os.read_entire_file(_session_path(), context.temp_allocator)
+	if err != nil { return }
+	session_load_views_from(e, string(data))
+}
+
+session_load_views_from :: proc(e: ^Editor, data: string) {
+	val, jerr := json.parse(transmute([]u8)data, json.DEFAULT_SPECIFICATION, true, context.temp_allocator)
+	if jerr != nil { return }
+	defer json.destroy_value(val, context.temp_allocator)
+	obj, is_obj := val.(json.Object)
+	if !is_obj { return }
+	arr, is_arr := obj["repos"].(json.Array)
+	if !is_arr { return }
+	for rv in arr {
+		ro, ok := rv.(json.Object)
+		if !ok { continue }
+		root, _ := ro["root"].(string)
+		if root == "" || !os.is_dir(root) { continue } // folder gone: forget it
+		text, merr := json.marshal(ro, allocator = context.temp_allocator)
+		if merr != nil { continue }
+		key := repos_norm_root(root, context.temp_allocator)
+		if old, has := e.repos.saved_views[key]; has {
+			delete(old)
+			e.repos.saved_views[key] = strings.clone(string(text))
+		} else {
+			e.repos.saved_views[strings.clone(key)] = strings.clone(string(text))
+		}
+	}
+}
+
+// Gives a repository that was just opened its tabs/panes from the last
+// session. The entry is consumed: from now on the live view is what's saved.
+session_apply_saved_view :: proc(e: ^Editor, r: ^Repo) {
+	key, text, has := _session_take_saved(e, r.root)
+	if !has { return }
+	defer { delete(key); delete(text) }
+	val, jerr := json.parse(transmute([]u8)text, json.DEFAULT_SPECIFICATION, true, context.temp_allocator)
+	if jerr != nil { return }
+	defer json.destroy_value(val, context.temp_allocator)
+	ro, ok := val.(json.Object)
+	if !ok { return }
+	if v := _session_read_view(ro); v.ok && !r.has_view {
+		r.panes, r.active, r.split, r.split_ratio = v.panes, v.active, v.split, v.split_ratio
+		r.has_view = true
+	} else if v.ok {
+		for &p in v.panes { pane_destroy(&p) }
+		delete(v.panes)
+	}
+}
+
+@(private="file")
+_session_take_saved :: proc(e: ^Editor, root: string) -> (key, text: string, ok: bool) {
+	norm := repos_norm_root(root, context.temp_allocator)
+	if norm not_in e.repos.saved_views { return }
+	key, text = delete_key(&e.repos.saved_views, norm)
+	return key, text, true
 }
 
 session_save :: proc(e: ^Editor) {

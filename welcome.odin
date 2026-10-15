@@ -28,7 +28,6 @@ _Welcome :: struct {
 	nav:        Ui_List_Nav,
 	dismissed:  bool,
 	last_count: int,
-	started:    bool,
 }
 @(private="file") _wl: _Welcome
 
@@ -85,10 +84,6 @@ _cmd_repo_init :: proc(e: ^Editor, p: ^Palette) { palette_close(p); repo_dialog_
 @(private="file")
 _wl_update :: proc(e: ^Editor, dt: f32) {
 	if e.git_mgr == nil { return }
-	// Not shown on its own at startup: the editor opens straight into the last
-	// work (repos_open_startup_default). Later (last repo closed, or "Repo:
-	// Welcome") it behaves as before.
-	if !_wl.started { _wl.started = true; _wl.dismissed = true }
 	n := len(e.repos.list)
 	prev := _wl.last_count
 	_wl.last_count = n
@@ -129,7 +124,7 @@ _wl_input :: proc(e: ^Editor) -> bool {
 		_wl.dismissed = true
 		ui_panel_close(e, WELCOME_ID)
 	case rl.IsKeyPressed(.O) && !ctrl():
-		workspace_dialog_open(&e.workspace_dlg)
+		workspace_dialog_open(&e.workspace_dlg, workspace_start_dir(e))
 	case rl.IsKeyPressed(.C) && !ctrl():
 		repo_dialog_open(e, .Clone)
 	case rl.IsKeyPressed(.I) && !ctrl():
@@ -181,7 +176,7 @@ _wl_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		ui_text(font, a.hint, x + 40, y + 18, 22, FONT_SIZE - 4, LINENUM, x + W)
 		if hover && click {
 			switch a.mode {
-			case 0: workspace_dialog_open(&e.workspace_dlg)
+			case 0: workspace_dialog_open(&e.workspace_dlg, workspace_start_dir(e))
 			case 1: repo_dialog_open(e, .Clone)
 			case 2: repo_dialog_open(e, .Init)
 			}
@@ -206,7 +201,8 @@ _wl_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			}
 			path := e.recent_repos.paths[i]
 			ui_text(font, filepath.base(path), x + 12, y, 20, FONT_SIZE - 1, TEXT, x + W)
-			ui_text(font, path, x + 12, y + 17, 18, FONT_SIZE - 5, LINENUM, x + W)
+			path_col := ui_with_alpha(TEXT, 170) if i == _wl.nav.selected else LINENUM // LINENUM vanishes on SEL_BG
+			ui_text(font, path, x + 12, y + 17, 18, FONT_SIZE - 5, path_col, x + W)
 			if click && ui_point_in(mp, r) {
 				_wl.nav.selected = i
 				_wl_open_recent(e, i)
