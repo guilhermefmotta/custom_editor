@@ -93,7 +93,10 @@ main :: proc() {
 	}
 
 	editor_lsp_init(&e)
-	editor_git_init(&e) // no repo yet → the file's / cwd's repository, if any
+	// Files given on the command line open inside their repository. Without
+	// arguments nothing opens on its own (not even the working directory's
+	// repository): the welcome screen is the starting point.
+	if len(os.args) > 1 { editor_git_init(&e) }
 	if len(os.args) > 1 {
 		lsp_on_open(&e, active_pane(&e))
 	}
