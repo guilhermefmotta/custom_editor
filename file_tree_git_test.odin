@@ -292,3 +292,15 @@ test_tree_git_real_repo_status :: proc(t: ^testing.T) {
 	testing.expect(t, blob.present)
 	testing.expect_value(t, blob.text, "old content\n")
 }
+
+// The file tree is reachable from the command palette, not only Ctrl/Cmd+;
+@(test)
+test_file_tree_commands_in_palette :: proc(t: ^testing.T) {
+	toggle, changed := false, false
+	for c in ui_registered_commands() {
+		if c.name == "File Tree: Toggle" { toggle = true }
+		if c.name == "File Tree: Show Changed Files" { changed = true }
+	}
+	testing.expect(t, toggle, "File Tree: Toggle registered")
+	testing.expect(t, changed, "File Tree: Show Changed Files registered")
+}

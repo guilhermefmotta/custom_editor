@@ -1011,6 +1011,22 @@ _tree_head_view_register :: proc "contextless" () {
 		update   = _thv_update, // also keeps the file tree's git badges in sync
 		on_close = _thv_on_close,
 	})
+	// The tree only had its Ctrl/Cmd+; key (input.odin); list it in the palette too
+	ui_register_command(Command{"File Tree: Toggle", "Show the folder hierarchy of the active project (Ctrl/Cmd+;)", _cmd_file_tree_toggle, nil})
+	ui_register_command(Command{"File Tree: Show Changed Files", "File tree with only the files changed in git", _cmd_file_tree_changed, nil})
+}
+
+@(private="file")
+_cmd_file_tree_toggle :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	if e.file_tree.open { file_tree_close(&e.file_tree) } else { file_tree_open(&e.file_tree) }
+}
+
+@(private="file")
+_cmd_file_tree_changed :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	if !e.file_tree.open { file_tree_open(&e.file_tree) }
+	if !e.file_tree.changed_only { file_tree_toggle_changed_only(&e.file_tree) }
 }
 
 @(fini)
