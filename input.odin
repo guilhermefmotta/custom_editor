@@ -327,12 +327,20 @@ handle_navigation :: proc(e: ^Editor) -> bool {
 		return true
 	}
 
-	// Ctrl+W → close current tab
-//	if ctrl() && rl.IsKeyPressed(.W) {
-//		pane_close_tab(active_pane(e))
-//		lsp_on_open(e, active_pane(e))
-//		return true
-//	}
+	// Close the current file tab (asks if unsaved). macOS: the physical Cmd+W —
+	// Ctrl+W stays Vim's window prefix / Emacs's kill-region. Elsewhere: Ctrl+W
+	// in the normal keymap only (Vim/Emacs keep theirs; use :q / "Close Tab").
+	when ODIN_OS == .Darwin {
+		if (rl.IsKeyDown(.LEFT_SUPER) || rl.IsKeyDown(.RIGHT_SUPER)) && !shift() && !alt() && rl.IsKeyPressed(.W) {
+			editor_close_tab_request(e)
+			return true
+		}
+	} else {
+		if e.cfg.editor.keymap_mode == .Normal && ctrl() && !shift() && !alt() && rl.IsKeyPressed(.W) {
+			editor_close_tab_request(e)
+			return true
+		}
+	}
 
 	// Ctrl+PageUp → previous tab; Ctrl+PageDown → next tab
 	if ctrl() && rl.IsKeyPressed(.PAGE_UP) {

@@ -108,7 +108,7 @@ palette_init :: proc() -> Palette {
 		Command{"New File",                 "Create an empty buffer",                            cmd_new_file, nil},
 		Command{"New Directory",            "Create a new directory in the workspace",           cmd_new_directory, nil},
 		Command{"Save File",                "Save current file to disk",                        cmd_save_file, nil},
-		Command{"Close File",               "Close current file and clear buffer",              cmd_close_file, nil},
+		Command{"Close File",               "Close the current file tab (asks if unsaved)",    cmd_close_file, nil},
 		Command{"Rename File",              "Rename the current file on disk",                  cmd_rename_file, nil},
 		Command{"Delete File",              "Delete the current file from disk",                cmd_delete_file, nil},
 		Command{"Split Vertical",           "Split editor into two side-by-side panes",         cmd_split_vertical, nil},
@@ -1188,16 +1188,9 @@ cmd_save_file :: proc(e: ^Editor, p: ^Palette) {
 }
 
 cmd_close_file :: proc(e: ^Editor, p: ^Palette) {
-	ap := active_pane(e)
-	buffer_destroy(&ap.buf)
-	ap.buf        = buffer_init()
-	ap.cursor     = 0
-	ap.sel_anchor = 0
-	ap.scroll     = 0
-	if ap.filename != "" { delete(ap.filename); ap.filename = "" }
-	ap.lang  = .None
-	ap.dirty = false
+	// Closes the tab (it used to only clear the buffer and leave the tab)
 	palette_close(p)
+	editor_close_tab_request(e)
 }
 
 cmd_outline :: proc(e: ^Editor, p: ^Palette) {

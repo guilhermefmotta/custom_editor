@@ -1086,18 +1086,22 @@ vim_exec_command :: proc(e: ^Editor, p: ^Pane, cmd: string) {
 	case "w":
 		editor_save(e)
 		lsp_on_save(e, p)
+	// :q closes the tab — on the last one it leaves an empty pane instead of
+	// quitting the editor (quit with :qa or Cmd/Ctrl+Q)
 	case "q":
 		if p.dirty {
 			e.msg = "E37: No write since last change (add ! to override)"
-		} else if !pane_close_tab(p) {
-			e.should_quit = true
+		} else {
+			editor_close_tab_now(e)
 		}
 	case "q!":
-		if !pane_close_tab(p) { e.should_quit = true }
+		p.dirty = false
+		editor_close_tab_now(e)
 	case "wq", "x", "wq!", "x!":
-		editor_save(e)
-		lsp_on_save(e, p)
-		if !pane_close_tab(p) { e.should_quit = true }
+		if editor_save(e) { // keep the tab if it couldn't be saved (e.g. no name yet)
+			lsp_on_save(e, p)
+			editor_close_tab_now(e)
+		}
 	case "qa", "qa!", "quitall", "quitall!":
 		e.should_quit = true
 	case "tabnext", "tabn":
