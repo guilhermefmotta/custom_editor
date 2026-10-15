@@ -616,7 +616,7 @@ _co_rebase_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32, interactive: boo
 	if _co.plan_id != 0 {
 		ui_text(font, "loading...", list.x + 14, list.y, row_h, size, GITD_SUBDUED, list.x + list.width)
 	}
-	rl.BeginScissorMode(i32(list.x), i32(list.y), i32(list.width), i32(list.height))
+	ui_scissor_begin(i32(list.x), i32(list.y), i32(list.width), i32(list.height))
 	for vi in 0 ..< vis {
 		i := _co.nav.scroll + vi
 		if i >= n { break }

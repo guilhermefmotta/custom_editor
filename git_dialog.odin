@@ -277,8 +277,8 @@ git_dialog_draw :: proc(d: ^Git_Dialog, e: ^Editor, font: rl.Font) {
 	if !d.visible { return }
 	m := e.git_mgr
 
-	sw := f32(rl.GetScreenWidth())
-	sh := f32(rl.GetScreenHeight())
+	sw := f32(screen_w())
+	sh := f32(screen_h())
 
 	switch d.mode {
 	case .Diff:  _gitd_draw_diff(d, m, font, sw, sh)

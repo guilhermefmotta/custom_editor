@@ -577,8 +577,8 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 
 	_ft_search_step(ft)
 
-	sw := f32(rl.GetScreenWidth())
-	sh := f32(rl.GetScreenHeight())
+	sw := f32(screen_w())
+	sh := f32(screen_h())
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 	cw  := ref.x
@@ -1088,7 +1088,7 @@ _thv_update :: proc(e: ^Editor, dt: f32) {
 
 @(private="file")
 _thv_vis_rows :: proc() -> int {
-	sh := f32(rl.GetScreenHeight())
+	sh := f32(screen_h())
 	ref_h := FONT_SIZE + LINE_SPACING
 	return max(1, int((sh * 0.86 - 70) / ref_h))
 }

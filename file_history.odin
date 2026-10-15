@@ -391,7 +391,7 @@ _fh_draw_history :: proc(font: rl.Font, body: rl.Rectangle) {
 	ui_list_clamp(&_fh.nav, len(commits), vis)
 	now := time.to_unix_seconds(time.now())
 	mp := rl.GetMousePosition()
-	rl.BeginScissorMode(i32(a.x), i32(a.y), i32(a.width), i32(a.height))
+	ui_scissor_begin(i32(a.x), i32(a.y), i32(a.width), i32(a.height))
 	for vi in 0..<vis {
 		i := _fh.nav.scroll + vi
 		if i >= len(commits) { break }
@@ -466,7 +466,7 @@ _fh_draw_diff :: proc(font: rl.Font, r: rl.Rectangle, commits: []Fh_Commit) {
 	half   := (content.width - 9) * 0.5
 	gutter := cw * f32(GITD_DIFF_GUTTER_CH) + 10
 	col_x  := [2]f32{content.x, content.x + half + 3}
-	rl.BeginScissorMode(i32(content.x), i32(content.y), i32(content.width), i32(content.height))
+	ui_scissor_begin(i32(content.x), i32(content.y), i32(content.width), i32(content.height))
 	rl.DrawRectangleV({content.x + half + 1, content.y}, {1, content.height}, GITD_BORDER)
 	cy := content.y
 	for i := _fh.diff_scroll; i < len(rows) && i < _fh.diff_scroll + vis; i += 1 {
@@ -539,7 +539,7 @@ _fh_draw_blame :: proc(font: rl.Font, r: rl.Rectangle) -> (hovered: Fh_Blame_Lin
 	mp  := rl.GetMousePosition()
 	slots := _fh.blame_slots
 
-	rl.BeginScissorMode(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
+	ui_scissor_begin(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
 	for vi in 0..<vis {
 		i := _fh.blame_nav.scroll + vi
 		if i >= len(lines) { break }

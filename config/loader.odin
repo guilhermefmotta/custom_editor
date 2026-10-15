@@ -161,6 +161,7 @@ _apply_window :: proc(cfg: ^Config, t: ^TOML_Table) {
 	if b, ok := toml_bool(t, "fullscreen");ok { w.fullscreen = b }
 	if n, ok := toml_int(t, "fps_target"); ok { w.fps_target = int(n) }
 	if b, ok := toml_bool(t, "event_driven"); ok { w.event_driven = b }
+	if n, ok := toml_int(t, "ui_scale");      ok { w.ui_scale     = int(n) }
 	if s, ok := toml_str(t, "title");      ok { _replace_str(&w.title, s) }
 }
 
@@ -171,6 +172,7 @@ _apply_font :: proc(cfg: ^Config, t: ^TOML_Table) {
 	if n, ok := toml_int(t, "size");          ok { f.size         = int(n) }
 	if v, ok := toml_float(t, "line_height"); ok { f.line_height  = f32(v) }
 	if v, ok := toml_float(t, "char_spacing");ok { f.char_spacing = f32(v) }
+	if b, ok := toml_bool(t, "smooth");       ok { f.smooth       = b }
 	if arr, ok := toml_array(t, "fallbacks"); ok {
 		for s in f.fallbacks { delete(s) }
 		delete(f.fallbacks)

@@ -745,8 +745,8 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 
 	if p.mode == .Files { palette_scan_step(p) }
 
-	sw := f32(rl.GetScreenWidth())
-	sh := f32(rl.GetScreenHeight())
+	sw := f32(screen_w())
+	sh := f32(screen_h())
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 	cw  := ref.x

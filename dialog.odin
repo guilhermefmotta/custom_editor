@@ -127,7 +127,7 @@ dlg_begin :: proc(px, py, w, h: f32, bg, border: rl.Color) -> (f32, f32) {
     // without touching the (risky-to-round) scissor geometry.
     rl.DrawLineV({px + 1, py + 1}, {px + w - 1, py + 1}, _fade({255, 255, 255, 18}, a))
 
-    rl.BeginScissorMode(i32(px + 1), i32(py + 1), i32(w - 2), i32(h - 2))
+    ui_scissor_begin(i32(px + 1), i32(py + 1), i32(w - 2), i32(h - 2))
 
     return px, py
 }
@@ -144,7 +144,7 @@ dlg_end :: proc() {
 // immediately after any inner EndScissorMode to restore panel clipping.
 dlg_restore :: proc() {
     if !_dlg_active { return }
-    rl.BeginScissorMode(i32(_dlg_px + 1), i32(_dlg_py + 1), i32(_dlg_w - 2), i32(_dlg_h - 2))
+    ui_scissor_begin(i32(_dlg_px + 1), i32(_dlg_py + 1), i32(_dlg_w - 2), i32(_dlg_h - 2))
 }
 
 // text_clip returns a string that fits within max_w pixels at the given font

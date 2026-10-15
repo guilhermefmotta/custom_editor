@@ -71,6 +71,16 @@ test_settings_cycle_values :: proc(t: ^testing.T) {
 	testing.expect_value(t, settings_cycle_value(&e, .Font_Size, 1), "72")
 	testing.expect_value(t, settings_cycle_value(&e, .Font_Family, 1), "") // text only
 	testing.expect(t, settings_cycle_value(&e, .Theme, 1) != e.cfg.theme_name)
+
+	e.cfg.window.ui_scale = 0
+	testing.expect_value(t, settings_cycle_value(&e, .UI_Scale, 1), "80")
+	testing.expect_value(t, settings_cycle_value(&e, .UI_Scale, -1), "200")
+	e.cfg.window.ui_scale = 125
+	testing.expect_value(t, settings_cycle_value(&e, .UI_Scale, 1), "150")
+	e.cfg.window.ui_scale = 130 // hand-written value: steps from the one below
+	testing.expect_value(t, settings_cycle_value(&e, .UI_Scale, 1), "150")
+	e.cfg.font.smooth = true
+	testing.expect_value(t, settings_cycle_value(&e, .Smooth_Text, 1), "off")
 }
 
 // Tests that change globals (FONT_SIZE, theme, keymap) run one at a time: the
@@ -116,6 +126,14 @@ test_settings_apply_updates_config :: proc(t: ^testing.T) {
 	testing.expect_value(t, e.cfg.editor.auto_save, true)
 	testing.expect_value(t, e.cfg.editor.auto_save_delay, f32(2.5))
 
+	old_zoom, old_smooth := UI_ZOOM, FONT_SMOOTH
+	defer { UI_ZOOM = old_zoom; FONT_SMOOTH = old_smooth }
+	err, serr = settings_apply(&e, .UI_Scale, "150", path)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, UI_ZOOM, f32(1.5))
+	err, serr = settings_apply(&e, .Smooth_Text, "off", path)
+	testing.expect_value(t, FONT_SMOOTH, false)
+
 	// everything landed in the user file
 	cfg := conf.load_config({user = path})
 	defer conf.config_destroy(&cfg)
@@ -127,6 +145,8 @@ test_settings_apply_updates_config :: proc(t: ^testing.T) {
 	testing.expect_value(t, cfg.editor.word_wrap, true)
 	testing.expect_value(t, cfg.editor.auto_save, true)
 	testing.expect_value(t, cfg.editor.auto_save_delay, f32(2.5))
+	testing.expect_value(t, cfg.window.ui_scale, 150)
+	testing.expect_value(t, cfg.font.smooth, false)
 }
 
 @(test)

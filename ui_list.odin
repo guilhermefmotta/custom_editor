@@ -182,7 +182,7 @@ ui_list_draw :: proc(l: ^Ui_List, font: rl.Font, r: rl.Rectangle, labels: []stri
 	count := len(l.visible)
 	ui_list_clamp(&l.nav, count, vis)
 
-	rl.BeginScissorMode(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
+	ui_scissor_begin(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
 	q    := string(l.filter[:])
 	size := FONT_SIZE - 1
 	for vi in 0 ..< vis {

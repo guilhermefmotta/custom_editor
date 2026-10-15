@@ -65,7 +65,7 @@ main :: proc() {
 	rl.SetTargetFPS(60) // re-set from editor.toml [window] fps_target below
 	rl.SetExitKey(.KEY_NULL) // disable ESC closing window — handled by dialogs
 
-	font_px := font_pixel_size()
+	font_px := font_atlas_size()
 	font_gen := settings_font_gen
 	font, custom := load_font(font_px)
 	defer if custom do rl.UnloadFont(font)
@@ -120,7 +120,7 @@ main :: proc() {
 		// Zoom (Ctrl+= / Ctrl+-) or moving to a display with another scale:
 		// rebuild the glyph atlas at the new pixel size so text stays 1:1 sharp
 		// (also when the settings screen picks another font file)
-		if px := font_pixel_size(); px != font_px || font_gen != settings_font_gen {
+		if px := font_atlas_size(); px != font_px || font_gen != settings_font_gen {
 			if custom do rl.UnloadFont(font)
 			font, custom = load_font(px)
 			font_px = px
@@ -129,12 +129,15 @@ main :: proc() {
 
 		repos_handle_drop(&e) // folders dropped on the window → repo tabs
 		bench_inject(&e)      // -define:BENCH=true only
+		ui_frame_input()      // Windows display scaling: mouse in layout coords
 		handle_input(&e, font)
 		lsp_update(&e, dt)
 		git_update(&e, dt)
 
 		rl.BeginDrawing()
+		ui_frame_begin()      // Windows display scaling: draw the frame zoomed
 		render(&e, font)
+		ui_frame_end()
 		bench_render_done()
 		rl.EndDrawing()
 		bench_frame_end()
@@ -151,12 +154,18 @@ main :: proc() {
 	session_save(&e)
 }
 
-// Pixel size of the glyph atlas: the logical FONT_SIZE times the display scale
-// (2 on Retina), so glyphs are rasterized at exactly the size they're drawn.
+// Pixel size text is drawn at: the logical FONT_SIZE times the display scale
+// (2 on Retina) and the UI scale setting.
 font_pixel_size :: proc() -> i32 {
 	scale := rl.GetWindowScaleDPI().x
 	if scale < 1 { scale = 1 }
-	return i32(math.round(FONT_SIZE * scale))
+	return i32(math.round(FONT_SIZE * scale * UI_ZOOM))
+}
+
+// Pixel size of the editor's glyph atlas: font_pixel_size, oversampled when
+// smooth text is on (ui_scale.odin).
+font_atlas_size :: proc() -> i32 {
+	return font_pixel_size() * (FONT_OVERSAMPLE if FONT_SMOOTH else 1)
 }
 
 load_font :: proc(pixel_size: i32) -> (font: rl.Font, custom: bool) {
@@ -180,13 +189,13 @@ load_font :: proc(pixel_size: i32) -> (font: rl.Font, custom: bool) {
 		if i == 0 && settings_font_path != "" {
 			f := rl.LoadFontEx(to_cstring(_launch_path(settings_font_path)), pixel_size, raw_data(cps[:]), NUM_CP)
 			if f.glyphCount > 0 {
-				rl.SetTextureFilter(f.texture, .BILINEAR)
+				font_texture_setup(&f)
 				return f, true
 			}
 		}
 		f := rl.LoadFontEx(to_cstring(_launch_path(path)), pixel_size, raw_data(cps[:]), NUM_CP)
 		if f.glyphCount > 0 {
-			rl.SetTextureFilter(f.texture, .BILINEAR)
+			font_texture_setup(&f)
 			return f, true
 		}
 	}

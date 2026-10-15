@@ -191,7 +191,7 @@ commit_detail_draw :: proc(e: ^Editor, font: rl.Font, r: rl.Rectangle, c: ^git.C
 		return
 	}
 	loaded := _cd.d != nil && _cd.hash == c.hash
-	rl.BeginScissorMode(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
+	ui_scissor_begin(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
 	defer { rl.EndScissorMode(); dlg_restore() }
 
 	// Subject + body
@@ -433,7 +433,7 @@ commit_detail_draw_diff :: proc(e: ^Editor, font: rl.Font, r: rl.Rectangle) {
 	col_x  := [2]f32{px, px + half + 3}
 	rl.DrawRectangleV({px + half + 1, top}, {1, ch}, GITD_BORDER)
 
-	rl.BeginScissorMode(i32(px), i32(top), i32(pw), i32(ch))
+	ui_scissor_begin(i32(px), i32(top), i32(pw), i32(ch))
 	y := top
 	for i := _cd.diff_scroll; i < len(rows) && i < _cd.diff_scroll + vis; i += 1 {
 		row := rows[i]

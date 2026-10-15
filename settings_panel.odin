@@ -44,7 +44,7 @@ _settings_register :: proc "contextless" () {
 		on_open  = _settings_on_open,
 		on_close = _settings_on_close,
 		command  = "Settings: Open",
-		command_desc = "Theme, font, keymap mode, tab size, word wrap, auto save",
+		command_desc = "Theme, font, UI scale, smooth text, keymap mode, tab size, word wrap, auto save",
 		shortcut = {key = .COMMA, mods = {.Ctrl}},
 	})
 }
@@ -66,7 +66,12 @@ SETTINGS_ROWS := [conf.Setting]string{
 	.Word_Wrap       = "Word wrap",
 	.Auto_Save       = "Auto save",
 	.Auto_Save_Delay = "Auto save delay (s)",
+	.UI_Scale        = "UI scale",
+	.Smooth_Text     = "Smooth text",
 }
+
+// Values Left/Right step through for "UI scale" (percent, 0 = auto).
+SETTINGS_UI_SCALES :: [?]int{0, 80, 90, 100, 110, 125, 150, 175, 200}
 
 @(private="file")
 _Settings_State :: struct {
@@ -141,6 +146,12 @@ settings_apply :: proc(e: ^Editor, s: conf.Setting, raw: string, path: string) -
 		for &p in e.panes { p.word_wrap = v.b }
 	case .Tab_Size, .Auto_Save, .Auto_Save_Delay:
 		conf.config_setting_set(&e.cfg, s, v) // read live from e.cfg
+	case .UI_Scale:
+		conf.config_setting_set(&e.cfg, s, v)
+		UI_ZOOM = ui_zoom_from_percent(v.num) // main.odin rebuilds the atlas
+	case .Smooth_Text:
+		conf.config_setting_set(&e.cfg, s, v)
+		FONT_SMOOTH = v.b
 	}
 
 	if ok, werr := conf.config_write_setting(path, s, v); !ok { return "", werr }
@@ -164,8 +175,14 @@ settings_cycle_value :: proc(e: ^Editor, s: conf.Setting, dir: int) -> string {
 	case .Keymap_Mode:
 		n := len(conf.Keymap_Mode)
 		return conf.keymap_mode_id(conf.Keymap_Mode((int(v.mode) + dir + n) % n))
-	case .Word_Wrap, .Auto_Save:
+	case .Word_Wrap, .Auto_Save, .Smooth_Text:
 		return "off" if v.b else "on"
+	case .UI_Scale:
+		steps := SETTINGS_UI_SCALES
+		i := 0
+		for st, k in steps { if st <= v.num { i = k } } // custom values snap to the step below
+		i = (i + dir + len(steps)) % len(steps)
+		return "auto" if steps[i] == 0 else fmt.tprintf("%d", steps[i])
 	case .Font_Size:
 		return fmt.tprintf("%d", clamp(v.num + dir, conf.FONT_SIZE_MIN, conf.FONT_SIZE_MAX))
 	case .Tab_Size:
@@ -219,6 +236,10 @@ settings_panel_update :: proc(e: ^Editor, dt: f32) {
 		c := &e.cfg
 		if c.font.size >= conf.FONT_SIZE_MIN && c.font.size <= conf.FONT_SIZE_MAX { FONT_SIZE = f32(c.font.size) }
 		if c.font.family != "" && os.exists(c.font.family) { _settings_set_font_path(c.font.family) }
+		if c.window.ui_scale >= conf.UI_SCALE_MIN && c.window.ui_scale <= conf.UI_SCALE_MAX {
+			UI_ZOOM = ui_zoom_from_percent(c.window.ui_scale)
+		}
+		FONT_SMOOTH = c.font.smooth
 	}
 	// New panes (splits) pick up the configured word wrap.
 	if len(e.panes) != _st.n_panes {
@@ -304,7 +325,7 @@ _settings_begin_edit :: proc(e: ^Editor) {
 @(private="file")
 _settings_activate :: proc(e: ^Editor) {
 	switch _st.sel {
-	case .Theme, .Keymap_Mode, .Word_Wrap, .Auto_Save:
+	case .Theme, .Keymap_Mode, .Word_Wrap, .Auto_Save, .UI_Scale, .Smooth_Text:
 		_settings_commit(e, _st.sel, settings_cycle_value(e, _st.sel, 1))
 	case .Font_Family, .Font_Size, .Tab_Size, .Auto_Save_Delay:
 		_settings_begin_edit(e)

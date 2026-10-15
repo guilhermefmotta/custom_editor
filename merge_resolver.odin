@@ -402,7 +402,7 @@ _mr_update :: proc(e: ^Editor, dt: f32) {
 	if _mr.banner_key != "" && ui_banner.visible && ui_banner_text(&ui_banner) == _mr.banner_key &&
 	   rl.IsMouseButtonPressed(.LEFT) {
 		mp := rl.GetMousePosition()
-		sw := f32(rl.GetScreenWidth())
+		sw := f32(screen_w())
 		if mp.y < UI_BANNER_H && mp.x < sw - UI_BANNER_H {
 			_mr_hide_own_banner()
 			ui_panel_open(e, MERGE_RESOLVER_ID)
@@ -940,7 +940,7 @@ _mr_draw_panes :: proc(e: ^Editor, font: rl.Font, x, y, w, h: f32) {
 	for p in Mr_Pane {
 		px := x + f32(int(p)) * (pane_w + MR_GAP)
 		rows := L.rows[p][:]
-		rl.BeginScissorMode(i32(px), i32(top), i32(pane_w), i32(ch))
+		ui_scissor_begin(i32(px), i32(top), i32(pane_w), i32(ch))
 		for vi in 0 ..< vis {
 			ri := _mr.scroll + vi
 			ry := top + f32(vi) * dy

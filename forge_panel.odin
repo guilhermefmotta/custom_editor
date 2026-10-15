@@ -682,7 +682,7 @@ _forge_draw_diff :: proc(font: rl.Font, r: rl.Rectangle, busy: bool) {
 		ui_text(font, "loading diff..." if .PR_Diff in _fp.waiting else "(empty diff)", r.x + 8, r.y, lh, size, LINENUM, r.x + r.width)
 		return
 	}
-	rl.BeginScissorMode(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
+	ui_scissor_begin(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
 	for i in 0 ..< vis {
 		idx := _fp.diff_nav.scroll + i
 		if idx >= len(_fp.diff_lines) { break }
@@ -722,7 +722,7 @@ _forge_draw_comments :: proc(font: rl.Font, r: rl.Rectangle, busy: bool) {
 		ui_text(font, "loading comments...", r.x + 8, r.y, lh, size, LINENUM, r.x + r.width)
 		return
 	}
-	rl.BeginScissorMode(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
+	ui_scissor_begin(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
 	for i in 0 ..< vis {
 		idx := _fp.comment_nav.scroll + i
 		if idx >= len(_fp.comment_lines) { break }

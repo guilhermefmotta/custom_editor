@@ -58,7 +58,7 @@ _ui_banner_close_rect :: proc(sw: f32) -> rl.Rectangle {
 ui_banner_handle_input :: proc(b: ^Ui_Banner) -> bool {
 	if !b.visible || !rl.IsMouseButtonPressed(.LEFT) { return false }
 	mp := rl.GetMousePosition()
-	sw := f32(rl.GetScreenWidth())
+	sw := f32(screen_w())
 	if ui_point_in(mp, _ui_banner_close_rect(sw)) { b.visible = false; return true }
 	return ui_point_in(mp, {0, 0, sw, UI_BANNER_H})
 }

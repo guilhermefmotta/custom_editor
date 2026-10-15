@@ -529,7 +529,7 @@ _sb_on_menu :: proc(e: ^Editor, i: int) {
 
 @(private="file")
 _sb_rect :: proc() -> rl.Rectangle {
-	return {0, 0, SIDEBAR_W, f32(rl.GetScreenHeight())}
+	return {0, 0, SIDEBAR_W, f32(screen_h())}
 }
 
 @(private="file")
@@ -659,7 +659,7 @@ _sb_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	_sb.vis_rows = max(1, int(lr.height / UI_ROW_H))
 	count := len(_sb.rows)
 	ui_list_clamp(&_sb.nav, count, _sb.vis_rows)
-	rl.BeginScissorMode(i32(lr.x), i32(lr.y), i32(lr.width), i32(lr.height))
+	ui_scissor_begin(i32(lr.x), i32(lr.y), i32(lr.width), i32(lr.height))
 	for vi in 0 ..< _sb.vis_rows {
 		idx := _sb.nav.scroll + vi
 		if idx >= count || snap == nil { break }

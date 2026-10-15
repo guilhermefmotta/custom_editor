@@ -215,6 +215,8 @@ test_validate_rejects_invalid_values :: proc(t: ^testing.T) {
 		{.Keymap_Mode, "nano"},
 		{.Word_Wrap, "maybe"},
 		{.Auto_Save_Delay, "abc"}, {.Auto_Save_Delay, "0"}, {.Auto_Save_Delay, "-1"}, {.Auto_Save_Delay, "nan"},
+		{.UI_Scale, "big"}, {.UI_Scale, "10"}, {.UI_Scale, "400%"}, {.UI_Scale, "-125"},
+		{.Smooth_Text, "maybe"},
 	}
 	for b in bad {
 		_, err := config_setting_parse(b.s, b.raw, themes)
@@ -234,6 +236,38 @@ test_validate_rejects_invalid_values :: proc(t: ^testing.T) {
 	testing.expect_value(t, v.f, 1.5)
 	v, err = config_setting_parse(.Word_Wrap, "on", themes)
 	testing.expect_value(t, v.b, true)
+	v, err = config_setting_parse(.UI_Scale, "125%", themes)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, v.num, 125)
+	v, err = config_setting_parse(.UI_Scale, "Auto", themes)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, v.num, 0)
+	v, err = config_setting_parse(.Smooth_Text, "off", themes)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, v.b, false)
+	testing.expect_value(t, config_setting_display(.UI_Scale, {num = 0}), "auto")
+	testing.expect_value(t, config_setting_display(.UI_Scale, {num = 150}), "150%")
+	testing.expect_value(t, config_setting_literal(.UI_Scale, {num = 150}), "150")
+	testing.expect_value(t, config_setting_literal(.Smooth_Text, {b = true}), "true")
+}
+
+@(test)
+test_load_ui_scale_and_smooth :: proc(t: ^testing.T) {
+	cfg := config_defaults()
+	testing.expect_value(t, cfg.window.ui_scale, 0)
+	testing.expect_value(t, cfg.font.smooth, true)
+	config_destroy(&cfg)
+
+	base := os.get_env("TMPDIR", context.temp_allocator)
+	if base == "" { base = os.get_env("TEMP", context.temp_allocator) }
+	if base == "" { base = "." }
+	path, _ := filepath.join({base, fmt.tprintf("ce_ui_scale_test_%d.toml", os.get_pid())}, context.temp_allocator)
+	defer os.remove(path)
+	testing.expect(t, os.write_entire_file(path, transmute([]byte)string("[window]\nui_scale = 125\n[font]\nsmooth = false\n")) == nil)
+	cfg = load_config({user = path})
+	defer config_destroy(&cfg)
+	testing.expect_value(t, cfg.window.ui_scale, 125)
+	testing.expect_value(t, cfg.font.smooth, false)
 }
 
 @(test)

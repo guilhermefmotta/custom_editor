@@ -267,7 +267,7 @@ md_preview_draw :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, oh: f32) {
 	max_w := ow - pad*2
 	line_h := FONT_SIZE + LINE_SPACING
 
-	rl.BeginScissorMode(i32(ox), i32(oy), i32(ow), i32(oh))
+	ui_scissor_begin(i32(ox), i32(oy), i32(ow), i32(oh))
 	defer rl.EndScissorMode()
 	rl.DrawRectangleV({ox, oy}, {ow, oh}, BG)
 

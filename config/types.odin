@@ -83,6 +83,9 @@ Window_Config :: struct {
 	// ADR 0016: sleep until an event when nothing is moving (false = render
 	// every frame at fps_target, the pre-0016 behavior).
 	event_driven: bool,
+	// Interface scale in percent; 0 = automatic (the display's scale on
+	// Windows, 100% elsewhere — macOS Retina is handled by raylib).
+	ui_scale:    int,
 	title:       string,
 }
 
@@ -96,6 +99,9 @@ Font_Config :: struct {
 	line_height:  f32,
 	char_spacing: f32,
 	fallbacks:    []string, // tried in order if family not found
+	// Smooth text: glyphs rasterized at 2x and filtered down (mipmaps +
+	// trilinear) instead of drawn at exact size — no jagged edges.
+	smooth:       bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +479,7 @@ config_defaults :: proc() -> Config {
 		height     = 720,
 		fps_target = 60,
 		event_driven = true,
+		ui_scale     = 0,
 		title      = strings.clone("Editor"),
 	}
 
@@ -482,6 +489,7 @@ config_defaults :: proc() -> Config {
 		line_height  = 1.0,
 		char_spacing = 0.0,
 		fallbacks    = {},
+		smooth       = true,
 	}
 
 	c.theme_name = strings.clone("dark")

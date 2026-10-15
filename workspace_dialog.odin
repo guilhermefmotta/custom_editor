@@ -599,7 +599,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 		}
 	}
 
-	rl.BeginScissorMode(i32(inp_x), i32(input_y), i32(inp_w), i32(WS_INPUT_H))
+	ui_scissor_begin(i32(inp_x), i32(input_y), i32(inp_w), i32(WS_INPUT_H))
 	rl.DrawTextEx(font, to_cstring(display_s), {inp_x, label_y}, FONT_SIZE, CHAR_SPACING, FILE_COL)
 	rl.EndScissorMode()
 	dlg_restore()

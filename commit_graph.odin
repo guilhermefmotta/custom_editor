@@ -548,7 +548,7 @@ _cg_draw_list :: proc(e: ^Editor, font: rl.Font, r: rl.Rectangle, interactive: b
 	compact := auth_x - tx < 200 // narrow pane: drop author/date columns
 	text_right := hash_x - 8 if compact else auth_x - 10
 
-	rl.BeginScissorMode(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
+	ui_scissor_begin(i32(r.x), i32(r.y), i32(r.width), i32(r.height))
 	for vi in 0 ..< vis {
 		i := nav.scroll + vi
 		if i >= count { break }

@@ -165,7 +165,7 @@ handle_debug_shortcuts :: proc(e: ^Editor) -> bool {
 	if e.debug_panel.visible {
 		if rl.IsMouseButtonPressed(.LEFT) {
 			mp := rl.GetMousePosition()
-			panel_top := f32(rl.GetScreenHeight()) - MSG_LINE_H - DEBUG_PANEL_H
+			panel_top := f32(screen_h()) - MSG_LINE_H - DEBUG_PANEL_H
 			e.debug_panel.focused = mp.y >= panel_top && mp.y < panel_top+DEBUG_PANEL_H
 		}
 		// Skip when a modal debug dialog is open on top — that should eat ESC
@@ -410,8 +410,8 @@ handle_navigation :: proc(e: ^Editor) -> bool {
 // -----------------------------------------------------
 
 handle_mouse :: proc(e: ^Editor, font: rl.Font) {
-	sw := f32(rl.GetScreenWidth())
-	sh := f32(rl.GetScreenHeight()) - MSG_LINE_H
+	sw := f32(screen_w())
+	sh := f32(screen_h()) - MSG_LINE_H
 	if e.debug_panel.visible { sh -= DEBUG_PANEL_H }
 
 	// Wheel over a pane in Markdown preview scrolls the rendered preview.

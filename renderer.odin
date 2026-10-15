@@ -155,8 +155,8 @@ _mix_bg :: proc(fg, bg: rl.Color) -> rl.Color {
 }
 
 render :: proc(e: ^Editor, font: rl.Font) {
-	sw       := f32(rl.GetScreenWidth())
-	sh       := f32(rl.GetScreenHeight())
+	sw       := f32(screen_w())
+	sh       := f32(screen_h())
 	usable_h := sh - MSG_LINE_H
 	if e.debug_panel.visible { usable_h -= DEBUG_PANEL_H }
 
@@ -179,7 +179,7 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	for i in 0 ..< len(e.panes) {
 		ox, oy, ow, oh := get_pane_rect(e, i, sw, usable_h)
 		if ow < 1 || oh < 1 do continue
-		rl.BeginScissorMode(i32(ox), i32(oy), i32(ow), i32(oh))
+		ui_scissor_begin(i32(ox), i32(oy), i32(ow), i32(oh))
 		render_pane(e, i, font, ox, oy, ow, oh)
 		rl.EndScissorMode()
 	}
@@ -908,7 +908,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	s0   := string(fr.search_buf[:])
 	s0x  := px + PAD + 4
 	s0ty := cy + (INPUT_H - ref.y)*0.5
-	rl.BeginScissorMode(i32(px + PAD + 1), i32(cy + 1), i32(input_w - 2), i32(INPUT_H - 2))
+	ui_scissor_begin(i32(px + PAD + 1), i32(cy + 1), i32(input_w - 2), i32(INPUT_H - 2))
 	s0w := rl.MeasureTextEx(font, to_cstring(s0), FONT_SIZE, CHAR_SPACING).x
 	if fr.focus == 0 && fr.all_sel && len(fr.search_buf) > 0 {
 		rl.DrawRectangleV({s0x, s0ty}, {s0w, ref.y}, SEL_BG)
@@ -945,7 +945,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		s1   := string(fr.replace_buf[:])
 		s1x  := px + PAD + 4
 		s1ty := cy + (INPUT_H - ref.y)*0.5
-		rl.BeginScissorMode(i32(px + PAD + 1), i32(cy + 1), i32(W - PAD*2 - 2), i32(INPUT_H - 2))
+		ui_scissor_begin(i32(px + PAD + 1), i32(cy + 1), i32(W - PAD*2 - 2), i32(INPUT_H - 2))
 		s1w := rl.MeasureTextEx(font, to_cstring(s1), FONT_SIZE, CHAR_SPACING).x
 		if fr.all_sel && len(fr.replace_buf) > 0 {
 			rl.DrawRectangleV({s1x, s1ty}, {s1w, ref.y}, SEL_BG)
@@ -1035,7 +1035,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			offset := max(f32(0), pre_w - content_w*0.35)
 
 			item_ty := ry + (ITEM_H - ref.y)*0.5
-			rl.BeginScissorMode(i32(px + LNUM_W + 1), i32(ry), i32(content_w + 4), i32(ITEM_H))
+			ui_scissor_begin(i32(px + LNUM_W + 1), i32(ry), i32(content_w + 4), i32(ITEM_H))
 			rl.DrawTextEx(font, to_cstring(pre), {content_x - offset, item_ty},
 			              FONT_SIZE, CHAR_SPACING, SUBDUED)
 			rl.DrawRectangleV({content_x - offset + pre_w, item_ty}, {mat_w, ref.y}, MATCH_HL_BG)

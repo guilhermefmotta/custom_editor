@@ -39,6 +39,8 @@ Setting :: enum u8 {
 	Word_Wrap,
 	Auto_Save,
 	Auto_Save_Delay,
+	UI_Scale,
+	Smooth_Text,
 }
 
 // Location of each setting in editor.toml ("" section = top level).
@@ -53,6 +55,8 @@ SETTING_LOCATION := [Setting]Setting_Location{
 	.Word_Wrap       = {"editor", "word_wrap"},
 	.Auto_Save       = {"editor", "auto_save"},
 	.Auto_Save_Delay = {"editor", "auto_save_delay"},
+	.UI_Scale        = {"window", "ui_scale"},
+	.Smooth_Text     = {"font",   "smooth"},
 }
 
 FONT_SIZE_MIN       :: 8   // same clamp as Ctrl+= / Ctrl+-
@@ -61,6 +65,8 @@ TAB_SIZE_MIN        :: 1
 TAB_SIZE_MAX        :: 16
 AUTO_SAVE_DELAY_MIN :: 0.1
 AUTO_SAVE_DELAY_MAX :: 600.0
+UI_SCALE_MIN        :: 50  // percent; 0 = automatic
+UI_SCALE_MAX        :: 300
 
 // Parsed value of a Setting; only the field matching the setting is used.
 Setting_Value :: struct {
@@ -127,7 +133,18 @@ config_setting_parse :: proc(s: Setting, raw: string, themes: []string) -> (v: S
 		}
 		return v, ""
 
-	case .Word_Wrap, .Auto_Save:
+	case .UI_Scale:
+		t := strings.to_lower(strings.trim_suffix(in_, "%"), context.temp_allocator)
+		if t == "auto" || t == "0" { v.num = 0; return v, "" }
+		n, ok := strconv.parse_int(strings.trim_space(t), 10)
+		if !ok { return v, "UI scale must be auto or a percentage" }
+		if n < UI_SCALE_MIN || n > UI_SCALE_MAX {
+			return v, fmt.tprintf("UI scale must be between %d%% and %d%%", UI_SCALE_MIN, UI_SCALE_MAX)
+		}
+		v.num = n
+		return v, ""
+
+	case .Word_Wrap, .Auto_Save, .Smooth_Text:
 		switch strings.to_lower(in_, context.temp_allocator) {
 		case "true", "on", "yes", "1":  v.b = true
 		case "false", "off", "no", "0": v.b = false
@@ -152,8 +169,8 @@ config_setting_literal :: proc(s: Setting, v: Setting_Value, allocator := contex
 	switch s {
 	case .Theme, .Font_Family: return toml_quote(v.str, allocator)
 	case .Keymap_Mode:         return toml_quote(keymap_mode_id(v.mode), allocator)
-	case .Font_Size, .Tab_Size: return fmt.aprintf("%d", v.num, allocator = allocator)
-	case .Word_Wrap, .Auto_Save: return strings.clone("true" if v.b else "false", allocator)
+	case .Font_Size, .Tab_Size, .UI_Scale: return fmt.aprintf("%d", v.num, allocator = allocator)
+	case .Word_Wrap, .Auto_Save, .Smooth_Text: return strings.clone("true" if v.b else "false", allocator)
 	case .Auto_Save_Delay:     return toml_float_literal(v.f, allocator)
 	}
 	return ""
@@ -165,7 +182,10 @@ config_setting_display :: proc(s: Setting, v: Setting_Value, allocator := contex
 	case .Theme, .Font_Family:   return strings.clone(v.str, allocator)
 	case .Keymap_Mode:           return strings.clone(keymap_mode_id(v.mode), allocator)
 	case .Font_Size, .Tab_Size:  return fmt.aprintf("%d", v.num, allocator = allocator)
-	case .Word_Wrap, .Auto_Save: return strings.clone("on" if v.b else "off", allocator)
+	case .Word_Wrap, .Auto_Save, .Smooth_Text: return strings.clone("on" if v.b else "off", allocator)
+	case .UI_Scale:
+		if v.num == 0 { return strings.clone("auto", allocator) }
+		return fmt.aprintf("%d%%", v.num, allocator = allocator)
 	case .Auto_Save_Delay:       return toml_float_literal(v.f, allocator)
 	}
 	return ""
@@ -181,6 +201,8 @@ config_setting_get :: proc(c: ^Config, s: Setting) -> (v: Setting_Value) {
 	case .Word_Wrap:       v.b    = c.editor.word_wrap
 	case .Auto_Save:       v.b    = c.editor.auto_save
 	case .Auto_Save_Delay: v.f    = f64(c.editor.auto_save_delay)
+	case .UI_Scale:        v.num  = c.window.ui_scale
+	case .Smooth_Text:     v.b    = c.font.smooth
 	}
 	return
 }
@@ -196,6 +218,8 @@ config_setting_set :: proc(c: ^Config, s: Setting, v: Setting_Value) {
 	case .Word_Wrap:       c.editor.word_wrap       = v.b
 	case .Auto_Save:       c.editor.auto_save       = v.b
 	case .Auto_Save_Delay: c.editor.auto_save_delay = f32(v.f)
+	case .UI_Scale:        c.window.ui_scale        = v.num
+	case .Smooth_Text:     c.font.smooth            = v.b
 	}
 }
 
