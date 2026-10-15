@@ -247,3 +247,20 @@ test_repo_root_finds_git_dir :: proc(tt: ^testing.T) {
 	defer delete(none)
 	testing.expect_value(tt, none, "/")
 }
+
+// Claude Code session markers in the editor's own environment (when it was
+// started from inside a Claude Code session) must not reach spawned terminals,
+// or a `claude` there runs as a "child session". Other variables still pass.
+@(test)
+test_spawn_drops_claude_session_markers :: proc(tt: ^testing.T) {
+	when ODIN_OS == .Windows { return }
+	os.set_env("CLAUDECODE", "1")
+	os.set_env("CLAUDE_CODE_CHILD_SESSION", "1")
+	t := create(24, 80)
+	defer destroy(t)
+	testing.expect(tt, start(t, {argv = {"/bin/sh", "-c", `printf '[%s|%s|%s]\n' "$CLAUDECODE" "$CLAUDE_CODE_CHILD_SESSION" "${HOME:+home}"`}}))
+	testing.expect(tt, _wait(t, has_exited))
+	testing.expect_value(tt, _row(t, 0), "[||home]")
+	testing.expect(tt, env_is_session_marker("CLAUDE_CODE_SESSION_ID=x"))
+	testing.expect(tt, !env_is_session_marker("CLAUDE_CODE_USE_BEDROCK=1"), "user config passes through")
+}

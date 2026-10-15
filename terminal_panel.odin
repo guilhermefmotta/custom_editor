@@ -73,6 +73,9 @@ _Tp :: struct {
 	font:      rl.Font,
 	font_px:   i32,
 	font_ok:   bool,
+	// System fonts for glyphs the editor font lacks (✻ ⏵ ⏺ …), tried in order
+	syms:      [4]rl.Font,
+	nsyms:     int,
 	// Layout of the last frame (input uses it).
 	area, grid: rl.Rectangle,
 	cw, ch:     f32,
@@ -318,11 +321,73 @@ _tp_input :: proc(e: ^Editor) -> bool {
 // Drawing
 // ---------------------------------------------------------------------------
 
+// Text without the characters `font` can't draw (they'd show as '?'), e.g.
+// the "✳" Claude Code puts at the start of its window title.
+@(private="file")
+_tp_drawable :: proc(font: rl.Font, s: string) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	for r in s {
+		if r >= 0x80 && font.glyphs[rl.GetGlyphIndex(font, r)].value != r { continue }
+		strings.write_rune(&b, r)
+	}
+	return strings.trim_space(strings.to_string(b))
+}
+
+// Claude Code's mode/record markers: ⏵ (U+23F5) and ⏺ (U+23FA). The fonts
+// that have them place them badly in a cell, so they're drawn as shapes.
+@(private="file")
+_tp_draw_shape :: proc(ch: rune, r: rl.Rectangle, col: rl.Color) -> bool {
+	switch ch {
+	case 0x23F5: // ⏵ small right-pointing triangle
+		s  := min(r.width, r.height) * 0.55
+		cx := r.x + r.width * 0.5
+		cy := r.y + r.height * 0.5
+		rl.DrawTriangle({cx - s * 0.45, cy - s * 0.5}, {cx - s * 0.45, cy + s * 0.5}, {cx + s * 0.5, cy}, col)
+		return true
+	case 0x23FA: // ⏺ record (filled circle)
+		rl.DrawCircleV({r.x + r.width * 0.5, r.y + r.height * 0.5}, min(r.width, r.height) * 0.3, col)
+		return true
+	}
+	return false
+}
+
+// System fonts with broad symbol coverage, tried in order.
+@(private="file")
+_TP_SYMBOL_FONTS :: [?]string{
+	// macOS: Arial Unicode has ✻ ✳, STIX Two Math has ⏵ ⏺
+	"/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+	"/System/Library/Fonts/Supplemental/STIXTwoMath.otf",
+	"/System/Library/Fonts/Apple Symbols.ttf",
+	// Windows
+	"C:/Windows/Fonts/seguisym.ttf",
+	"C:/Windows/Fonts/seguiemj.ttf",
+	// Linux
+	"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+	"/usr/share/fonts/TTF/DejaVuSans.ttf",
+	"/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+	"/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+}
+
+// The editor font when it has the glyph, else the symbol font (raylib maps a
+// missing glyph to '?', which is what showed up in Claude Code's UI).
+@(private="file")
+_tp_glyph_font :: proc(main: rl.Font, ch: rune) -> rl.Font {
+	if ch < 0x80 { return main }
+	if main.glyphs[rl.GetGlyphIndex(main, ch)].value == ch { return main }
+	for i in 0 ..< _tp.nsyms {
+		f := _tp.syms[i]
+		if f.glyphs[rl.GetGlyphIndex(f, ch)].value == ch { return f }
+	}
+	return main
+}
+
 @(private="file")
 _tp_ensure_font :: proc(fallback: rl.Font) -> rl.Font {
 	px := font_pixel_size()
 	if _tp.font_ok && _tp.font_px == px { return _tp.font }
 	if _tp.font_ok { rl.UnloadFont(_tp.font); _tp.font_ok = false }
+	for i in 0 ..< _tp.nsyms { rl.UnloadFont(_tp.syms[i]) }
+	_tp.nsyms = 0
 	_tp.font_px = px
 
 	RANGES :: [?][2]rune{
@@ -332,8 +397,22 @@ _tp_ensure_font :: proc(fallback: rl.Font) -> rl.Font {
 	}
 	cps := make([dynamic]rune, context.temp_allocator)
 	for r in RANGES { for c := r[0]; c <= r[1]; c += 1 { append(&cps, c) } }
+	// Symbol fallbacks from the system (same ranges, skipping plain ASCII).
+	// No single font covers everything Claude Code draws, so several load.
+	for path in _TP_SYMBOL_FONTS {
+		if _tp.nsyms == len(_tp.syms) { break }
+		if !os.exists(path) { continue }
+		sf := rl.LoadFontEx(to_cstring(path), px, raw_data(cps[95:]), i32(len(cps) - 95))
+		if sf.glyphCount > 0 {
+			rl.SetTextureFilter(sf.texture, .BILINEAR)
+			_tp.syms[_tp.nsyms] = sf
+			_tp.nsyms += 1
+		}
+	}
 	for path in FONT_PATHS {
-		f := rl.LoadFontEx(to_cstring(path), px, raw_data(cps[:]), i32(len(cps)))
+		// Relative to where the editor was launched: by now the working
+		// directory follows the active repository (ADR 0014)
+		f := rl.LoadFontEx(to_cstring(_launch_path(path)), px, raw_data(cps[:]), i32(len(cps)))
 		if f.glyphCount > 0 {
 			rl.SetTextureFilter(f.texture, .BILINEAR)
 			_tp.font = f
@@ -410,7 +489,7 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	// Tabs + "+" button.
 	labels := make([]string, len(_tp.tabs), context.temp_allocator)
 	for &tab, i in _tp.tabs {
-		title := string(tab.snap.title[:])
+		title := _tp_drawable(font, string(tab.snap.title[:]))
 		name := title if title != "" else tab.shell
 		if len(name) > 28 { name = name[:28] }
 		labels[i] = fmt.tprintf("%d %s%s", i + 1, name, " (exited)" if term.has_exited(tab.t) else "")
@@ -475,9 +554,12 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			x := gx + f32(c) * cw
 			if cell.ch >= 0x2500 && cell.ch <= 0x259F && _tp_draw_box(cell.ch, {x, y, cw, ch}, fg) {
 				// drawn as rectangles
+			} else if _tp_draw_shape(cell.ch, {x, y, cw, ch}, fg) {
+				// drawn as a shape (fonts' metrics for these are off)
 			} else if cell.ch > ' ' {
-				rl.DrawTextCodepoint(tfont, cell.ch, {x, y + text_dy}, FONT_SIZE, fg)
-				if .Bold in cell.attrs { rl.DrawTextCodepoint(tfont, cell.ch, {x + 0.6, y + text_dy}, FONT_SIZE, fg) }
+				gf := _tp_glyph_font(tfont, cell.ch)
+				rl.DrawTextCodepoint(gf, cell.ch, {x, y + text_dy}, FONT_SIZE, fg)
+				if .Bold in cell.attrs { rl.DrawTextCodepoint(gf, cell.ch, {x + 0.6, y + text_dy}, FONT_SIZE, fg) }
 			}
 			w := cw * f32(max(1, int(cell.width)))
 			if .Underline in cell.attrs { rl.DrawRectangleRec({x, y + ch - 2, w, 1}, fg) }
@@ -491,7 +573,7 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		if _tp.focused {
 			rl.DrawRectangleRec(cr, CURSOR_COL)
 			cell := term.snapshot_cell(s, s.cursor_row, s.cursor_col)
-			if cell.ch > ' ' { rl.DrawTextCodepoint(tfont, cell.ch, {cr.x, cr.y + text_dy}, FONT_SIZE, BG) }
+			if cell.ch > ' ' { rl.DrawTextCodepoint(_tp_glyph_font(tfont, cell.ch), cell.ch, {cr.x, cr.y + text_dy}, FONT_SIZE, BG) }
 		} else {
 			rl.DrawRectangleLinesEx(cr, 1, CURSOR_COL)
 		}
@@ -588,6 +670,19 @@ _tp_draw_box :: proc(ch: rune, r: rl.Rectangle, col: rl.Color) -> bool {
 	case 0x2590: rl.DrawRectangleRec({r.x + r.width * 0.5, r.y, r.width * 0.5, r.height}, col); return true
 	case 0x2591 ..= 0x2593:
 		rl.DrawRectangleRec(r, ui_with_alpha(col, u8(64 * int(ch - 0x2590)))); return true
+	case 0x2594: rl.DrawRectangleRec({r.x, r.y, r.width, r.height / 8}, col); return true
+	case 0x2595: rl.DrawRectangleRec({r.x + r.width * 7 / 8, r.y, r.width / 8, r.height}, col); return true
+	case 0x2596 ..= 0x259F:
+		// Quadrants ▖▗▘▙▚▛▜▝▞▟ (Claude Code's logo is drawn with these)
+		UL :: 1; UR :: 2; LL :: 4; LR :: 8
+		QUADS := [10]u8{LL, LR, UL, UL | LL | LR, UL | LR, UL | UR | LL, UL | UR | LR, UR, UR | LL, UR | LL | LR}
+		q := QUADS[ch - 0x2596]
+		hw, hh := r.width * 0.5, r.height * 0.5
+		if q & UL != 0 { rl.DrawRectangleRec({r.x,      r.y,      hw, hh}, col) }
+		if q & UR != 0 { rl.DrawRectangleRec({r.x + hw, r.y,      r.width - hw, hh}, col) }
+		if q & LL != 0 { rl.DrawRectangleRec({r.x,      r.y + hh, hw, r.height - hh}, col) }
+		if q & LR != 0 { rl.DrawRectangleRec({r.x + hw, r.y + hh, r.width - hw, r.height - hh}, col) }
+		return true
 	case: return false
 	}
 	t := max(f32(1), f32(int(r.width / 8 + 0.5)))

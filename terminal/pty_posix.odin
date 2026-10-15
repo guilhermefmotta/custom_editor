@@ -90,6 +90,7 @@ pty_spawn :: proc(p: ^Pty, argv: []string, cwd: string, env: []string, rows, col
 	envp := make([dynamic]cstring)
 	outer: for i := 0; posix.environ[i] != nil; i += 1 {
 		kv := string(posix.environ[i])
+		if env_is_session_marker(kv) { continue }
 		for o in env {
 			k := o[:strings.index_byte(o, '=') + 1]
 			if strings.has_prefix(kv, k) { continue outer }

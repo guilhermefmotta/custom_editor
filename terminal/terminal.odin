@@ -1,5 +1,26 @@
 package term
 
+// Per-session markers a running Claude Code puts in its environment. When the
+// editor itself was started from inside a Claude Code session they would leak
+// into every terminal it spawns, and a `claude` started there treats itself as
+// a child session (e.g. "Transcript saving is off ... inherited
+// CLAUDE_CODE_CHILD_SESSION marker"). Only these markers are dropped; the
+// user's own CLAUDE_* / ANTHROPIC_* configuration still passes through.
+SESSION_ENV_STRIP :: [?]string{
+	"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
+	"CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+	"CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SESSION_ATTENDED",
+	"CLAUDE_PID", "CLAUDE_EFFORT",
+}
+
+// "KEY=VALUE" whose key is a session marker to drop.
+env_is_session_marker :: proc(kv: string) -> bool {
+	for k in SESSION_ENV_STRIP {
+		if len(kv) > len(k) && kv[len(k)] == '=' && kv[:len(k)] == k { return true }
+	}
+	return false
+}
+
 // Terminal model: one libvterm instance + a PTY + two I/O threads.
 //
 // Threads

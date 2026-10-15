@@ -88,7 +88,9 @@ pty_spawn :: proc(p: ^Pty, argv: []string, cwd: string, env: []string, rows, col
 	context.allocator = context.temp_allocator
 
 	// Environment overrides go into our own process env (inherited by the
-	// child); spawns only happen on the UI thread.
+	// child); spawns only happen on the UI thread. Session markers are removed
+	// first (see SESSION_ENV_STRIP).
+	for k in SESSION_ENV_STRIP { win.SetEnvironmentVariableW(win.utf8_to_wstring(k), nil) }
 	for kv in env {
 		i := strings.index_byte(kv, '=')
 		if i <= 0 { continue }
