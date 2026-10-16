@@ -50,7 +50,7 @@ ui_button :: proc(font: rl.Font, r: rl.Rectangle, label: string, focused, primar
 	if focused { rl.DrawRectangleLinesEx({r.x - 2, r.y - 2, r.width + 4, r.height + 4}, 1, ui_with_alpha(ACCENT_COL, 120)) }
 	size := FONT_SIZE - 2
 	tw   := ui_text_w(font, label, size)
-	rl.DrawTextEx(font, to_cstring(label), {r.x + (r.width - tw) * 0.5, r.y + (r.height - size) * 0.5}, size, CHAR_SPACING, fg)
+	draw_text(font, to_cstring(label), {r.x + (r.width - tw) * 0.5, r.y + (r.height - size) * 0.5}, size, CHAR_SPACING, fg)
 	return hover && rl.IsMouseButtonPressed(.LEFT)
 }
 

@@ -452,7 +452,7 @@ commit_detail_draw_diff :: proc(e: ^Editor, font: rl.Font, r: rl.Rectangle) {
 			if side.line > 0 {
 				num := fmt.tprintf("%d", side.line)
 				nw := ui_text_w(font, num, fs)
-				rl.DrawTextEx(font, to_cstring(num), {x + gutter - 8 - nw, y + 2}, fs, CHAR_SPACING, GITD_SUBDUED)
+				draw_text(font, to_cstring(num), {x + gutter - 8 - nw, y + 2}, fs, CHAR_SPACING, GITD_SUBDUED)
 			}
 			if side.text != "" {
 				dlg_text(font, _cd_expand_tabs(side.text), x + gutter, y + 2, fs, CHAR_SPACING, GITD_TEXT, x + half, 6)

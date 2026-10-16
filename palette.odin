@@ -655,7 +655,7 @@ _dlg_text_hl :: proc(font: rl.Font, text: string, needle: string, tx, ty, size, 
 		idx = strings.index(low_s, low_n)
 	}
 	if idx < 0 {
-		rl.DrawTextEx(font, to_cstring(s), {tx, ty}, size, spacing, base_col)
+		draw_text(font, to_cstring(s), {tx, ty}, size, spacing, base_col)
 		return
 	}
 
@@ -664,17 +664,17 @@ _dlg_text_hl :: proc(font: rl.Font, text: string, needle: string, tx, ty, size, 
 	post := s[idx + len(needle):]
 	x := tx
 	if pre != "" {
-		rl.DrawTextEx(font, to_cstring(pre), {x, ty}, size, spacing, base_col)
+		draw_text(font, to_cstring(pre), {x, ty}, size, spacing, base_col)
 		x += rl.MeasureTextEx(font, to_cstring(pre), size, spacing).x
 	}
 	if mid != "" {
 		mw := rl.MeasureTextEx(font, to_cstring(mid), size, spacing).x
 		rl.DrawRectangleV({x - 1, ty - 1}, {mw + 2, size + 2}, rl.Color{hl_col.r, hl_col.g, hl_col.b, 55})
-		rl.DrawTextEx(font, to_cstring(mid), {x, ty}, size, spacing, hl_col)
+		draw_text(font, to_cstring(mid), {x, ty}, size, spacing, hl_col)
 		x += mw
 	}
 	if post != "" {
-		rl.DrawTextEx(font, to_cstring(post), {x, ty}, size, spacing, base_col)
+		draw_text(font, to_cstring(post), {x, ty}, size, spacing, base_col)
 	}
 }
 
@@ -799,7 +799,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	if p.mode == .Search {
 		search_scope_draw_chip(font, p.search.scope, panel_x + PANEL_W - 48, panel_y, QUERY_H, ACCENT, SUBDUED, PANEL_BG)
 	}
-	rl.DrawTextEx(font, to_cstring(icon), {panel_x + 14, panel_y + 14}, FONT_SIZE, CHAR_SPACING, ACCENT)
+	draw_text(font, to_cstring(icon), {panel_x + 14, panel_y + 14}, FONT_SIZE, CHAR_SPACING, ACCENT)
 
 	if len(q) > 0 {
 		tx  := panel_x + 14 + cw + 10
@@ -808,7 +808,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			rl.DrawRectangleV({tx - 2, panel_y + 10}, {tw + 4, ch + 4}, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 60})
 			rl.DrawRectangleLinesEx({tx - 2, panel_y + 10, tw + 4, ch + 4}, 1, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 180})
 		}
-		rl.DrawTextEx(font, to_cstring(q), {tx, panel_y + 14}, FONT_SIZE, CHAR_SPACING, TEXT)
+		draw_text(font, to_cstring(q), {tx, panel_y + 14}, FONT_SIZE, CHAR_SPACING, TEXT)
 		if !p.sel_all {
 			rl.DrawRectangleV({tx + tw, panel_y + 12}, {2, ch}, ACCENT)
 		}
@@ -824,9 +824,9 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			.Keymap_Modes      = "Filter keymap modes...",
 		}
 		placeholder := ph_map[p.mode]
-		rl.DrawTextEx(font, to_cstring(placeholder), {panel_x + 14 + cw + 10, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+		draw_text(font, to_cstring(placeholder), {panel_x + 14 + cw + 10, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 	}
-	rl.DrawTextEx(font, to_cstring("Esc"), {panel_x + PANEL_W - 36, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring("Esc"), {panel_x + PANEL_W - 36, panel_y + 14}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 
 	// Items — panel scissor (set by dlg_begin) clips all text to panel bounds
 	item_y  := panel_y + QUERY_H
@@ -848,7 +848,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			}
 			dlg_text(font, cmd.name, panel_x + 16, iy + 7,      FONT_SIZE,     CHAR_SPACING, TEXT,    txt_max, 0)
 			dlg_text(font, cmd.desc, panel_x + 16, iy + 7 + ch, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
-			rl.DrawTextEx(font, to_cstring(">"), {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			draw_text(font, to_cstring(">"), {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 			draw_i += 1; data_i += 1
 		}
 
@@ -891,7 +891,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			}
 			dlg_text(font, bname, panel_x + 16, iy + 7,      FONT_SIZE,     CHAR_SPACING, TEXT,    txt_max, 0)
 			dlg_text(font, rel,   panel_x + 16, iy + 7 + ch, FONT_SIZE - 2, CHAR_SPACING, SUBDUED, txt_max, 0)
-			rl.DrawTextEx(font, to_cstring(">"), {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			draw_text(font, to_cstring(">"), {panel_x + PANEL_W - 22, iy + 7}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 			draw_i += 1; data_i += 1
 		}
 
@@ -927,11 +927,11 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			if row.is_header {
 				expanded := p.search_expanded[row.file]
 				fold := "-" if expanded else "+"
-				rl.DrawTextEx(font, to_cstring(fold), {panel_x + 12, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+				draw_text(font, to_cstring(fold), {panel_x + 12, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 
 				if proj != "" {
 					pw := rl.MeasureTextEx(font, to_cstring(proj), FONT_SIZE - 3, CHAR_SPACING).x
-					rl.DrawTextEx(font, to_cstring(proj), {panel_x + PANEL_W - 16 - pw, ty + 1}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+					draw_text(font, to_cstring(proj), {panel_x + PANEL_W - 16 - pw, ty + 1}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 					row_txt_max = txt_max - pw - 12
 				}
 				r0    := p.search.results[row.result_idx]
@@ -1012,7 +1012,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			name_col  := TEXT if !is_active else ACCENT
 			dlg_text(font, name, panel_x + 16, iy + (ITEM_H-ch)*0.5, FONT_SIZE, CHAR_SPACING, name_col, txt_max - 110, 0)
 			if is_active {
-				rl.DrawTextEx(font, "active", {panel_x + 16 + rl.MeasureTextEx(font, to_cstring(name), FONT_SIZE, CHAR_SPACING).x + 10, iy + (ITEM_H-ch)*0.5 + 2}, FONT_SIZE-3, CHAR_SPACING, ACCENT)
+				draw_text(font, "active", {panel_x + 16 + rl.MeasureTextEx(font, to_cstring(name), FONT_SIZE, CHAR_SPACING).x + 10, iy + (ITEM_H-ch)*0.5 + 2}, FONT_SIZE-3, CHAR_SPACING, ACCENT)
 			}
 
 			draw_i += 1; data_i += 1
@@ -1035,7 +1035,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 			name_col  := TEXT if !is_active else ACCENT
 			dlg_text(font, name, panel_x + 16, iy + (ITEM_H-ch)*0.5, FONT_SIZE, CHAR_SPACING, name_col, txt_max - 110, 0)
 			if is_active {
-				rl.DrawTextEx(font, "active", {panel_x + 16 + rl.MeasureTextEx(font, to_cstring(name), FONT_SIZE, CHAR_SPACING).x + 10, iy + (ITEM_H-ch)*0.5 + 2}, FONT_SIZE-3, CHAR_SPACING, ACCENT)
+				draw_text(font, "active", {panel_x + 16 + rl.MeasureTextEx(font, to_cstring(name), FONT_SIZE, CHAR_SPACING).x + 10, iy + (ITEM_H-ch)*0.5 + 2}, FONT_SIZE-3, CHAR_SPACING, ACCENT)
 			}
 
 			draw_i += 1; data_i += 1
@@ -1088,7 +1088,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	case .Workspace_Symbols:
 		footer_text = fmt.tprintf("%d symbols  |  Enter jump  |  Esc close", len(p.locations))
 	}
-	rl.DrawTextEx(font, to_cstring(footer_text), {panel_x + 12, fy + 8}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring(footer_text), {panel_x + 12, fy + 8}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 	dlg_end()
 }
 

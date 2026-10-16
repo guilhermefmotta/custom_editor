@@ -216,11 +216,11 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	if e.cfg.editor.keymap_mode == .Vim && e.vim.mode == .Command_Line {
 		kind_buf: [1]u8 = {e.vim.cmdline_kind}
 		cmd_str := fmt.tprintf("%s%s", string(kind_buf[:]), string(e.vim.cmdline_buf[:]))
-		rl.DrawTextEx(font, to_cstring(cmd_str), {4, my + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
+		draw_text(font, to_cstring(cmd_str), {4, my + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
 		tw := rl.MeasureTextEx(font, to_cstring(cmd_str), FONT_SIZE, CHAR_SPACING).x
 		rl.DrawRectangleV({4 + tw + 2, my + 2}, {2, FONT_SIZE}, CURSOR_COL)
 	} else if e.msg != "" {
-		rl.DrawTextEx(font, to_cstring(e.msg), {4, my + 3}, FONT_SIZE, CHAR_SPACING, MSG_COL)
+		draw_text(font, to_cstring(e.msg), {4, my + 3}, FONT_SIZE, CHAR_SPACING, MSG_COL)
 	}
 
 	// Save-as dialog — above message line, below palette
@@ -327,7 +327,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		sy := (oy + PANE_TOP_PAD) if status_top else (oy + oh - STATUS_H)
 		rl.DrawRectangleV({ox, sy}, {ow, STATUS_H}, STATUS_BG)
 		fname := path_basename(p.filename) if p.filename != "" else "untitled"
-		rl.DrawTextEx(font, to_cstring(fmt.tprintf(" %s — Markdown Preview (Ctrl+Shift+V to edit)", fname)),
+		draw_text(font, to_cstring(fmt.tprintf(" %s — Markdown Preview (Ctrl+Shift+V to edit)", fname)),
 			{ox + 4, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
 		return
 	}
@@ -437,7 +437,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			ln_str  := fmt.tprintf("%d", li + 1)
 			ln_cstr := to_cstring(ln_str)
 			ln_w    := rl.MeasureTextEx(font, ln_cstr, FONT_SIZE, CHAR_SPACING).x
-			rl.DrawTextEx(font, ln_cstr, {text_x - ln_w - GUTTER_PAD, y + (ch - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, ln_col)
+			draw_text(font, ln_cstr, {text_x - ln_w - GUTTER_PAD, y + (ch - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, ln_col)
 		}
 
 		// Selection highlight (primary) — rounded single-line, extended multi-line
@@ -613,13 +613,13 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 	if badge_text, badge_col := _keymap_badge(e); badge_text != "" {
 		badge_w := rl.MeasureTextEx(font, to_cstring(badge_text), FONT_SIZE, CHAR_SPACING).x
 		rl.DrawRectangleV({ox, sy}, {badge_w, STATUS_H}, badge_col)
-		rl.DrawTextEx(font, to_cstring(badge_text), {ox, sy + 3}, FONT_SIZE, CHAR_SPACING, BG)
+		draw_text(font, to_cstring(badge_text), {ox, sy + 3}, FONT_SIZE, CHAR_SPACING, BG)
 		name_x = ox + badge_w + 6
 	}
 
 	fname    := path_basename(p.filename) if p.filename != "" else "untitled"
 	modified := "* " if p.dirty else ""
-	rl.DrawTextEx(font, to_cstring(fmt.tprintf(" %s%s", modified, fname)),
+	draw_text(font, to_cstring(fmt.tprintf(" %s%s", modified, fname)),
 		{name_x, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
 
 	// Breadcrumb: current symbol at cursor
@@ -628,19 +628,19 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		if sym != "" {
 			sym_w := rl.MeasureTextEx(font, to_cstring(sym), FONT_SIZE - 2, CHAR_SPACING).x
 			sym_x := ox + ow / 2 - sym_w / 2
-			rl.DrawTextEx(font, to_cstring(sym), {sym_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, LINENUM)
+			draw_text(font, to_cstring(sym), {sym_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, LINENUM)
 		}
 	}
 
 	pos_str := fmt.tprintf(" Ln %d, Col %d ", cur_line + 1, cur_col + 1)
 	pos_w   := rl.MeasureTextEx(font, to_cstring(pos_str), FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(pos_str),
+	draw_text(font, to_cstring(pos_str),
 		{ox + ow - pos_w, sy + 3}, FONT_SIZE, CHAR_SPACING, TEXT)
 
 	if mc_has_extras(p) {
 		mc_str := fmt.tprintf(" %d cursors ", len(p.extras) + 1)
 		mc_w   := rl.MeasureTextEx(font, to_cstring(mc_str), FONT_SIZE, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(mc_str),
+		draw_text(font, to_cstring(mc_str),
 			{ox + ow - pos_w - mc_w, sy + 3}, FONT_SIZE, CHAR_SPACING, ACCENT_COL)
 	}
 
@@ -672,7 +672,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		lsp_w := rl.MeasureTextEx(font, to_cstring(lsp_str), FONT_SIZE - 2, CHAR_SPACING).x
 		lsp_x := ox + ow - pos_w - lsp_w - 6
 		rl.DrawRectangleRounded({lsp_x, sy + 3, lsp_w, STATUS_H - 6}, 0.4, 4, rl.Color{lsp_col.r, lsp_col.g, lsp_col.b, 30})
-		rl.DrawTextEx(font, to_cstring(lsp_str), {lsp_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, lsp_col)
+		draw_text(font, to_cstring(lsp_str), {lsp_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, lsp_col)
 
 		// Git branch badge (right side, left of LSP)
 		if e.git_mgr.current.branch != "" {
@@ -681,7 +681,7 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 			br_w   := rl.MeasureTextEx(font, to_cstring(br_str), FONT_SIZE - 2, CHAR_SPACING).x
 			br_x   := lsp_x - br_w - 6
 			rl.DrawRectangleRounded({br_x, sy + 3, br_w, STATUS_H - 6}, 0.4, 4, rl.Color{br_col.r, br_col.g, br_col.b, 30})
-			rl.DrawTextEx(font, to_cstring(br_str), {br_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, br_col)
+			draw_text(font, to_cstring(br_str), {br_x, sy + 4}, FONT_SIZE - 2, CHAR_SPACING, br_col)
 		}
 	}
 
@@ -728,19 +728,19 @@ render_save_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	// Label
 	label  := to_cstring("Rename: " if e.save_dlg.rename else "Save As: ")
 	label_w := rl.MeasureTextEx(font, label, FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, LINENUM_CUR)
+	draw_text(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, LINENUM_CUR)
 
 	// Input text + beam cursor
 	inp_s := string(e.save_dlg.input[:])
 	inp_x := f32(8) + label_w
-	rl.DrawTextEx(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
+	draw_text(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
 	inp_w := rl.MeasureTextEx(font, to_cstring(inp_s), FONT_SIZE, CHAR_SPACING).x
 	rl.DrawRectangleV({inp_x + inp_w, ty}, {2, ref.y}, CURSOR_COL)
 
 	// Hint right-aligned
 	hint   := to_cstring("Enter to rename · Esc to cancel" if e.save_dlg.rename else "Enter to save · Esc to cancel")
 	hint_w := rl.MeasureTextEx(font, hint, FONT_SIZE - 2, CHAR_SPACING).x
-	rl.DrawTextEx(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+	draw_text(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 }
 
 render_delete_confirm :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
@@ -761,14 +761,14 @@ render_delete_confirm :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
 
-	rl.DrawTextEx(font, "Delete file?", {px + 16, py + 12}, FONT_SIZE, CHAR_SPACING, DANGER)
+	draw_text(font, "Delete file?", {px + 16, py + 12}, FONT_SIZE, CHAR_SPACING, DANGER)
 
 	bname := path_basename(p.filename) if p.filename != "" else "untitled"
 	dlg_text(font, bname, px + 16, py + 12 + ref.y + 6, FONT_SIZE, CHAR_SPACING, TEXT, px + PANEL_W, 12)
 
 	hint   := to_cstring("Y  confirm  *  Esc / N  cancel")
 	hint_w := rl.MeasureTextEx(font, hint, FONT_SIZE - 2, CHAR_SPACING).x
-	rl.DrawTextEx(font, hint, {px + (PANEL_W - hint_w)*0.5, py + PANEL_H - ref.y - 10}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+	draw_text(font, hint, {px + (PANEL_W - hint_w)*0.5, py + PANEL_H - ref.y - 10}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 	dlg_end()
 }
 
@@ -787,17 +787,17 @@ render_mark_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 	label   := to_cstring("Mark: ")
 	label_w := rl.MeasureTextEx(font, label, FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, BORDER)
+	draw_text(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, BORDER)
 
 	inp_s := string(e.mark_dlg.input[:])
 	inp_x := f32(8) + label_w
-	rl.DrawTextEx(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
+	draw_text(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
 	inp_w := rl.MeasureTextEx(font, to_cstring(inp_s), FONT_SIZE, CHAR_SPACING).x
 	rl.DrawRectangleV({inp_x + inp_w, ty}, {2, ref.y}, CURSOR_COL)
 
 	hint   := to_cstring("Enter to mark · Esc to cancel")
 	hint_w := rl.MeasureTextEx(font, hint, FONT_SIZE - 2, CHAR_SPACING).x
-	rl.DrawTextEx(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+	draw_text(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 }
 
 render_goto_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
@@ -815,17 +815,17 @@ render_goto_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 	label   := to_cstring("Go to line: ")
 	label_w := rl.MeasureTextEx(font, label, FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, BORDER)
+	draw_text(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, BORDER)
 
 	inp_s := string(e.goto_dlg.input[:])
 	inp_x := f32(8) + label_w
-	rl.DrawTextEx(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
+	draw_text(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
 	inp_w := rl.MeasureTextEx(font, to_cstring(inp_s), FONT_SIZE, CHAR_SPACING).x
 	rl.DrawRectangleV({inp_x + inp_w, ty}, {2, ref.y}, CURSOR_COL)
 
 	hint   := to_cstring("Enter to jump · Esc to cancel")
 	hint_w := rl.MeasureTextEx(font, hint, FONT_SIZE - 2, CHAR_SPACING).x
-	rl.DrawTextEx(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+	draw_text(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 }
 
 render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
@@ -876,12 +876,12 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 	// ── HEADER ──────────────────────────────────────────────
 	hdr_label := to_cstring("find") if fr.focus == 0 else to_cstring("replace")
-	rl.DrawTextEx(font, hdr_label, {px + PAD, cy + (HDR_H - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+	draw_text(font, hdr_label, {px + PAD, cy + (HDR_H - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 
 	if fr.regex_err {
 		err_label := to_cstring("invalid regex")
 		err_w := rl.MeasureTextEx(font, err_label, FONT_SIZE - 2, CHAR_SPACING).x
-		rl.DrawTextEx(font, err_label, {px + W - err_w - PAD, cy + (HDR_H - ref.y)*0.5},
+		draw_text(font, err_label, {px + W - err_w - PAD, cy + (HDR_H - ref.y)*0.5},
 		              FONT_SIZE - 2, CHAR_SPACING, MSG_COL)
 	} else if len(fr.search_buf) > 0 {
 		cnt_str: string
@@ -894,7 +894,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			cnt_col = MATCH_OK_COL
 		}
 		cnt_w := rl.MeasureTextEx(font, to_cstring(cnt_str), FONT_SIZE - 2, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(cnt_str), {px + W - cnt_w - PAD, cy + (HDR_H - ref.y)*0.5},
+		draw_text(font, to_cstring(cnt_str), {px + W - cnt_w - PAD, cy + (HDR_H - ref.y)*0.5},
 		              FONT_SIZE - 2, CHAR_SPACING, cnt_col)
 	}
 	cy += HDR_H + PAD
@@ -913,7 +913,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	if fr.focus == 0 && fr.all_sel && len(fr.search_buf) > 0 {
 		rl.DrawRectangleV({s0x, s0ty}, {s0w, ref.y}, SEL_BG)
 	}
-	rl.DrawTextEx(font, to_cstring(s0), {s0x, s0ty}, FONT_SIZE, CHAR_SPACING, TEXT)
+	draw_text(font, to_cstring(s0), {s0x, s0ty}, FONT_SIZE, CHAR_SPACING, TEXT)
 	if fr.focus == 0 && !fr.all_sel {
 		rl.DrawRectangleV({s0x + s0w, s0ty}, {2, ref.y}, CURSOR_COL)
 	}
@@ -934,7 +934,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		rl.DrawRectangleV({bx, btn_ty}, {BTN_W, BTN_H}, bg)
 		rl.DrawRectangleLinesEx({bx, btn_ty, BTN_W, BTN_H}, 1, bdr)
 		lbl_w := rl.MeasureTextEx(font, tog_labels[t], FONT_SIZE - 2, CHAR_SPACING).x
-		rl.DrawTextEx(font, tog_labels[t], {bx + (BTN_W - lbl_w)*0.5, cy + (INPUT_H - ref.y)*0.5},
+		draw_text(font, tog_labels[t], {bx + (BTN_W - lbl_w)*0.5, cy + (INPUT_H - ref.y)*0.5},
 		              FONT_SIZE - 2, CHAR_SPACING, lbl_c)
 	}
 	cy += INPUT_H + PAD
@@ -950,7 +950,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		if fr.all_sel && len(fr.replace_buf) > 0 {
 			rl.DrawRectangleV({s1x, s1ty}, {s1w, ref.y}, SEL_BG)
 		}
-		rl.DrawTextEx(font, to_cstring(s1), {s1x, s1ty}, FONT_SIZE, CHAR_SPACING, TEXT)
+		draw_text(font, to_cstring(s1), {s1x, s1ty}, FONT_SIZE, CHAR_SPACING, TEXT)
 		if !fr.all_sel {
 			rl.DrawRectangleV({s1x + s1w, s1ty}, {2, ref.y}, CURSOR_COL)
 		}
@@ -965,13 +965,13 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	rl.DrawRectangleLinesEx({px + PAD, nav_btn_ty, BTN_W, BTN_H}, 1, INACT_BDR)
 	up_s := to_cstring("↑")
 	up_w := rl.MeasureTextEx(font, up_s, FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, up_s, {px + PAD + (BTN_W - up_w)*0.5, nav_btn_ty + (BTN_H - ref.y)*0.5},
+	draw_text(font, up_s, {px + PAD + (BTN_W - up_w)*0.5, nav_btn_ty + (BTN_H - ref.y)*0.5},
 	              FONT_SIZE, CHAR_SPACING, TEXT)
 	// Down arrow
 	rl.DrawRectangleLinesEx({px + PAD + BTN_W + 2, nav_btn_ty, BTN_W, BTN_H}, 1, INACT_BDR)
 	dn_s := to_cstring("↓")
 	dn_w := rl.MeasureTextEx(font, dn_s, FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, dn_s, {px + PAD + BTN_W + 2 + (BTN_W - dn_w)*0.5, nav_btn_ty + (BTN_H - ref.y)*0.5},
+	draw_text(font, dn_s, {px + PAD + BTN_W + 2 + (BTN_W - dn_w)*0.5, nav_btn_ty + (BTN_H - ref.y)*0.5},
 	              FONT_SIZE, CHAR_SPACING, TEXT)
 	// Results toggle ≡
 	res_btn_x := px + W - PAD - BTN_W
@@ -983,7 +983,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	eq_s := to_cstring("≡")
 	eq_w := rl.MeasureTextEx(font, eq_s, FONT_SIZE, CHAR_SPACING).x
 	eq_c := ACCENT_COL if res_on else SUBDUED
-	rl.DrawTextEx(font, eq_s, {res_btn_x + (BTN_W - eq_w)*0.5, nav_btn_ty + (BTN_H - ref.y)*0.5},
+	draw_text(font, eq_s, {res_btn_x + (BTN_W - eq_w)*0.5, nav_btn_ty + (BTN_H - ref.y)*0.5},
 	              FONT_SIZE, CHAR_SPACING, eq_c)
 	cy += NAV_H + PAD
 
@@ -1016,7 +1016,7 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			// Line number (right-aligned in LNUM_W column)
 			ln_str := fmt.tprintf("%d", line + 1)
 			ln_w   := rl.MeasureTextEx(font, to_cstring(ln_str), FONT_SIZE - 2, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(ln_str),
+			draw_text(font, to_cstring(ln_str),
 			              {px + LNUM_W - ln_w - 4, ry + (ITEM_H - ref_sm.y)*0.5},
 			              FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 			rl.DrawRectangleV({px + LNUM_W, ry}, {SEP_H, ITEM_H}, INACT_BDR)
@@ -1036,12 +1036,12 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 			item_ty := ry + (ITEM_H - ref.y)*0.5
 			ui_scissor_begin(i32(px + LNUM_W + 1), i32(ry), i32(content_w + 4), i32(ITEM_H))
-			rl.DrawTextEx(font, to_cstring(pre), {content_x - offset, item_ty},
+			draw_text(font, to_cstring(pre), {content_x - offset, item_ty},
 			              FONT_SIZE, CHAR_SPACING, SUBDUED)
 			rl.DrawRectangleV({content_x - offset + pre_w, item_ty}, {mat_w, ref.y}, MATCH_HL_BG)
-			rl.DrawTextEx(font, to_cstring(mat), {content_x - offset + pre_w, item_ty},
+			draw_text(font, to_cstring(mat), {content_x - offset + pre_w, item_ty},
 			              FONT_SIZE, CHAR_SPACING, MATCH_HL_FG)
-			rl.DrawTextEx(font, to_cstring(pst), {content_x - offset + pre_w + mat_w, item_ty},
+			draw_text(font, to_cstring(pst), {content_x - offset + pre_w + mat_w, item_ty},
 			              FONT_SIZE, CHAR_SPACING, TEXT)
 			rl.EndScissorMode()
 			dlg_restore()
@@ -1052,9 +1052,9 @@ render_find_replace :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 
 	// ── HINT ROW (two lines) ─────────────────────────────────
 	hs := FONT_SIZE - 5
-	rl.DrawTextEx(font, "Alt+C:case  Alt+W:word  Alt+R:regex  Alt+L:list",
+	draw_text(font, "Alt+C:case  Alt+W:word  Alt+R:regex  Alt+L:list",
 	              {px + PAD, cy + 2}, hs, CHAR_SPACING, SUBDUED)
-	rl.DrawTextEx(font, "Tab:switch  ↑↓:next  Enter:replace  Esc:close",
+	draw_text(font, "Tab:switch  ↑↓:next  Enter:replace  Esc:close",
 	              {px + PAD, cy + 2 + hs + 2}, hs, CHAR_SPACING, SUBDUED)
 	dlg_end()
 }
@@ -1122,7 +1122,7 @@ _render_tab_bar :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, th: f32, is_active:
 
 		text_col := TEXT if ti == p.cur_tab else LINENUM
 		ty := oy + (th - rl.MeasureTextEx(font, "M", FONT_SIZE - 2, CHAR_SPACING).y) * 0.5
-		rl.DrawTextEx(font, to_cstring(tab_label), {x + 4, ty}, FONT_SIZE - 2, CHAR_SPACING, text_col)
+		draw_text(font, to_cstring(tab_label), {x + 4, ty}, FONT_SIZE - 2, CHAR_SPACING, text_col)
 
 		x += tw + GAP
 		if x > ox + ow { break }

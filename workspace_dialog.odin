@@ -549,20 +549,20 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 		PANEL_BOR,
 	)
 
-	rl.DrawTextEx(font, "Open Folder(s)",
+	draw_text(font, "Open Folder(s)",
 		{panel_x + 12, panel_y + (WS_HEADER_H - ref.y)*0.5},
 		FONT_SIZE, CHAR_SPACING, ACCENT)
 
 	if len(d.marked) > 0 {
 		ws_label := fmt.tprintf("%d folder(s) marked - Ctrl+Enter opens all", len(d.marked))
 		ws_w     := rl.MeasureTextEx(font, to_cstring(ws_label), FONT_SIZE - 3, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(ws_label),
+		draw_text(font, to_cstring(ws_label),
 			{panel_x + WS_PANEL_W - ws_w - 10, panel_y + (WS_HEADER_H - ref.y + 2)*0.5},
 			FONT_SIZE - 3, CHAR_SPACING, ACCENT)
 	} else if d.workspace != "" {
 		ws_label := fmt.tprintf("  current: %s", path_basename(d.workspace) if path_basename(d.workspace) != "" else d.workspace)
 		ws_w     := rl.MeasureTextEx(font, to_cstring(ws_label), FONT_SIZE - 3, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(ws_label),
+		draw_text(font, to_cstring(ws_label),
 			{panel_x + WS_PANEL_W - ws_w - 10, panel_y + (WS_HEADER_H - ref.y + 2)*0.5},
 			FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	}
@@ -580,7 +580,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	label     := to_cstring("Path: ")
 	label_w   := rl.MeasureTextEx(font, label, FONT_SIZE, CHAR_SPACING).x
 	label_y   := input_y + (WS_INPUT_H - ref.y) * 0.5
-	rl.DrawTextEx(font, label, {panel_x + 12, label_y}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+	draw_text(font, label, {panel_x + 12, label_y}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 
 	// Input text — clip to panel width
 	inp_s  := string(d.input[:])
@@ -600,7 +600,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	}
 
 	ui_scissor_begin(i32(inp_x), i32(input_y), i32(inp_w), i32(WS_INPUT_H))
-	rl.DrawTextEx(font, to_cstring(display_s), {inp_x, label_y}, FONT_SIZE, CHAR_SPACING, FILE_COL)
+	draw_text(font, to_cstring(display_s), {inp_x, label_y}, FONT_SIZE, CHAR_SPACING, FILE_COL)
 	rl.EndScissorMode()
 	dlg_restore()
 
@@ -611,7 +611,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 	// Error message (overlaid on right side of input row when present)
 	if d.error_msg != "" {
 		err_w := rl.MeasureTextEx(font, to_cstring(d.error_msg), FONT_SIZE - 2, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(d.error_msg),
+		draw_text(font, to_cstring(d.error_msg),
 			{panel_x + WS_PANEL_W - err_w - 10, label_y + 2},
 			FONT_SIZE - 2, CHAR_SPACING, ERR_COL)
 	}
@@ -637,8 +637,8 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 
 		if entry.name == ".." {
 			// Parent directory arrow
-			rl.DrawTextEx(font, "↑", {ix, text_y}, FONT_SIZE, CHAR_SPACING, SUBDUED)
-			rl.DrawTextEx(font, to_cstring(entry.name), {ix + ref.x + 4, text_y}, FONT_SIZE - 1, CHAR_SPACING, SUBDUED)
+			draw_text(font, "↑", {ix, text_y}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			draw_text(font, to_cstring(entry.name), {ix + ref.x + 4, text_y}, FONT_SIZE - 1, CHAR_SPACING, SUBDUED)
 		} else if entry.is_dir {
 			if _ws_is_marked(d, entry.name) {
 				rl.DrawRectangleV({panel_x + 3, iy + 3}, {5, WS_ITEM_H - 6}, ACCENT)
@@ -651,7 +651,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 			rl.DrawRectangleV({ix, iy_mid + 3}, {icon_sz,     icon_sz - 3}, DIR_COL)
 			rl.DrawRectangleV({ix, iy_mid},     {5,           3},            DIR_COL)
 			name_with_slash := fmt.tprintf("%s/", entry.name)
-			rl.DrawTextEx(font, to_cstring(name_with_slash),
+			draw_text(font, to_cstring(name_with_slash),
 				{ix + icon_sz + 6, text_y}, FONT_SIZE - 1, CHAR_SPACING, DIR_COL)
 		} else {
 			// File: small rectangle icon
@@ -659,7 +659,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 			iy_mid  := iy + (WS_ITEM_H - icon_sz)*0.5
 			rl.DrawRectangleV({ix,             iy_mid},          {icon_sz - 3, icon_sz},     LINENUM)
 			rl.DrawRectangleV({ix + icon_sz - 3, iy_mid + 3},   {3,           icon_sz - 3}, LINENUM)
-			rl.DrawTextEx(font, to_cstring(entry.name),
+			draw_text(font, to_cstring(entry.name),
 				{ix + icon_sz + 6, text_y}, FONT_SIZE - 1, CHAR_SPACING, SUBDUED)
 		}
 
@@ -668,7 +668,7 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 			sep := "/" if len(d.current_dir) > 0 && !_ws_is_sep(d.current_dir[len(d.current_dir)-1]) else ""
 			full := fmt.tprintf("%s%s%s", d.current_dir, sep, entry.name)
 			hint_w := rl.MeasureTextEx(font, to_cstring(full), FONT_SIZE - 3, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(full),
+			draw_text(font, to_cstring(full),
 				{panel_x + WS_PANEL_W - hint_w - 10, text_y + 2},
 				FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 		}
@@ -699,11 +699,11 @@ render_workspace_dialog :: proc(d: ^Workspace_Dialog, font: rl.Font, sw, sh: f32
 
 	footer_hint := "Enter open dir  Shift+Enter mark  Tab complete  Ctrl+Enter open folder(s)  Esc"
 	col := WARN_COL if d.error_msg != "" else SUBDUED
-	rl.DrawTextEx(font, to_cstring(footer_hint),
+	draw_text(font, to_cstring(footer_hint),
 		{panel_x + 10, footer_y + (WS_FOOTER_H - ref.y + 2)*0.5},
 		FONT_SIZE - 3, CHAR_SPACING, col)
 
-	rl.DrawTextEx(font, to_cstring(count_str),
+	draw_text(font, to_cstring(count_str),
 		{panel_x + WS_PANEL_W - count_w - 10, footer_y + (WS_FOOTER_H - ref.y + 2)*0.5},
 		FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	dlg_end()

@@ -76,15 +76,15 @@ render_rename_dialog :: proc(d: ^Rename_Dialog, font: rl.Font, sw, sh: f32) {
 
 	label  := to_cstring("Rename: ")
 	label_w := rl.MeasureTextEx(font, label, FONT_SIZE, CHAR_SPACING).x
-	rl.DrawTextEx(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, ACCENT_COL)
+	draw_text(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, ACCENT_COL)
 
 	inp_s := string(d.input[:])
 	inp_x := f32(8) + label_w
-	rl.DrawTextEx(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
+	draw_text(font, to_cstring(inp_s), {inp_x, ty}, FONT_SIZE, CHAR_SPACING, TEXT)
 	inp_w := rl.MeasureTextEx(font, to_cstring(inp_s), FONT_SIZE, CHAR_SPACING).x
 	rl.DrawRectangleV({inp_x + inp_w, ty}, {2, ref.y}, CURSOR_COL)
 
 	hint   := to_cstring("Enter to rename  ·  Esc to cancel")
 	hint_w := rl.MeasureTextEx(font, hint, FONT_SIZE-2, CHAR_SPACING).x
-	rl.DrawTextEx(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE-2, CHAR_SPACING, SUBDUED)
+	draw_text(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE-2, CHAR_SPACING, SUBDUED)
 }

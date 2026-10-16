@@ -467,7 +467,7 @@ draw_highlighted_line :: proc(font: rl.Font, line: []u8, x, y: f32, lang: Lang) 
 	if len(line) == 0 do return
  
 	if lang == .None {
-		rl.DrawTextEx(font, to_cstring(string(line)), {x, y}, FONT_SIZE, CHAR_SPACING, TEXT)
+		draw_text(font, to_cstring(string(line)), {x, y}, FONT_SIZE, CHAR_SPACING, TEXT)
 		return
 	}
 
@@ -478,7 +478,7 @@ draw_highlighted_line :: proc(font: rl.Font, line: []u8, x, y: f32, lang: Lang) 
 	draw_seg :: proc(font: rl.Font, s: string, x, y: f32, col: rl.Color) -> f32 {
 		if len(s) == 0 do return 0
 		cs := to_cstring(s)
-		rl.DrawTextEx(font, cs, {x, y}, FONT_SIZE, CHAR_SPACING, col)
+		draw_text(font, cs, {x, y}, FONT_SIZE, CHAR_SPACING, col)
 		return rl.MeasureTextEx(font, cs, FONT_SIZE, CHAR_SPACING).x
 	}
 

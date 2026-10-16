@@ -129,10 +129,10 @@ render_code_action_dialog :: proc(d: ^Code_Action_Dialog, font: rl.Font, sw, sh:
 	rl.DrawRectangleV({px, py}, {CA_W, CA_HDR_H}, HDR_BG)
 	rl.DrawLineV({px, py + CA_HDR_H}, {px + CA_W, py + CA_HDR_H}, BORDER)
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
-	rl.DrawTextEx(font, "Code Actions", {px + 12, py + (CA_HDR_H - ref.y) * 0.5}, FONT_SIZE, CHAR_SPACING, ACCENT)
+	draw_text(font, "Code Actions", {px + 12, py + (CA_HDR_H - ref.y) * 0.5}, FONT_SIZE, CHAR_SPACING, ACCENT)
 	cnt_s := fmt.tprintf("%d actions", n)
 	cnt_w := rl.MeasureTextEx(font, to_cstring(cnt_s), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(cnt_s),
+	draw_text(font, to_cstring(cnt_s),
 		{px + CA_W - cnt_w - 12, py + (CA_HDR_H - ref.y) * 0.5 + 1},
 		FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 
@@ -154,7 +154,7 @@ render_code_action_dialog :: proc(d: ^Code_Action_Dialog, font: rl.Font, sw, sh:
 
 		tx := px + 14
 		if a.is_preferred {
-			rl.DrawTextEx(font, "\xe2\x98\x85", {tx, row_y + (CA_ITEM_H - ref.y) * 0.5},
+			draw_text(font, "\xe2\x98\x85", {tx, row_y + (CA_ITEM_H - ref.y) * 0.5},
 				FONT_SIZE - 2, CHAR_SPACING, PREF_COL)
 			tx += 18
 		}
@@ -164,7 +164,7 @@ render_code_action_dialog :: proc(d: ^Code_Action_Dialog, font: rl.Font, sw, sh:
 
 		if a.kind != "" {
 			kw := rl.MeasureTextEx(font, to_cstring(a.kind), FONT_SIZE - 4, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(a.kind),
+			draw_text(font, to_cstring(a.kind),
 				{px + CA_W - kw - 10, row_y + (CA_ITEM_H - ref.y) * 0.5 + 1},
 				FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
 		}
@@ -176,7 +176,7 @@ render_code_action_dialog :: proc(d: ^Code_Action_Dialog, font: rl.Font, sw, sh:
 	rl.DrawLineV({px, fy}, {px + CA_W, fy}, BORDER)
 	hint := "\xe2\x86\x91\xe2\x86\x93 navigate  \xc2\xb7  Enter apply  \xc2\xb7  Esc close"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hint),
+	draw_text(font, to_cstring(hint),
 		{px + (CA_W - hw) * 0.5, fy + (CA_FOOT_H - ref.y) * 0.5},
 		FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 

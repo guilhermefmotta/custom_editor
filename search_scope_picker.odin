@@ -122,7 +122,7 @@ search_scope_draw_chip :: proc(font: rl.Font, sc: Search_Scope, right_x, y, h: f
 	col := accent if sc.kind == .Branch else subdued
 	rl.DrawRectangleRec(r, bg)
 	rl.DrawRectangleLinesEx(r, 1, col)
-	rl.DrawTextEx(font, to_cstring(label), {r.x + 8, r.y + (24 - size) * 0.5}, size, CHAR_SPACING, col)
+	draw_text(font, to_cstring(label), {r.x + 8, r.y + (24 - size) * 0.5}, size, CHAR_SPACING, col)
 }
 
 // Draws the picker rows (filter line + entries) inside the palette list area.
@@ -141,7 +141,7 @@ search_scope_picker_draw :: proc(font: rl.Font, x, y, w, item_h: f32, max_vis: i
 		col := accent if en.scope.kind == .Workspace else text
 		dlg_text(font, en.label, x + 16, ty, size, CHAR_SPACING, col, x + w - 140, 0)
 		dw := rl.MeasureTextEx(font, to_cstring(en.detail), size - 1, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(en.detail), {x + w - 16 - dw, ty + 1}, size - 1, CHAR_SPACING, subdued)
+		draw_text(font, to_cstring(en.detail), {x + w - 16 - dw, ty + 1}, size - 1, CHAR_SPACING, subdued)
 	}
 }
 

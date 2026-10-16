@@ -677,6 +677,6 @@ render_def_picker :: proc(dp: ^Goto_Def_Picker, font: rl.Font, sw, sh: f32) {
 	rl.DrawRectangleLinesEx({px, footer_y, PANEL_W, FOOTER_H}, 1, BORDER)
 	hint := "type to filter  ·  ↑↓ navigate  ·  Enter jump  ·  Esc close"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hint), {px + PANEL_W - hw - 10, footer_y + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring(hint), {px + PANEL_W - hw - 10, footer_y + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	dlg_end()
 }

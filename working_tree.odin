@@ -604,11 +604,11 @@ _wt_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			}
 			code := en.index if row.section == .Staged else en.worktree
 			if row.section == .Conflicts { code = 'U' }
-			rl.DrawTextEx(font, to_cstring(fmt.tprintf("%c", rune(code))), {px + 14, ty}, fs, CHAR_SPACING, xy_col)
+			draw_text(font, to_cstring(fmt.tprintf("%c", rune(code))), {px + 14, ty}, fs, CHAR_SPACING, xy_col)
 			expanded := _wt.exp_path == en.path && _wt.exp_section == row.section
 			can_expand := row.section == .Staged || row.section == .Unstaged
 			if can_expand {
-				rl.DrawTextEx(font, "v" if expanded else ">", {px + 30, ty}, fs - 2, CHAR_SPACING, GITD_SUBDUED)
+				draw_text(font, "v" if expanded else ">", {px + 30, ty}, fs - 2, CHAR_SPACING, GITD_SUBDUED)
 			}
 			label := en.path
 			if en.old_path != "" && row.section == .Staged { label = fmt.tprintf("%s -> %s", en.old_path, en.path) }
@@ -619,11 +619,11 @@ _wt_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		} else if row.hunk < len(_wt.hunks) {
 			h := _wt.hunks[row.hunk]
 			counts := fmt.tprintf("+%d -%d", h.added, h.removed)
-			rl.DrawTextEx(font, to_cstring(counts), {px + 60, ty}, fs - 1, CHAR_SPACING, GITD_SUBDUED)
+			draw_text(font, to_cstring(counts), {px + 60, ty}, fs - 1, CHAR_SPACING, GITD_SUBDUED)
 			cw := ui_text_w(font, counts, fs - 1)
 			hdr := h.header
 			if j := strings.index(hdr[min(2, len(hdr)):], "@@"); j >= 0 { hdr = hdr[:j + 4] }
-			rl.DrawTextEx(font, to_cstring(hdr), {px + 70 + cw, ty}, fs - 1, CHAR_SPACING, GITD_BLUE)
+			draw_text(font, to_cstring(hdr), {px + 70 + cw, ty}, fs - 1, CHAR_SPACING, GITD_BLUE)
 			hw := ui_text_w(font, hdr, fs - 1)
 			dlg_text(font, _gitd_expand_tabs(h.preview), px + 82 + cw + hw, ty, fs - 1, CHAR_SPACING, GITD_SUBDUED, px + W, 10)
 		}
@@ -676,7 +676,7 @@ _wt_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	msg := string(_wt.commit_buf[:])
 	if msg == "" {
 		ph := "Amend: empty keeps the previous message" if _wt.amend else "Commit message... (Tab or C to focus)"
-		rl.DrawTextEx(font, to_cstring(ph), {box.x + 6, box.y + 4}, fs, CHAR_SPACING, GITD_SUBDUED)
+		draw_text(font, to_cstring(ph), {box.x + 6, box.y + 4}, fs, CHAR_SPACING, GITD_SUBDUED)
 	}
 	lines := strings.split(msg, "\n", context.temp_allocator)
 	first := max(0, len(lines) - WT_COMMIT_LINES)

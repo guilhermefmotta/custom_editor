@@ -234,12 +234,12 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	// ── Header ────────────────────────────────────────────────────────────
 	rl.DrawRectangleV({px, py}, {W, HDR_H}, HDR_BG)
 	rl.DrawLineV({px, py + HDR_H}, {px + W, py + HDR_H}, PANEL_BOR)
-	rl.DrawTextEx(font, "LSP Control",
+	draw_text(font, "LSP Control",
 		{px + 14, py + (HDR_H - ref.y) * 0.5},
 		FONT_SIZE, CHAR_SPACING, ACCENT)
 	esc_hint := "Esc close"
 	esc_w := rl.MeasureTextEx(font, to_cstring(esc_hint), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(esc_hint),
+	draw_text(font, to_cstring(esc_hint),
 		{px + W - esc_w - 12, py + (HDR_H - ref.y) * 0.5 + 1},
 		FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 
@@ -254,13 +254,13 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	{
 		lbl := "Server"
 		lw  := rl.MeasureTextEx(font, to_cstring(lbl), FONT_SIZE - 2, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(lbl), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
-		rl.DrawTextEx(font, ":", {tx + lw, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+		draw_text(font, to_cstring(lbl), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+		draw_text(font, ":", {tx + lw, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 		val_x := tx + lw + 10
 		if server_name == "" {
-			rl.DrawTextEx(font, "none", {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+			draw_text(font, "none", {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 		} else {
-			rl.DrawTextEx(font, to_cstring(server_name), {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, TEXT)
+			draw_text(font, to_cstring(server_name), {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, TEXT)
 			state_str, state_col := _lspd_state(c)
 			sw2 := rl.MeasureTextEx(font, to_cstring(state_str), FONT_SIZE - 2, CHAR_SPACING).x
 			// State badge with background
@@ -273,7 +273,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 				{badge_w, badge_h}, rl.Color{state_col.r, state_col.g, state_col.b, 30})
 			rl.DrawRectangleLinesEx({badge_x - badge_pad_x, ty - badge_pad_y, badge_w, badge_h},
 				1, rl.Color{state_col.r, state_col.g, state_col.b, 120})
-			rl.DrawTextEx(font, to_cstring(state_str), {badge_x, ty}, FONT_SIZE - 2, CHAR_SPACING, state_col)
+			draw_text(font, to_cstring(state_str), {badge_x, ty}, FONT_SIZE - 2, CHAR_SPACING, state_col)
 		}
 		ty += ref.y + 7
 	}
@@ -282,14 +282,14 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	{
 		lbl := "File  "
 		lw  := rl.MeasureTextEx(font, to_cstring(lbl), FONT_SIZE - 2, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(lbl), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
-		rl.DrawTextEx(font, ":", {tx + lw, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+		draw_text(font, to_cstring(lbl), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+		draw_text(font, ":", {tx + lw, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 		val_x := tx + lw + 10
 		if p.filename != "" {
 			fn := fmt.tprintf("%s  (.%s)", path_basename(p.filename), ext)
-			rl.DrawTextEx(font, to_cstring(fn), {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, TEXT)
+			draw_text(font, to_cstring(fn), {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, TEXT)
 		} else {
-			rl.DrawTextEx(font, "no file open", {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+			draw_text(font, "no file open", {val_x, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 		}
 		ty += ref.y + 7
 	}
@@ -298,8 +298,8 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	{
 		lbl := "Root  "
 		lw  := rl.MeasureTextEx(font, to_cstring(lbl), FONT_SIZE - 2, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(lbl), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
-		rl.DrawTextEx(font, ":", {tx + lw, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+		draw_text(font, to_cstring(lbl), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
+		draw_text(font, ":", {tx + lw, ty}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 		val_x := tx + lw + 10
 		dlg_text(font, proj_root, val_x, ty, FONT_SIZE - 2, CHAR_SPACING, TEXT, px + W - 16, 0)
 		ty += ref.y + 12
@@ -333,7 +333,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 					rl.Color{col.r, col.g, col.b, 35})
 			}
 			rl.DrawRectangleLinesEx(rect, 1, col)
-			rl.DrawTextEx(font, to_cstring(label), {bx + PAD, by + (bh - FONT_SIZE) * 0.5 + 1},
+			draw_text(font, to_cstring(label), {bx + PAD, by + (bh - FONT_SIZE) * 0.5 + 1},
 				FONT_SIZE - 1, CHAR_SPACING, col)
 			return bw + BTN_GAP, hovered && active && clicked
 		}
@@ -385,9 +385,9 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 		// Action / error message
 		if d.action_msg != "" {
 			msg_col := GREEN if d.action_ok else RED
-			rl.DrawTextEx(font, to_cstring(d.action_msg), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, msg_col)
+			draw_text(font, to_cstring(d.action_msg), {tx, ty}, FONT_SIZE - 2, CHAR_SPACING, msg_col)
 		} else if inst.state == .Running {
-			rl.DrawTextEx(font, to_cstring(inst.label if inst.label != "" else "Installing..."),
+			draw_text(font, to_cstring(inst.label if inst.label != "" else "Installing..."),
 				{tx, ty}, FONT_SIZE - 2, CHAR_SPACING, YELLOW)
 		} else if c != nil && c.error_msg != "" {
 			em := fmt.tprintf("! %s", c.error_msg)
@@ -416,7 +416,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	rl.DrawLineV({px, log_y + LOG_HDR_H}, {px + W, log_y + LOG_HDR_H}, PANEL_BOR)
 	log_hdr_text := fmt.tprintf("Install output") if show_install_log else fmt.tprintf("Log  —  %d entries", log_count)
 	log_hdr_col  := YELLOW if inst2.state == .Running else (GREEN if inst2.state == .Done else (RED if inst2.state == .Failed else SUBDUED))
-	rl.DrawTextEx(font, to_cstring(log_hdr_text),
+	draw_text(font, to_cstring(log_hdr_text),
 		{px + 14, log_y + (LOG_HDR_H - ref.y) * 0.5},
 		FONT_SIZE - 2, CHAR_SPACING, log_hdr_col if show_install_log else SUBDUED)
 
@@ -424,7 +424,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	if !show_install_log && d.auto_scroll && log_count > vis {
 		as_str := "auto-scroll"
 		as_w := rl.MeasureTextEx(font, to_cstring(as_str), FONT_SIZE - 3, CHAR_SPACING).x
-		rl.DrawTextEx(font, to_cstring(as_str),
+		draw_text(font, to_cstring(as_str),
 			{px + W - as_w - 16, log_y + (LOG_HDR_H - ref.y) * 0.5 + 1},
 			FONT_SIZE - 3, CHAR_SPACING, ACCENT)
 	}
@@ -443,7 +443,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 			if strings.has_prefix(out_lines[i], "✓") || strings.has_prefix(out_lines[i], "Installed") { col = GREEN }
 			if strings.has_prefix(out_lines[i], "✗") || strings.has_prefix(out_lines[i], "error")     { col = RED   }
 			if strings.has_prefix(out_lines[i], "WARNING") { col = YELLOW }
-			rl.DrawTextEx(font,
+			draw_text(font,
 				to_cstring(text_clip(font, out_lines[i], W - 32, FONT_SIZE - 2, CHAR_SPACING)),
 				{px + 14, row_y + (LOG_LN_H - (FONT_SIZE - 2)) * 0.5},
 				FONT_SIZE - 2, CHAR_SPACING, col)
@@ -454,7 +454,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	if !show_install_log {
 	// Log entries
 	if log_count == 0 {
-		rl.DrawTextEx(font, "no log messages yet",
+		draw_text(font, "no log messages yet",
 			{px + 14, entries_y + 10}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 	} else {
 		for vi in 0..<vis {
@@ -488,14 +488,14 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 			tag, _ := _lspd_log_level(entry.level)
 			tag_w := rl.MeasureTextEx(font, to_cstring(tag), FONT_SIZE - 3, CHAR_SPACING).x
 			tag_x := px + 8
-			rl.DrawTextEx(font, to_cstring(tag),
+			draw_text(font, to_cstring(tag),
 				{tag_x, row_y + (LOG_LN_H - (FONT_SIZE - 3)) * 0.5},
 				FONT_SIZE - 3, CHAR_SPACING, level_col)
 
 			// Message — clips to available width
 			msg_x   := tag_x + tag_w + 6
 			max_msg_w := px + W - SB_W - msg_x - 6
-			rl.DrawTextEx(font,
+			draw_text(font,
 				to_cstring(text_clip(font, entry.message, max_msg_w, FONT_SIZE - 2, CHAR_SPACING)),
 				{msg_x, row_y + (LOG_LN_H - (FONT_SIZE - 2)) * 0.5},
 				FONT_SIZE - 2, CHAR_SPACING, TEXT)
@@ -520,7 +520,7 @@ render_lsp_dialog :: proc(d: ^LSP_Dialog, e: ^Editor, font: rl.Font, sw, sh: f32
 	rl.DrawLineV({px, foot_y}, {px + W, foot_y}, PANEL_BOR)
 	hints := "S start   T stop   R restart   C copy   I install   ↑↓ scroll   Esc close"
 	hints_w := rl.MeasureTextEx(font, to_cstring(hints), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hints),
+	draw_text(font, to_cstring(hints),
 		{px + (W - hints_w) * 0.5, foot_y + (FOOT_H - ref.y) * 0.5 + 1},
 		FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 

@@ -176,5 +176,5 @@ dlg_text :: proc(font: rl.Font, text: string, tx, ty, size, spacing: f32, color:
     max_w := right_edge - tx - pad
     s := text_clip(font, text, max_w, size, spacing)
     if s == "" { return }
-    rl.DrawTextEx(font, to_cstring(s), {tx, ty}, size, spacing, color)
+    draw_text(font, to_cstring(s), {tx, ty}, size, spacing, color)
 }

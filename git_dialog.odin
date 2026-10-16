@@ -321,7 +321,7 @@ _gitd_draw_diff :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw, 
 
 	if d.diff.binary || len(rows) == 0 {
 		msg := "Binary file — no text diff" if d.diff.binary else "No changes"
-		rl.DrawTextEx(font, to_cstring(msg), {px + 16, content_top + 12}, fs, CHAR_SPACING, GITD_SUBDUED)
+		draw_text(font, to_cstring(msg), {px + 16, content_top + 12}, fs, CHAR_SPACING, GITD_SUBDUED)
 		dlg_end()
 		return
 	}
@@ -351,7 +351,7 @@ _gitd_draw_diff :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw, 
 			if side.line > 0 {
 				num := fmt.tprintf("%d", side.line)
 				nw  := rl.MeasureTextEx(font, to_cstring(num), fs, CHAR_SPACING).x
-				rl.DrawTextEx(font, to_cstring(num), {x + gutter - 8 - nw, cy + 1}, fs, CHAR_SPACING, GITD_SUBDUED)
+				draw_text(font, to_cstring(num), {x + gutter - 8 - nw, cy + 1}, fs, CHAR_SPACING, GITD_SUBDUED)
 			}
 			if side.text != "" {
 				dlg_text(font, _gitd_expand_tabs(side.text), x + gutter, cy + 1, fs, CHAR_SPACING,
@@ -379,7 +379,7 @@ _gitd_draw_diff :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.Font, sw, 
 	rl.DrawLineV({px, footer_y}, {px + pw, footer_y}, GITD_BORDER)
 	info := fmt.tprintf("line %d/%d", d.diff_scroll + 1, len(rows))
 	iw := rl.MeasureTextEx(font, to_cstring(info), FONT_SIZE - 2, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(info), {px + pw - iw - 14, footer_y + (GITD_FOOTER_H - ref.y) * 0.5}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
+	draw_text(font, to_cstring(info), {px + pw - iw - 14, footer_y + (GITD_FOOTER_H - ref.y) * 0.5}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
 	dlg_end()
 }
 
@@ -425,7 +425,7 @@ _gitd_draw_branch_picker :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.F
 	// Header
 	rl.DrawRectangleV({px, py}, {GITD_BP_W, GITD_HEADER_H}, GITD_HEADER)
 	h_str := fmt.tprintf(" Merge Branch into %s", m.current.branch)
-	rl.DrawTextEx(font, to_cstring(h_str), {px+10, py + (GITD_HEADER_H-ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, GITD_BLUE)
+	draw_text(font, to_cstring(h_str), {px+10, py + (GITD_HEADER_H-ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, GITD_BLUE)
 
 	cy := py + GITD_HEADER_H
 
@@ -436,7 +436,7 @@ _gitd_draw_branch_picker :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.F
 	filter_col  := GITD_TEXT if filter_str != "" else GITD_SUBDUED
 	text_x      := px + 14
 	text_y      := cy + 4 + (BP_INPUT_H-8-ref.y)*0.5
-	rl.DrawTextEx(font, filter_cstr, {text_x, text_y}, FONT_SIZE-1, CHAR_SPACING, filter_col)
+	draw_text(font, filter_cstr, {text_x, text_y}, FONT_SIZE-1, CHAR_SPACING, filter_col)
 	// Blinking cursor at end of typed text
 	cur_x := text_x + rl.MeasureTextEx(font, to_cstring(filter_str), FONT_SIZE-1, CHAR_SPACING).x
 	rl.DrawLineV({cur_x+1, cy+8}, {cur_x+1, cy+BP_INPUT_H-8}, GITD_BLUE)
@@ -446,7 +446,7 @@ _gitd_draw_branch_picker :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.F
 	list_h := f32(max(n_vis, 1)) * BP_ENTRY_H
 	if len(filtered) == 0 {
 		no_match: cstring = "no branches match"
-		rl.DrawTextEx(font, no_match, {px+14, cy+4}, FONT_SIZE-2, CHAR_SPACING, GITD_SUBDUED)
+		draw_text(font, no_match, {px+14, cy+4}, FONT_SIZE-2, CHAR_SPACING, GITD_SUBDUED)
 	} else {
 		for i := 0; i < n_vis; i += 1 {
 			fi := d.bp_scroll + i
@@ -460,7 +460,7 @@ _gitd_draw_branch_picker :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.F
 			// Current branch marker
 			mark: cstring = "* " if is_current else "  "
 			mark_col := GITD_GREEN
-			rl.DrawTextEx(font, mark, {px+10, ey + (BP_ENTRY_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, mark_col)
+			draw_text(font, mark, {px+10, ey + (BP_ENTRY_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, mark_col)
 			name_col := GITD_YELLOW if is_sel else GITD_TEXT
 			dlg_text(font, b, px+28, ey + (BP_ENTRY_H-ref.y)*0.5, FONT_SIZE-1, CHAR_SPACING, name_col, px+GITD_BP_W, 8)
 		}
@@ -470,6 +470,6 @@ _gitd_draw_branch_picker :: proc(d: ^Git_Dialog, m: ^git.Git_Manager, font: rl.F
 	// Footer
 	rl.DrawLineV({px, cy}, {px+GITD_BP_W, cy}, GITD_BORDER)
 	fp_hint: cstring = "Enter merge  J/K or Up/Down navigate  type to filter  Esc cancel"
-	rl.DrawTextEx(font, fp_hint, {px+10, cy + (BP_FOOTER_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, GITD_SUBDUED)
+	draw_text(font, fp_hint, {px+10, cy + (BP_FOOTER_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, GITD_SUBDUED)
 	dlg_end()
 }

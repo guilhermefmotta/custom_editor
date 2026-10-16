@@ -130,7 +130,7 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 	// Header
 	rl.DrawRectangleV({panel_x, panel_y}, {PANEL_W, HEADER_H}, INPUT_BG)
 	rl.DrawLineV({panel_x, panel_y + HEADER_H - 1}, {panel_x + PANEL_W, panel_y + HEADER_H - 1}, BORDER)
-	rl.DrawTextEx(font, "Recent Files", {panel_x + 10, panel_y + 8}, FONT_SIZE, CHAR_SPACING, ACCENT)
+	draw_text(font, "Recent Files", {panel_x + 10, panel_y + 8}, FONT_SIZE, CHAR_SPACING, ACCENT)
 
 	// Items
 	items_top := panel_y + HEADER_H
@@ -153,7 +153,7 @@ render_recents_dialog :: proc(rd: ^Recents_Dialog, font: rl.Font, sw, sh: f32) {
 	rl.DrawRectangleV({panel_x, fy}, {PANEL_W, FOOTER_H}, INPUT_BG)
 	rl.DrawRectangleLinesEx({panel_x, fy, PANEL_W, FOOTER_H}, 1, BORDER)
 	hint := "Tab next  *  Shift+Tab prev  *  release Ctrl jump  *  Esc cancel"
-	rl.DrawTextEx(font, to_cstring(hint), {panel_x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring(hint), {panel_x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	dlg_end()
 }
 

@@ -754,7 +754,7 @@ _mr_draw_header_buttons :: proc(e: ^Editor, font: rl.Font, px, py, pw: f32) -> f
 			rl.DrawRectangleRec(r, GITD_HEADER)
 			rl.DrawRectangleLinesEx(r, 1, GITD_BORDER)
 			tw := ui_text_w(font, label, FONT_SIZE - 2)
-			rl.DrawTextEx(font, to_cstring(label), {r.x + (w - tw) * 0.5, r.y + (MR_BTN_H - (FONT_SIZE - 2)) * 0.5}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
+			draw_text(font, to_cstring(label), {r.x + (w - tw) * 0.5, r.y + (MR_BTN_H - (FONT_SIZE - 2)) * 0.5}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
 			return false
 		}
 		return ui_button(font, r, label, false, primary)
@@ -788,7 +788,7 @@ _mr_draw_header_buttons :: proc(e: ^Editor, font: rl.Font, px, py, pw: f32) -> f
 		prog := fmt.tprintf("%d/%d resolved", mr_resolved_count(d), n)
 		tw := ui_text_w(font, prog, FONT_SIZE - 2)
 		x -= tw
-		rl.DrawTextEx(font, to_cstring(prog), {x, y + (MR_BTN_H - (FONT_SIZE - 2)) * 0.5}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
+		draw_text(font, to_cstring(prog), {x, y + (MR_BTN_H - (FONT_SIZE - 2)) * 0.5}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
 		x -= 6
 		if btn(font, &x, y, "<", enabled = _mr.active > 0) { _mr_goto_conflict(_mr.active - 1) }
 	}
@@ -842,14 +842,14 @@ _mr_draw_all_done :: proc(e: ^Editor, font: rl.Font, x, y, w, h: f32) {
 	cy := y + h * 0.38
 	_mr_draw_check(x + w * 0.5, cy - 30, 12, GITD_GREEN)
 	tw := ui_text_w(font, msg, FONT_SIZE)
-	rl.DrawTextEx(font, to_cstring(msg), {x + (w - tw) * 0.5, cy}, FONT_SIZE, CHAR_SPACING, GITD_TEXT)
+	draw_text(font, to_cstring(msg), {x + (w - tw) * 0.5, cy}, FONT_SIZE, CHAR_SPACING, GITD_TEXT)
 	if label == "" || _mr.confirm.open { return }
 	if _mr.busy { label = "Working..." }
 	bw := ui_button_w(font, label) + 20
 	if ui_button(font, {x + (w - bw) * 0.5, cy + 40, bw, 32}, label, true, true) && !_mr.busy { _mr_complete(e) }
 	hint := "Ctrl/Cmd+Enter"
 	hw := ui_text_w(font, hint, FONT_SIZE - 3)
-	rl.DrawTextEx(font, to_cstring(hint), {x + (w - hw) * 0.5, cy + 80}, FONT_SIZE - 3, CHAR_SPACING, GITD_SUBDUED)
+	draw_text(font, to_cstring(hint), {x + (w - hw) * 0.5, cy + 80}, FONT_SIZE - 3, CHAR_SPACING, GITD_SUBDUED)
 }
 
 // Vector glyphs: the editor font has no ✓ / ✕.
@@ -989,7 +989,7 @@ _mr_draw_panes :: proc(e: ^Editor, font: rl.Font, x, y, w, h: f32) {
 			text = strings.trim_right(text, "\r")
 			num := fmt.tprintf("%d", row.line + 1)
 			nw := ui_text_w(font, num, fs - 1)
-			rl.DrawTextEx(font, to_cstring(num), {px + gutter - 8 - nw, ry + 1}, fs - 1, CHAR_SPACING, GITD_SUBDUED)
+			draw_text(font, to_cstring(num), {px + gutter - 8 - nw, ry + 1}, fs - 1, CHAR_SPACING, GITD_SUBDUED)
 			if text != "" {
 				dlg_text(font, _gitd_expand_tabs(text), px + gutter, ry + 1, fs, CHAR_SPACING, GITD_TEXT, px + pane_w, 4)
 			}
@@ -1078,7 +1078,7 @@ _mr_draw_side_controls :: proc(font: rl.Font, side: Mr_Side, i: int, px, ry, pan
 		rl.DrawRectangleLinesEx(pair.r, 1, ui_with_alpha(pair.col, 120))
 		col := pair.col
 		if hover && !pair.accept { col = GITD_RED }
-		rl.DrawTextEx(font, to_cstring(pair.label), {pair.r.x + 6, ry + (h - fs) * 0.5}, fs, CHAR_SPACING, col)
+		draw_text(font, to_cstring(pair.label), {pair.r.x + 6, ry + (h - fs) * 0.5}, fs, CHAR_SPACING, col)
 		if hover && clicked { _mr_click = {i, side, pair.accept, true} }
 	}
 }

@@ -649,7 +649,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 			rl.DrawRectangleV({panel_x + 8, iy + 4}, {fw + 4, ref.y + 4}, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 60})
 			rl.DrawRectangleLinesEx({panel_x + 8, iy + 4, fw + 4, ref.y + 4}, 1, rl.Color{ACCENT_COL.r, ACCENT_COL.g, ACCENT_COL.b, 180})
 		}
-		rl.DrawTextEx(font, to_cstring(display), {panel_x + 10, iy + 6}, FONT_SIZE - 2, CHAR_SPACING, dcol)
+		draw_text(font, to_cstring(display), {panel_x + 10, iy + 6}, FONT_SIZE - 2, CHAR_SPACING, dcol)
 		if !placeholder && !ft.filter_sel_all {
 			fw := rl.MeasureTextEx(font, to_cstring(filter_str), FONT_SIZE - 2, CHAR_SPACING).x
 			rl.DrawRectangleV({panel_x + 10 + fw, iy + 6}, {2, ref.y}, ACCENT)
@@ -664,7 +664,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	if searching {
 		if total == 0 {
 			msg := "  searching..." if ft.search_active else "  no matches"
-			rl.DrawTextEx(font, to_cstring(msg), {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+			draw_text(font, to_cstring(msg), {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 		}
 		for vi in 0..<vis_count {
 			ri := ft.scroll + vi
@@ -717,7 +717,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 				_ft_draw_folder_icon(ix, iy_mid, icon_h, fc)
 				// +/- expand indicator
 				arr := "-" if nd.expanded else "+"
-				rl.DrawTextEx(font, to_cstring(arr), {ix + icon_h + 2, iy + 3}, FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
+				draw_text(font, to_cstring(arr), {ix + icon_h + 2, iy + 3}, FONT_SIZE - 4, CHAR_SPACING, SUBDUED)
 				dlg_text(font, nd.name, ix + icon_h + 12, iy + 3, FONT_SIZE - 2, CHAR_SPACING, DIR_COL, panel_x + PANEL_W - badge_w, 6)
 				// Folder with changes below: dot in the most important change's color.
 				_ft_draw_git_badge(font, gk, true, panel_x + PANEL_W, iy, ITEM_H)
@@ -757,7 +757,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		col = WARN_COL
 	}
 	_ = ch
-	rl.DrawTextEx(font, to_cstring(footer), {panel_x + 10, fy + 7}, FONT_SIZE - 3, CHAR_SPACING, col)
+	draw_text(font, to_cstring(footer), {panel_x + 10, fy + 7}, FONT_SIZE - 3, CHAR_SPACING, col)
 	dlg_end()
 }
 
@@ -974,7 +974,7 @@ _ft_draw_git_badge :: proc(font: rl.Font, kind: Tree_Git_Kind, is_dir: bool, rig
 	}
 	letter := tree_git_letter(kind)
 	lw := rl.MeasureTextEx(font, to_cstring(letter), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(letter), {right - 10 - lw, iy + 4}, FONT_SIZE - 3, CHAR_SPACING, col)
+	draw_text(font, to_cstring(letter), {right - 10 - lw, iy + 4}, FONT_SIZE - 3, CHAR_SPACING, col)
 }
 
 _ft_draw_strike :: proc(font: rl.Font, text: string, x, iy, item_h: f32, col: rl.Color) {
@@ -1128,7 +1128,7 @@ _thv_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	row_h := FONT_SIZE + LINE_SPACING
 	ly := y + HEADER_H + 6
 	if _thv.msg != "" {
-		rl.DrawTextEx(font, to_cstring(_thv.msg), {x + 12, ly}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
+		draw_text(font, to_cstring(_thv.msg), {x + 12, ly}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
 	} else {
 		vis := _thv_vis_rows()
 		gut := rl.MeasureTextEx(font, "00000", FONT_SIZE - 2, CHAR_SPACING).x
@@ -1138,7 +1138,7 @@ _thv_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			ry := ly + f32(vi) * row_h
 			if ry + row_h > y + h - FOOTER_H { break }
 			num := fmt.tprintf("%5d", li + 1)
-			rl.DrawTextEx(font, to_cstring(num), {x + 6, ry}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
+			draw_text(font, to_cstring(num), {x + 6, ry}, FONT_SIZE - 2, CHAR_SPACING, GITD_SUBDUED)
 			dlg_text(font, _thv.lines[li], x + 16 + gut, ry, FONT_SIZE - 2, CHAR_SPACING, GITD_TEXT, x + w, 8)
 		}
 	}
@@ -1146,6 +1146,6 @@ _thv_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	fy := y + h - FOOTER_H
 	rl.DrawRectangleV({x, fy}, {w, FOOTER_H}, GITD_HEADER)
 	foot := fmt.tprintf("%d lines  ↑↓ PgUp PgDn Home End scroll  Esc close", len(_thv.lines))
-	rl.DrawTextEx(font, to_cstring(foot), {x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, GITD_SUBDUED)
+	draw_text(font, to_cstring(foot), {x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, GITD_SUBDUED)
 	dlg_end()
 }

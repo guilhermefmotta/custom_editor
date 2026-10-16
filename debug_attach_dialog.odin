@@ -115,7 +115,7 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 	// Header
 	rl.DrawRectangleV({px, cy}, {PANEL_W, HEADER_H}, HDR_BG)
 	rl.DrawLineV({px, cy + HEADER_H - 1}, {px + PANEL_W, cy + HEADER_H - 1}, BORDER)
-	rl.DrawTextEx(font, "Attach to Remote Debugger", {px+12, cy + (HEADER_H-ref.y)*0.5},
+	draw_text(font, "Attach to Remote Debugger", {px+12, cy + (HEADER_H-ref.y)*0.5},
 		FONT_SIZE, CHAR_SPACING, BLUE)
 	cy += HEADER_H
 
@@ -136,7 +136,7 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 		proto_label := "JDWP (attach to JVM)" if d.protocol == .JDWP else "DAP (attach to adapter)"
 		rl.DrawRectangleV({px, cy}, {PANEL_W, ROW_H}, HDR_BG)
 		rl.DrawLineV({px, cy + ROW_H - 1}, {px + PANEL_W, cy + ROW_H - 1}, BORDER)
-		rl.DrawTextEx(font, "Protocol", {px+12, cy + (ROW_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, SUBDUED)
+		draw_text(font, "Protocol", {px+12, cy + (ROW_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, SUBDUED)
 		bdr := BLUE if d.focus == 2 else BORDER
 		lbl_w := rl.MeasureTextEx(font, to_cstring("Protocol"), FONT_SIZE-2, CHAR_SPACING).x + 8
 		bx := px + 12 + lbl_w + 10
@@ -156,7 +156,7 @@ debug_attach_draw :: proc(d: ^Debug_Attach_Dialog, e: ^Editor, font: rl.Font, sw
 
 	hint := "Tab switch field  Left/Right toggle protocol  Enter connect  Esc cancel"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE-3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hint),
+	draw_text(font, to_cstring(hint),
 		{px + PANEL_W - hw - 10, cy + FOOTER_H - ref.y - 7},
 		FONT_SIZE-3, CHAR_SPACING, SUBDUED)
 
@@ -220,7 +220,7 @@ _draw_field :: proc(font: rl.Font, ref: rl.Vector2,
 	rl.DrawLineV({px, cy + row_h - 1}, {px + pw, cy + row_h - 1}, border_col)
 
 	lbl_w := rl.MeasureTextEx(font, to_cstring(label), FONT_SIZE-2, CHAR_SPACING).x + 8
-	rl.DrawTextEx(font, to_cstring(label),
+	draw_text(font, to_cstring(label),
 		{px+12, cy + (row_h-ref.y)*0.5},
 		FONT_SIZE-2, CHAR_SPACING, subdued_col)
 

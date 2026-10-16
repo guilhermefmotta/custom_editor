@@ -195,7 +195,7 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	rl.DrawRectangleV({px, cy}, {PANEL_W, HEADER_H}, HDR_BG)
 	rl.DrawLineV({px, cy + HEADER_H - 1}, {px + PANEL_W, cy + HEADER_H - 1}, BORDER)
 	title_w := rl.MeasureTextEx(font, "Evaluate", FONT_SIZE+2, CHAR_SPACING).x
-	rl.DrawTextEx(font, "Evaluate", {px + (PANEL_W-title_w)*0.5, cy + (HEADER_H-ref.y)*0.5}, FONT_SIZE+2, CHAR_SPACING, TEXT)
+	draw_text(font, "Evaluate", {px + (PANEL_W-title_w)*0.5, cy + (HEADER_H-ref.y)*0.5}, FONT_SIZE+2, CHAR_SPACING, TEXT)
 
 	status: string
 	status_col := SUBDUED
@@ -207,11 +207,11 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	case .Stopping: status = "stopping";      status_col = SUBDUED
 	}
 	sw_s := rl.MeasureTextEx(font, to_cstring(status), FONT_SIZE-3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(status), {px + PANEL_W - sw_s - 12, cy + (HEADER_H-ref.y+2)*0.5}, FONT_SIZE-3, CHAR_SPACING, status_col)
+	draw_text(font, to_cstring(status), {px + PANEL_W - sw_s - 12, cy + (HEADER_H-ref.y+2)*0.5}, FONT_SIZE-3, CHAR_SPACING, status_col)
 	cy += HEADER_H + GAP*0.5
 
 	// ── Expression label + boxed input ───────────────────────────────
-	rl.DrawTextEx(font, "Expression:", {px+PAD_X, cy}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+	draw_text(font, "Expression:", {px+PAD_X, cy}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 	cy += LABEL_H
 
 	input_rect := rl.Rectangle{px+PAD_X, cy, PANEL_W-PAD_X*2, INPUT_H}
@@ -231,11 +231,11 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 
 	hint := "Ctrl+Enter to evaluate"
 	hint_w := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE-3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hint), {px+PANEL_W-hint_w-PAD_X, cy+2}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring(hint), {px+PANEL_W-hint_w-PAD_X, cy+2}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
 	cy += HINT_H + GAP
 
 	// ── Result label + tree ───────────────────────────────────────────
-	rl.DrawTextEx(font, "Result:", {px+PAD_X, cy}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+	draw_text(font, "Result:", {px+PAD_X, cy}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 	cy += LABEL_H
 
 	tree_rect := rl.Rectangle{px+PAD_X, cy, PANEL_W-PAD_X*2, TREE_H}
@@ -243,9 +243,9 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	rl.DrawRectangleLinesEx(tree_rect, 1, BORDER)
 
 	if m.eval_pending {
-		rl.DrawTextEx(font, "evaluating...", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+		draw_text(font, "evaluating...", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 	} else if !d.result_shown {
-		rl.DrawTextEx(font, "Ctrl+Enter to evaluate", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+		draw_text(font, "Ctrl+Enter to evaluate", {tree_rect.x+8, tree_rect.y+6}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 	} else if !m.eval_result.ok {
 		dlg_text(font, m.eval_result.result, tree_rect.x+8, tree_rect.y+6, FONT_SIZE-1, CHAR_SPACING, RED, tree_rect.x+tree_rect.width-8, 4)
 	} else {
@@ -283,32 +283,32 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 
 			if row.ref > 0 {
 				arrow := is_open ? "-" : "+"
-				rl.DrawTextEx(font, to_cstring(arrow), {tx, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+				draw_text(font, to_cstring(arrow), {tx, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 			}
 			name_x := tx + 14
 
 			if row.name == "..." {
-				rl.DrawTextEx(font, "loading...", {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+				draw_text(font, "loading...", {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 				continue
 			}
 			if row.value == "" && row.ref == 0 {
-				rl.DrawTextEx(font, to_cstring(row.name), {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+				draw_text(font, to_cstring(row.name), {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 				continue
 			}
 
 			name_col := row.depth == 0 ? BLUE : TEXT
-			rl.DrawTextEx(font, to_cstring(row.name), {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, name_col)
+			draw_text(font, to_cstring(row.name), {name_x, ty}, FONT_SIZE-1, CHAR_SPACING, name_col)
 			name_w := rl.MeasureTextEx(font, to_cstring(row.name), FONT_SIZE-1, CHAR_SPACING).x
 
 			eq_x := name_x + name_w + 6
-			rl.DrawTextEx(font, "=", {eq_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
+			draw_text(font, "=", {eq_x, ty}, FONT_SIZE-1, CHAR_SPACING, SUBDUED)
 			val_x := eq_x + 12
 
 			view_w: f32 = 0
 			if row.ref > 0 && !is_open {
 				view_lbl := "View"
 				view_w = rl.MeasureTextEx(font, to_cstring(view_lbl), FONT_SIZE-2, CHAR_SPACING).x + 8
-				rl.DrawTextEx(font, to_cstring(view_lbl), {tree_rect.x+tree_rect.width-view_w-4, ty}, FONT_SIZE-2, CHAR_SPACING, BLUE)
+				draw_text(font, to_cstring(view_lbl), {tree_rect.x+tree_rect.width-view_w-4, ty}, FONT_SIZE-2, CHAR_SPACING, BLUE)
 			}
 
 			val_col := row.ref > 0 ? YELLOW : (row.depth == 0 ? GREEN : TEXT)
@@ -330,7 +330,7 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	eval_hover := rl.CheckCollisionPointRec(mouse, eval_rect)
 	rl.DrawRectangleRec(eval_rect, eval_hover ? BLUE_HOVER : BLUE)
 	ew2 := rl.MeasureTextEx(font, to_cstring(eval_lbl), FONT_SIZE-1, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(eval_lbl), {eval_rect.x + (eval_w-ew2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, BG)
+	draw_text(font, to_cstring(eval_lbl), {eval_rect.x + (eval_w-ew2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, BG)
 	if clicked && eval_hover {
 		expr := string(d.expr_buf[:])
 		if expr != "" {
@@ -349,11 +349,11 @@ debug_eval_draw :: proc(d: ^Debug_Eval_Dialog, e: ^Editor, font: rl.Font, sw, sh
 	if close_hover { rl.DrawRectangleRec(close_rect, SEL_BG) }
 	rl.DrawRectangleLinesEx(close_rect, 1, BORDER)
 	cw2 := rl.MeasureTextEx(font, to_cstring(close_lbl), FONT_SIZE-1, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(close_lbl), {close_rect.x + (close_w-cw2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, TEXT)
+	draw_text(font, to_cstring(close_lbl), {close_rect.x + (close_w-cw2)*0.5, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, TEXT)
 	if clicked && close_hover { debug_eval_close(d) }
 
 	esc_hint := "Esc close"
-	rl.DrawTextEx(font, to_cstring(esc_hint), {px+PAD_X, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring(esc_hint), {px+PAD_X, by + (BTN_H-ref.y)*0.5}, FONT_SIZE-3, CHAR_SPACING, SUBDUED)
 
 	dlg_end()
 }

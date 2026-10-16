@@ -558,8 +558,8 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 				// drawn as a shape (fonts' metrics for these are off)
 			} else if cell.ch > ' ' {
 				gf := _tp_glyph_font(tfont, cell.ch)
-				rl.DrawTextCodepoint(gf, cell.ch, {x, y + text_dy}, FONT_SIZE, fg)
-				if .Bold in cell.attrs { rl.DrawTextCodepoint(gf, cell.ch, {x + 0.6, y + text_dy}, FONT_SIZE, fg) }
+				draw_codepoint(gf, cell.ch, {x, y + text_dy}, FONT_SIZE, fg)
+				if .Bold in cell.attrs { draw_codepoint(gf, cell.ch, {x + 0.6, y + text_dy}, FONT_SIZE, fg) }
 			}
 			w := cw * f32(max(1, int(cell.width)))
 			if .Underline in cell.attrs { rl.DrawRectangleRec({x, y + ch - 2, w, 1}, fg) }
@@ -573,7 +573,7 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		if _tp.focused {
 			rl.DrawRectangleRec(cr, CURSOR_COL)
 			cell := term.snapshot_cell(s, s.cursor_row, s.cursor_col)
-			if cell.ch > ' ' { rl.DrawTextCodepoint(_tp_glyph_font(tfont, cell.ch), cell.ch, {cr.x, cr.y + text_dy}, FONT_SIZE, BG) }
+			if cell.ch > ' ' { draw_codepoint(_tp_glyph_font(tfont, cell.ch), cell.ch, {cr.x, cr.y + text_dy}, FONT_SIZE, BG) }
 		} else {
 			rl.DrawRectangleLinesEx(cr, 1, CURSOR_COL)
 		}

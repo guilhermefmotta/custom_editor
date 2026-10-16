@@ -306,7 +306,7 @@ md_preview_draw :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, oh: f32) {
 			bullet := fmt.tprintf("%d.", b.order_num) if b.ordered else "•"
 			bw := rl.MeasureTextEx(font, to_cstring(bullet), FONT_SIZE, CHAR_SPACING).x + 8
 			if y+line_h >= oy && y <= oy+oh {
-				rl.DrawTextEx(font, to_cstring(bullet), {x0, y}, FONT_SIZE, CHAR_SPACING, TEXT)
+				draw_text(font, to_cstring(bullet), {x0, y}, FONT_SIZE, CHAR_SPACING, TEXT)
 			}
 			y = _md_draw_wrapped(font, b.spans[:], x0+bw, y, max_w-bw, FONT_SIZE, oy, oh, TEXT)
 
@@ -318,7 +318,7 @@ md_preview_draw :: proc(p: ^Pane, font: rl.Font, ox, oy, ow, oh: f32) {
 			cy := y + 4
 			for cline in b.code {
 				if cy+line_h >= oy && cy <= oy+oh {
-					rl.DrawTextEx(font, to_cstring(cline), {x0, cy}, FONT_SIZE, CHAR_SPACING, FUNC_COL)
+					draw_text(font, to_cstring(cline), {x0, cy}, FONT_SIZE, CHAR_SPACING, FUNC_COL)
 				}
 				cy += line_h
 			}
@@ -366,7 +366,7 @@ _md_draw_wrapped :: proc(font: rl.Font, spans: []Md_Span, x0, y0, max_w, size: f
 				rl.DrawRectangleV({x-2, y}, {ww+4, line_h-2}, CUR_LINE_BG)
 			}
 			if visible {
-				rl.DrawTextEx(font, wc, {x, y}, size, CHAR_SPACING, col)
+				draw_text(font, wc, {x, y}, size, CHAR_SPACING, col)
 			}
 			x += ww + space_w
 		}

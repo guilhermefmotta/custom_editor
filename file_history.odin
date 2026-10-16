@@ -486,7 +486,7 @@ _fh_draw_diff :: proc(font: rl.Font, r: rl.Rectangle, commits: []Fh_Commit) {
 			if side.line > 0 {
 				num := fmt.tprintf("%d", side.line)
 				nw  := ui_text_w(font, num, fs)
-				rl.DrawTextEx(font, to_cstring(num), {x + gutter - 8 - nw, cy + 2}, fs, CHAR_SPACING, GITD_SUBDUED)
+				draw_text(font, to_cstring(num), {x + gutter - 8 - nw, cy + 2}, fs, CHAR_SPACING, GITD_SUBDUED)
 			}
 			if side.text != "" {
 				dlg_text(font, _fh_expand_tabs(side.text), x + gutter, cy + 2, fs, CHAR_SPACING, GITD_TEXT, x + half, 6)
@@ -572,7 +572,7 @@ _fh_draw_blame :: proc(font: rl.Font, r: rl.Rectangle) -> (hovered: Fh_Blame_Lin
 
 		num := fmt.tprintf("%d", i + 1)
 		nw  := ui_text_w(font, num, fs)
-		rl.DrawTextEx(font, to_cstring(num), {r.x + GUTTER_W + num_w - 8 - nw, y + 2}, fs, CHAR_SPACING, GITD_SUBDUED)
+		draw_text(font, to_cstring(num), {r.x + GUTTER_W + num_w - 8 - nw, y + 2}, fs, CHAR_SPACING, GITD_SUBDUED)
 		if l.text != "" {
 			dlg_text(font, _fh_expand_tabs(l.text), code_x, y + 2, fs, CHAR_SPACING, GITD_TEXT, r.x + r.width, 6)
 		}

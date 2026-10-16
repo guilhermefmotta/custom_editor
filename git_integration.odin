@@ -152,7 +152,7 @@ git_draw_blame_gutter :: proc(e: ^Editor, filename: string, li: int, ox: f32, y:
 		col = rl.Color{147, 153, 178, 255} // Catppuccin subtext0
 	}
 	ref := rl.MeasureTextEx(font, "M", FONT_SIZE, CHAR_SPACING)
-	rl.DrawTextEx(font, to_cstring(label), {ox + GUTTER_PAD, y + (ch - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, col)
+	draw_text(font, to_cstring(label), {ox + GUTTER_PAD, y + (ch - ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, col)
 }
 
 // ---------------------------------------------------------------------------

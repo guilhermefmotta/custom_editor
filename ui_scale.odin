@@ -66,20 +66,50 @@ screen_h :: proc() -> i32 { return i32(f32(rl.GetScreenHeight()) / ui_scale()) }
 
 // Before reading input: mouse positions in layout coordinates.
 ui_frame_input :: proc() {
+	_frame_px_scale = ui_pixel_scale()
 	s := ui_scale()
 	rl.SetMouseScale(1 / s, 1 / s)
+}
+
+// Physical pixels per layout unit: ui_scale times the Retina scale raylib
+// applies by itself on macOS.
+ui_pixel_scale :: proc() -> f32 {
+	s := ui_scale()
+	when ODIN_OS == .Darwin {
+		if d := rl.GetWindowScaleDPI().x; d > 1 { s *= d }
+	}
+	return s
 }
 
 // After BeginDrawing / before EndDrawing: draw the frame scaled.
 // BeginMode2D drops raylib's own HIGHDPI scale matrix (macOS Retina), so the
 // camera carries it too there.
 ui_frame_begin :: proc() {
-	s := ui_scale()
-	if s == 1 { return }
-	when ODIN_OS == .Darwin {
-		if d := rl.GetWindowScaleDPI().x; d > 1 { s *= d }
-	}
-	rl.BeginMode2D(rl.Camera2D{zoom = s})
+	if ui_scale() == 1 { return }
+	rl.BeginMode2D(rl.Camera2D{zoom = ui_pixel_scale()})
+}
+
+// Text drawing with the baseline row snapped to a whole physical pixel.
+// Layout centers text with expressions like (row_h - size) * 0.5, which
+// often land between two pixel rows; the texture filter then spreads every
+// glyph over both and text looks soft (most visible at 1x and 125%).
+// Only y is snapped: glyph x positions inside a run are fractional anyway
+// (monospace advances), and moving x would misalign text with the cursor.
+_snap_y :: proc(y: f32) -> f32 {
+	s := _frame_px_scale
+	return math.round(y * s) / s
+}
+
+// ui_pixel_scale read once per frame (ui_frame_input): text is drawn
+// thousands of times per frame.
+_frame_px_scale: f32 = 1
+
+draw_text :: proc(font: rl.Font, text: cstring, pos: rl.Vector2, size, spacing: f32, tint: rl.Color) {
+	rl.DrawTextEx(font, text, {pos.x, _snap_y(pos.y)}, size, spacing, tint)
+}
+
+draw_codepoint :: proc(font: rl.Font, cp: rune, pos: rl.Vector2, size: f32, tint: rl.Color) {
+	rl.DrawTextCodepoint(font, cp, {pos.x, _snap_y(pos.y)}, size, tint)
 }
 ui_frame_end :: proc() {
 	if ui_scale() != 1 { rl.EndMode2D() }

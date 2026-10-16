@@ -347,7 +347,7 @@ debug_panel_draw :: proc(e: ^Editor, d: ^Debug_Panel, font: rl.Font, sw, sh, msg
 	HEADER_H :: f32(30)
 	rl.DrawRectangleV({0, py}, {sw, HEADER_H}, DBGP_HDR_BG)
 	rl.DrawLineV({0, py + HEADER_H - 1}, {sw, py + HEADER_H - 1}, DBGP_BORDER)
-	rl.DrawTextEx(font, "Debug", {10, py + (HEADER_H-ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, DBGP_BLUE)
+	draw_text(font, "Debug", {10, py + (HEADER_H-ref.y)*0.5}, FONT_SIZE, CHAR_SPACING, DBGP_BLUE)
 
 	btns := []Tool_Btn{
 		{"Restart",    {}, state != .Idle},
@@ -365,7 +365,7 @@ debug_panel_draw :: proc(e: ^Editor, d: ^Debug_Panel, font: rl.Font, sw, sh, msg
 		col := (b.enabled ? DBGP_TEXT : DBGP_SUBDUED)
 		hovered := rl.CheckCollisionPointRec(mouse, b.rect)
 		if hovered && b.enabled { rl.DrawRectangleRec(b.rect, DBGP_SEL) }
-		rl.DrawTextEx(font, to_cstring(b.label), {b.rect.x+8, py + (HEADER_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, col)
+		draw_text(font, to_cstring(b.label), {b.rect.x+8, py + (HEADER_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, col)
 		if hovered && b.enabled && clicked {
 			switch i {
 			case 0: dbg.session_restart(m)
@@ -383,7 +383,7 @@ debug_panel_draw :: proc(e: ^Editor, d: ^Debug_Panel, font: rl.Font, sw, sh, msg
 	status_s := state == .Idle ? "not connected" : (state == .Running ? "running" : (state == .Paused ? "paused" : "..."))
 	status_col := state == .Paused ? DBGP_BLUE : (state == .Running ? DBGP_GREEN : DBGP_SUBDUED)
 	sw_s := rl.MeasureTextEx(font, to_cstring(status_s), FONT_SIZE-3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(status_s), {sw - sw_s - 10, py + (HEADER_H-ref.y+2)*0.5}, FONT_SIZE-3, CHAR_SPACING, status_col)
+	draw_text(font, to_cstring(status_s), {sw - sw_s - 10, py + (HEADER_H-ref.y+2)*0.5}, FONT_SIZE-3, CHAR_SPACING, status_col)
 
 	cy := py + HEADER_H
 
@@ -397,7 +397,7 @@ debug_panel_draw :: proc(e: ^Editor, d: ^Debug_Panel, font: rl.Font, sw, sh, msg
 		is_active := i == d.active_tab
 		if is_active { rl.DrawLineV({tx+8, cy+TAB_H-2}, {tx+tw-8, cy+TAB_H-2}, DBGP_BLUE) }
 		col := is_active ? DBGP_BLUE : DBGP_SUBDUED
-		rl.DrawTextEx(font, to_cstring(label), {tx+8, cy + (TAB_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, col)
+		draw_text(font, to_cstring(label), {tx+8, cy + (TAB_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, col)
 		if clicked && rl.CheckCollisionPointRec(mouse, rect) { d.active_tab = i }
 		tx += tw + 4
 	}
@@ -429,7 +429,7 @@ _debug_panel_draw_console :: proc(d: ^Debug_Panel, m: ^dbg.Debug_Manager, font: 
 		dlg_text(font, l.text, ox+8, ly, FONT_SIZE-2, CHAR_SPACING, col, ox+ow-8, 4)
 	}
 	if len(lines) == 0 {
-		rl.DrawTextEx(font, "(no output yet)", {ox+8, oy+4}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
+		draw_text(font, "(no output yet)", {ox+8, oy+4}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
 	}
 }
 
@@ -442,7 +442,7 @@ _debug_panel_draw_vars :: proc(e: ^Editor, d: ^Debug_Panel, m: ^dbg.Debug_Manage
 	rl.DrawLineV({ox, oy+INPUT_H-1}, {ox+ow, oy+INPUT_H-1}, DBGP_BORDER)
 	lbl := to_cstring("Evaluate: ")
 	lbl_w := rl.MeasureTextEx(font, lbl, FONT_SIZE-1, CHAR_SPACING).x
-	rl.DrawTextEx(font, lbl, {ox+8, oy + (INPUT_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, DBGP_BLUE)
+	draw_text(font, lbl, {ox+8, oy + (INPUT_H-ref.y)*0.5}, FONT_SIZE-1, CHAR_SPACING, DBGP_BLUE)
 	expr_s := string(d.expr_buf[:])
 	text_x := ox + 8 + lbl_w
 	dlg_text(font, expr_s if expr_s != "" else "type expression, Ctrl+Space to complete",
@@ -457,11 +457,11 @@ _debug_panel_draw_vars :: proc(e: ^Editor, d: ^Debug_Panel, m: ^dbg.Debug_Manage
 	if d.result_shown {
 		res := m.eval_result
 		if m.eval_pending {
-			rl.DrawTextEx(font, "evaluating...", {ox+ow-120, oy + (INPUT_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
+			draw_text(font, "evaluating...", {ox+ow-120, oy + (INPUT_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
 		} else {
 			res_col := res.ok ? DBGP_GREEN : DBGP_RED
 			res_w := rl.MeasureTextEx(font, to_cstring(res.result), FONT_SIZE-2, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(res.result), {ox+ow-res_w-10, oy + (INPUT_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, res_col)
+			draw_text(font, to_cstring(res.result), {ox+ow-res_w-10, oy + (INPUT_H-ref.y)*0.5}, FONT_SIZE-2, CHAR_SPACING, res_col)
 		}
 	}
 
@@ -474,7 +474,7 @@ _debug_panel_draw_vars :: proc(e: ^Editor, d: ^Debug_Panel, m: ^dbg.Debug_Manage
 	n_vis := int((oy+oh-body_top) / FRAME_H)
 	if len(frames) == 0 {
 		msg := dbg.manager_get_state(m) == .Idle ? "not connected" : "running..."
-		rl.DrawTextEx(font, to_cstring(msg), {ox+8, body_top+4}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
+		draw_text(font, to_cstring(msg), {ox+8, body_top+4}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
 	} else {
 		if d.frame_scroll >= len(frames) { d.frame_scroll = max(0, len(frames)-1) }
 		for vi in 0..<n_vis {
@@ -490,7 +490,7 @@ _debug_panel_draw_vars :: proc(e: ^Editor, d: ^Debug_Panel, m: ^dbg.Debug_Manage
 			}
 			ty := fy + (FRAME_H-ref.y)*0.5
 			num_s := fmt.tprintf("#%d", fi)
-			rl.DrawTextEx(font, to_cstring(num_s), {ox+6, ty}, FONT_SIZE-3, CHAR_SPACING, DBGP_SUBDUED)
+			draw_text(font, to_cstring(num_s), {ox+6, ty}, FONT_SIZE-3, CHAR_SPACING, DBGP_SUBDUED)
 			num_w := rl.MeasureTextEx(font, to_cstring(num_s), FONT_SIZE-3, CHAR_SPACING).x
 			name_col := is_active ? DBGP_BLUE : DBGP_TEXT
 			has_src := f.source != "" && f.line > 0
@@ -512,7 +512,7 @@ _debug_panel_draw_vars :: proc(e: ^Editor, d: ^Debug_Panel, m: ^dbg.Debug_Manage
 	n_var_vis := int((oy+oh-body_top) / VAR_H)
 	if len(vars) == 0 {
 		msg := dbg.manager_get_state(m) == .Paused ? "no locals in scope" : "not paused"
-		rl.DrawTextEx(font, to_cstring(msg), {vx, body_top+4}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
+		draw_text(font, to_cstring(msg), {vx, body_top+4}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
 	} else {
 		if d.var_scroll > max(0, len(vars)-n_var_vis) { d.var_scroll = max(0, len(vars)-n_var_vis) }
 		for vi in 0..<n_var_vis {
@@ -522,8 +522,8 @@ _debug_panel_draw_vars :: proc(e: ^Editor, d: ^Debug_Panel, m: ^dbg.Debug_Manage
 			vy := body_top + f32(vi)*VAR_H
 			ty := vy + (VAR_H-ref.y)*0.5
 			name_w := rl.MeasureTextEx(font, to_cstring(v.name), FONT_SIZE-2, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(v.name), {vx, ty}, FONT_SIZE-2, CHAR_SPACING, DBGP_BLUE)
-			rl.DrawTextEx(font, "=", {vx+name_w+6, ty}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
+			draw_text(font, to_cstring(v.name), {vx, ty}, FONT_SIZE-2, CHAR_SPACING, DBGP_BLUE)
+			draw_text(font, "=", {vx+name_w+6, ty}, FONT_SIZE-2, CHAR_SPACING, DBGP_SUBDUED)
 			dlg_text(font, v.value, vx+name_w+20, ty, FONT_SIZE-2, CHAR_SPACING, DBGP_TEXT, ox+ow-8, 2)
 		}
 	}
@@ -579,10 +579,10 @@ _eval_draw_suggest_popup :: proc(c: ^lsp.Language_Client, font: rl.Font, px, top
 		detail_gap := detail_w + 14 if detail_w > 0 else 0
 		max_label_w := popup_w - KIND_ICON_W - 12 - detail_gap
 		label := _truncate_str(item.label, font, max_label_w, context.temp_allocator)
-		rl.DrawTextEx(font, to_cstring(label), {label_x, item_y + 3}, FONT_SIZE, 0, label_col)
+		draw_text(font, to_cstring(label), {label_x, item_y + 3}, FONT_SIZE, 0, label_col)
 
 		if detail != "" {
-			rl.DrawTextEx(font, to_cstring(detail), {px + 10 + popup_w - detail_w - 6, item_y + 4}, FONT_SIZE - 2, 0, SUGGEST_DETAIL)
+			draw_text(font, to_cstring(detail), {px + 10 + popup_w - detail_w - 6, item_y + 4}, FONT_SIZE - 2, 0, SUGGEST_DETAIL)
 		}
 	}
 }

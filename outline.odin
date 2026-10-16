@@ -442,7 +442,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	rl.DrawLineV({panel_x, panel_y + HEADER_H - 1}, {panel_x + PANEL_W, panel_y + HEADER_H - 1}, BORDER)
 	fname := p.filename if p.filename != "" else "untitled"
 	title := fmt.tprintf("Outline  —  %s", fname)
-	rl.DrawTextEx(font, to_cstring(title), {panel_x + 10, panel_y + 9}, FONT_SIZE, CHAR_SPACING, ACCENT)
+	draw_text(font, to_cstring(title), {panel_x + 10, panel_y + 9}, FONT_SIZE, CHAR_SPACING, ACCENT)
 
 	// Filter input row
 	iy := panel_y + HEADER_H
@@ -452,7 +452,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	placeholder := len(filter_str) == 0
 	display := filter_str if !placeholder else "type to filter..."
 	dcol := TEXT if !placeholder else SUBDUED
-	rl.DrawTextEx(font, to_cstring(display), {panel_x + 10, iy + 7}, FONT_SIZE, CHAR_SPACING, dcol)
+	draw_text(font, to_cstring(display), {panel_x + 10, iy + 7}, FONT_SIZE, CHAR_SPACING, dcol)
 	if !placeholder {
 		fw := rl.MeasureTextEx(font, to_cstring(filter_str), FONT_SIZE, CHAR_SPACING).x
 		rl.DrawRectangleV({panel_x + 10 + fw, iy + 7}, {2, ref.y}, ACCENT)
@@ -461,7 +461,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	// Symbol list — panel scissor (from dlg_begin) clips all content
 	list_y := iy + INPUT_H
 	if n == 0 {
-		rl.DrawTextEx(font, "  no symbols", {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
+		draw_text(font, "  no symbols", {panel_x + 10, list_y + 4}, FONT_SIZE, CHAR_SPACING, SUBDUED)
 	} else {
 		// Clamp scroll
 		max_scroll := max(0, n - OUTLINE_MAX_VIS)
@@ -486,7 +486,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 			bw := rl.MeasureTextEx(font, to_cstring(badge), FONT_SIZE - 3, CHAR_SPACING).x
 			badge_x := panel_x + 10
 			rl.DrawRectangleRounded({badge_x - 2, row_y + 4, bw + 6, ITEM_H - 8}, 0.4, 4, rl.Color{kind_col.r, kind_col.g, kind_col.b, 40})
-			rl.DrawTextEx(font, to_cstring(badge), {badge_x, row_y + 4}, FONT_SIZE - 3, CHAR_SPACING, kind_col)
+			draw_text(font, to_cstring(badge), {badge_x, row_y + 4}, FONT_SIZE - 3, CHAR_SPACING, kind_col)
 
 			// Name — clipped to leave room for the line-number column
 			name_x    := badge_x + bw + 12
@@ -497,7 +497,7 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 			// Line number right-aligned
 			lnum := fmt.tprintf("%d", sym.line + 1)
 			lw   := rl.MeasureTextEx(font, to_cstring(lnum), FONT_SIZE - 2, CHAR_SPACING).x
-			rl.DrawTextEx(font, to_cstring(lnum), {panel_x + PANEL_W - lw - 10, row_y + 4}, FONT_SIZE - 2, CHAR_SPACING, LNUM_COL)
+			draw_text(font, to_cstring(lnum), {panel_x + PANEL_W - lw - 10, row_y + 4}, FONT_SIZE - 2, CHAR_SPACING, LNUM_COL)
 		}
 	}
 
@@ -506,10 +506,10 @@ render_outline :: proc(od: ^Outline_Dialog, p: ^Pane, font: rl.Font, sw, sh: f32
 	rl.DrawRectangleV({panel_x, fy}, {PANEL_W, FOOTER_H}, INPUT_BG)
 	rl.DrawRectangleLinesEx({panel_x, fy, PANEL_W, FOOTER_H}, 1, BORDER)
 	cnt := fmt.tprintf("%d symbol%s", n, "s" if n != 1 else "")
-	rl.DrawTextEx(font, to_cstring(cnt), {panel_x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring(cnt), {panel_x + 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	hint := "↑↓ navigate · Enter jump · Esc close"
 	hw   := rl.MeasureTextEx(font, to_cstring(hint), FONT_SIZE - 3, CHAR_SPACING).x
-	rl.DrawTextEx(font, to_cstring(hint), {panel_x + PANEL_W - hw - 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
+	draw_text(font, to_cstring(hint), {panel_x + PANEL_W - hw - 10, fy + 5}, FONT_SIZE - 3, CHAR_SPACING, SUBDUED)
 	dlg_end()
 }
 

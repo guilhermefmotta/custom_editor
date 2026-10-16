@@ -173,11 +173,11 @@ render_suggest_widget :: proc(
 		detail_gap := detail_w + 14 if detail_w > 0 else 0
 		max_label_w := WIDGET_W - KIND_ICON_W - 12 - detail_gap
 		label := _truncate_str(item.label, font, max_label_w, context.temp_allocator)
-		rl.DrawTextEx(font, to_cstring(label), {label_x, item_y + 3}, FONT_SIZE, 0, label_col)
+		draw_text(font, to_cstring(label), {label_x, item_y + 3}, FONT_SIZE, 0, label_col)
 
 		// Detail (right-aligned, dimmed)
 		if detail != "" {
-			rl.DrawTextEx(font, to_cstring(detail), {wx + WIDGET_W - detail_w - 6, item_y + 4}, FONT_SIZE - 2, 0, SUGGEST_DETAIL)
+			draw_text(font, to_cstring(detail), {wx + WIDGET_W - detail_w - 6, item_y + 4}, FONT_SIZE - 2, 0, SUGGEST_DETAIL)
 		}
 	}
 
@@ -229,7 +229,7 @@ render_hover_popup :: proc(
 		// the box width itself is capped at ow*0.6 above, but without this the
 		// text would overflow straight past the border into the code beneath.
 		line := _truncate_str(lines[i], font, max_w - 16, context.temp_allocator)
-		rl.DrawTextEx(font, to_cstring(line), {px + 8, py + 4 + f32(i) * (FONT_SIZE + 2)}, FONT_SIZE - 1, 0, SUGGEST_TEXT)
+		draw_text(font, to_cstring(line), {px + 8, py + 4 + f32(i) * (FONT_SIZE + 2)}, FONT_SIZE - 1, 0, SUGGEST_TEXT)
 	}
 }
 
@@ -358,7 +358,7 @@ render_diagnostic_inline :: proc(
 		case .Warning: msg_col = {249, 226, 175, 140}
 		case:          msg_col = {108, 112, 134, 140}
 		}
-		rl.DrawTextEx(font, to_cstring(label), {x, y}, FONT_SIZE - 2, 0, msg_col)
+		draw_text(font, to_cstring(label), {x, y}, FONT_SIZE - 2, 0, msg_col)
 		break // one per line
 	}
 }
@@ -396,7 +396,7 @@ _draw_scrollbar :: proc(x, y, w, h: f32, scroll, total, visible: int) {
 _draw_text_at :: proc(font: rl.Font, text: string, x: ^f32, y: f32, col: rl.Color) {
 	if text == "" { return }
 	cs := to_cstring(text)
-	rl.DrawTextEx(font, cs, {x^, y}, FONT_SIZE, 0, col)
+	draw_text(font, cs, {x^, y}, FONT_SIZE, 0, col)
 	x^ += rl.MeasureTextEx(font, cs, FONT_SIZE, 0).x
 }
 
@@ -431,7 +431,7 @@ _draw_kind_badge :: proc(font: rl.Font, kind: lsp.Completion_Item_Kind, x, y: f3
 	rl.DrawRectangleRounded({x, y, KIND_ICON_W, KIND_ICON_W}, 0.3, 4, bg)
 	iw := rl.MeasureTextEx(font, to_cstring(icon), FONT_SIZE-4, 0).x
 	ih := rl.MeasureTextEx(font, to_cstring(icon), FONT_SIZE-4, 0).y
-	rl.DrawTextEx(font, to_cstring(icon), {x + (KIND_ICON_W-iw)*0.5, y + (KIND_ICON_W-ih)*0.5}, FONT_SIZE-4, 0, SUGGEST_BADGE_FG)
+	draw_text(font, to_cstring(icon), {x + (KIND_ICON_W-iw)*0.5, y + (KIND_ICON_W-ih)*0.5}, FONT_SIZE-4, 0, SUGGEST_BADGE_FG)
 	return KIND_ICON_W
 }
 
