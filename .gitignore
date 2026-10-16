@@ -11,3 +11,6 @@ editor_*.log
 .#*
 *~
 editor_epic
+
+# LSP client log (written at runtime)
+lsp.log
