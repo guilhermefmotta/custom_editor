@@ -11,7 +11,7 @@ Funcionalidade: Busca de texto com escopo de branch e checkout para editar
   Cenário: Seletor de escopo na busca
     Quando eu abro a busca com Ctrl+Shift+F (Cmd+Shift+F no macOS)
     Então vejo o escopo atual "workspace" ao lado da caixa de busca
-    Quando eu pressiono Tab (ou clico no escopo)
+    Quando eu pressiono Ctrl+B (ou clico no escopo)
     Então vejo a lista "Workspace (disco)", as branches locais e as remotas
     E ao escolher uma branch a busca passa a rodar nela
     # teste: test_search_scope_entries

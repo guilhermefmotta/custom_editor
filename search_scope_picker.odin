@@ -1,8 +1,8 @@
 package editor
 
-// Scope picker of the search palette (ticket #12): Tab (or a click on the
+// Scope picker of the search palette (ticket #12): Ctrl+B (or a click on the
 // scope chip) swaps the result list for "Workspace (disk)" + local + remote
-// branches; type to filter, Enter picks, Esc/Tab goes back. Choosing a scope
+// branches; type to filter, Enter picks, Esc/Ctrl+B goes back. Choosing a scope
 // re-runs the current query in it. palette.odin's .Search mode calls in here.
 
 import "base:runtime"
@@ -86,10 +86,10 @@ _picker_open :: proc(e: ^Editor) {
 search_scope_picker_input :: proc(p: ^Palette, e: ^Editor, max_vis: int) -> bool {
 	clicked_chip := rl.IsMouseButtonPressed(.LEFT) && rl.CheckCollisionPointRec(rl.GetMousePosition(), _pk.chip)
 	if !_pk.open {
-		if (rl.IsKeyPressed(.TAB) && !ctrl()) || clicked_chip { _picker_open(e); return true }
+		if (ctrl() && rl.IsKeyPressed(.B)) || clicked_chip { _picker_open(e); return true }
 		return false
 	}
-	if rl.IsKeyPressed(.ESCAPE) || rl.IsKeyPressed(.TAB) || clicked_chip { _pk.open = false; return true }
+	if rl.IsKeyPressed(.ESCAPE) || (ctrl() && rl.IsKeyPressed(.B)) || clicked_chip { _pk.open = false; return true }
 	entries := search_scope_entries(search_scope_branches[:], string(_pk.filter[:]))
 	n := len(entries)
 	if key_rep(.UP)   { if _pk.sel > 0 { _pk.sel -= 1 } }
@@ -114,7 +114,7 @@ search_scope_picker_input :: proc(p: ^Palette, e: ^Editor, max_vis: int) -> bool
 
 // Draws the scope chip right-aligned in the query box, ending at right_x.
 search_scope_draw_chip :: proc(font: rl.Font, sc: Search_Scope, right_x, y, h: f32, accent, subdued, bg: rl.Color) {
-	label := fmt.tprintf("in: %s  [Tab]", search_scope_label(sc))
+	label := fmt.tprintf("in: %s  [Ctrl+B]", search_scope_label(sc))
 	size  := FONT_SIZE - 3
 	w := rl.MeasureTextEx(font, to_cstring(label), size, CHAR_SPACING).x + 16
 	r := rl.Rectangle{right_x - w, y + (h - 24) * 0.5, w, 24}

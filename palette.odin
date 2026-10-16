@@ -79,7 +79,7 @@ Palette :: struct {
 	scan_walker: os.Walker, // incremental file-list scan, see palette_scan_step
 	scan_active: bool,
 
-	// .Search only — which files are expanded (Ctrl+Enter toggles), showing
+	// .Search only — which files are expanded (Tab toggles), showing
 	// their full match lines inline accordion-style instead of collapsed
 	// into a single header row. Absent/false = collapsed.
 	search_expanded: map[string]bool,
@@ -277,12 +277,12 @@ palette_handle_input :: proc(p: ^Palette, e: ^Editor) {
 
 	if rl.IsKeyPressed(.ESCAPE) { p.sel_all = false; palette_close(p); return }
 
-	// Ctrl+Enter toggles the selected result's file group open/closed —
+	// Tab toggles the selected result's file group open/closed —
 	// accordion style, expanding to show every match in that file as its
 	// own full-line row. Enter below is unchanged: it always jumps straight
 	// to a location and closes the palette, whether that's a header row
 	// (jumps to the file's first match) or an individual match row.
-	if p.mode == .Search && ctrl() && rl.IsKeyPressed(.ENTER) {
+	if p.mode == .Search && rl.IsKeyPressed(.TAB) && !ctrl() && !shift() {
 		sync.mutex_lock(&p.search.mu)
 		rows := _search_build_rows(p)
 		if p.selected >= 0 && p.selected < len(rows) {
@@ -902,7 +902,7 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		}
 		// Accordion, JetBrains-style: each file starts as a collapsed
 		// header row (path:line (count), project name on the right, +/-
-		// fold indicator). Ctrl+Enter expands it into one full-line row per
+		// fold indicator). Tab expands it into one full-line row per
 		// match underneath, indented, read fresh from disk to preserve
 		// original indentation (Search_Result.ctx is whitespace-trimmed,
 		// fine for the collapsed view but not for an expanded code look).
@@ -1067,12 +1067,12 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 
 		switch {
 		case search_scope_picker_is_open():
-			footer_text = fmt.tprintf("Scope: type to filter \"%s\"  |  Enter choose  |  Esc/Tab back", search_scope_picker_filter())
+			footer_text = fmt.tprintf("Scope: type to filter \"%s\"  |  Enter choose  |  Esc/Ctrl+B back", search_scope_picker_filter())
 		case serr != "":
 			footer_text = fmt.tprintf("[%s] %s", scope_lbl, serr)
-		case phase == .Idle:    footer_text = "Type query and press Enter to search  |  Tab scope"
+		case phase == .Idle:    footer_text = "Type query and press Enter to search  |  Ctrl+B scope"
 		case phase == .Running: footer_text = fmt.tprintf("[%s] Searching... %d files  |  %d results so far", scope_lbl, n_files, n_res)
-		case phase == .Done:    footer_text = fmt.tprintf("[%s] %d results in %d files (%.0f ms)  |  Enter open  |  Ctrl+Enter expand  |  Tab scope", scope_lbl, n_res, n_files, ms)
+		case phase == .Done:    footer_text = fmt.tprintf("[%s] %d results in %d files (%.0f ms)  |  Enter open  |  Tab expand  |  Ctrl+B scope", scope_lbl, n_res, n_files, ms)
 		}
 	case .Marks:
 		n_m := 0
