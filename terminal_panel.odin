@@ -14,11 +14,17 @@ package editor
 // reach the program; Shift+Enter sends ESC CR (Meta+Enter, a newline in
 // Claude Code). Copy/paste: Cmd+C/Cmd+V on macOS, Ctrl+Shift+C/V
 // elsewhere (copies the mouse selection, or the visible screen).
+//
+// Find: Cmd+F on macOS, Ctrl+Shift+F elsewhere. Searches the scrollback and
+// the screen (case-insensitive) while you type; Enter / Up go to the
+// previous (older) match, Shift+Enter / Down to the next one, Esc closes.
+// Matches are highlighted and the view scrolls to the current one.
 
 import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:time"
 import term "terminal"
 import rl "vendor:raylib"
 
@@ -43,6 +49,7 @@ _terminal_panel_register :: proc "contextless" () {
 	ui_register_command(Command{"Terminal: New Tab", "Open a new terminal tab", _tp_cmd_new_tab, nil},
 	                    shortcut = {key = .GRAVE, mods = {.Ctrl, .Shift}})
 	ui_register_command(Command{"Terminal: Close Tab", "Close the active terminal tab", _tp_cmd_close_tab, _tp_has_tabs})
+	ui_register_command(Command{"Terminal: Find", "Search the terminal's scrollback and screen (Cmd+F / Ctrl+Shift+F)", _tp_cmd_find, _tp_has_tabs})
 }
 
 @(fini)
@@ -50,6 +57,8 @@ _terminal_panel_fini :: proc "contextless" () {
 	context = runtime.default_context()
 	for &tab in _tp.tabs { _tp_tab_destroy(&tab) }
 	delete(_tp.tabs)
+	delete(_tp.find_query)
+	delete(_tp.find_hits)
 	// Font is not unloaded: the window (GL context) is already gone here.
 }
 
@@ -82,7 +91,17 @@ _Tp :: struct {
 	// Linear mouse selection in view coordinates (row, col).
 	sel_on, selecting: bool,
 	sel_a, sel_b:      [2]int,
+	// Find bar (applies to the active tab)
+	find_open:   bool,
+	find_query:  [dynamic]u8,
+	find_sel:    bool,
+	find_hits:   [dynamic]term.Match,
+	find_cur:    int,  // index into find_hits (-1 = none)
+	find_bytes:  int,  // terminal output size at the last search
+	find_at:     time.Tick,
+	find_term:   ^term.Terminal,
 }
+TP_FIND_REFRESH :: 300 * time.Millisecond // re-search while output arrives
 @(private="file") _tp: _Tp
 
 @(private="file")
@@ -164,6 +183,26 @@ _tp_cmd_new_tab :: proc(e: ^Editor, p: ^Palette) {
 }
 
 @(private="file")
+_tp_cmd_find :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	terminal_panel_find(e)
+}
+
+// Opens the panel's find bar on the active tab, optionally with a query.
+terminal_panel_find :: proc(e: ^Editor, query := "") {
+	if len(_tp.tabs) == 0 { return }
+	ui_panel_open(e, TERMINAL_PANEL_ID)
+	_tp.focused = true
+	_tp.find_open = true
+	_tp.find_sel = query == ""
+	if query != "" {
+		clear(&_tp.find_query)
+		append(&_tp.find_query, ..transmute([]u8)query)
+	}
+	_tp_find_run(&_tp.tabs[_tp.active], true)
+}
+
+@(private="file")
 _tp_cmd_close_tab :: proc(e: ^Editor, p: ^Palette) {
 	palette_close(p)
 	_tp_close_tab(e, _tp.active)
@@ -226,6 +265,21 @@ _tp_input :: proc(e: ^Editor) -> bool {
 	}
 
 	if !_tp.focused { return inside }
+
+	// --- find bar ---
+	when ODIN_OS == .Darwin {
+		find_combo := (rl.IsKeyDown(.LEFT_SUPER) || rl.IsKeyDown(.RIGHT_SUPER)) && rl.IsKeyPressed(.F)
+	} else {
+		find_combo := (rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)) && shift() && rl.IsKeyPressed(.F)
+	}
+	if find_combo {
+		_tp_drain_chars()
+		_tp.find_open = true
+		_tp.find_sel = true // typing replaces the last query
+		_tp_find_run(tab, true)
+		return true
+	}
+	if _tp.find_open { _tp_find_input(tab); return true }
 
 	// --- keyboard ---
 	if ui_tabs_handle_input(&_tp.active, len(_tp.tabs)) { _tp.sel_on = false; return true }
@@ -438,6 +492,121 @@ _tp_colors :: proc(cell: term.Cell) -> (fg, bg: rl.Color, bg_default: bool) {
 	return
 }
 
+// ---------------------------------------------------------------------------
+// Find
+// ---------------------------------------------------------------------------
+
+// Re-runs the search on the active tab. `jump`: select the newest match and
+// scroll to it (new query); otherwise keep the current match (refresh).
+@(private="file")
+_tp_find_run :: proc(tab: ^_Tp_Tab, jump: bool) {
+	prev: term.Match
+	had := _tp.find_cur >= 0 && _tp.find_cur < len(_tp.find_hits)
+	if had { prev = _tp.find_hits[_tp.find_cur] }
+	delete(_tp.find_hits)
+	_tp.find_hits = term.search(tab.t, string(_tp.find_query[:]))
+	_tp.find_bytes = term.bytes_received(tab.t)
+	_tp.find_at = time.tick_now()
+	_tp.find_term = tab.t
+	if len(_tp.find_hits) == 0 { _tp.find_cur = -1; return }
+	if jump || !had {
+		_tp.find_cur = len(_tp.find_hits) - 1
+		_tp_find_show(tab)
+		return
+	}
+	// Same match after a refresh (closest one at or below the old position;
+	// new output can shift lines up by a few)
+	_tp.find_cur = len(_tp.find_hits) - 1
+	for h, i in _tp.find_hits {
+		if h.line > prev.line || (h.line == prev.line && h.col >= prev.col) { _tp.find_cur = i; break }
+	}
+}
+
+// Scrolls so the current match is visible (centered when it is off screen).
+@(private="file")
+_tp_find_show :: proc(tab: ^_Tp_Tab) {
+	if _tp.find_cur < 0 || _tp.find_cur >= len(_tp.find_hits) { return }
+	h := _tp.find_hits[_tp.find_cur]
+	rows := max(1, tab.snap.rows)
+	row := h.line + tab.scroll // where it sits in the current view
+	if row >= 0 && row < rows { return }
+	tab.scroll = max(0, rows / 2 - h.line)
+}
+
+@(private="file")
+_tp_find_step :: proc(tab: ^_Tp_Tab, dir: int) {
+	n := len(_tp.find_hits)
+	if n == 0 { return }
+	_tp.find_cur = (_tp.find_cur + dir + n) % n
+	_tp_find_show(tab)
+}
+
+@(private="file")
+_tp_find_input :: proc(tab: ^_Tp_Tab) {
+	switch {
+	case rl.IsKeyPressed(.ESCAPE):
+		_tp.find_open = false
+		_tp_drain_chars()
+	case _tp_pressed(.ENTER) || _tp_pressed(.KP_ENTER):
+		_tp_find_step(tab, 1 if shift() else -1)
+	case _tp_pressed(.UP):
+		_tp_find_step(tab, -1)
+	case _tp_pressed(.DOWN):
+		_tp_find_step(tab, 1)
+	case:
+		if text_input_handle(&_tp.find_query, &_tp.find_sel) { _tp_find_run(tab, true) }
+	}
+}
+
+// Range of find_hits on lines [first, last] (hits are sorted by line).
+@(private="file")
+_tp_find_visible :: proc(first, last: int) -> (lo, hi: int) {
+	if !_tp.find_open { return 0, 0 }
+	lo = len(_tp.find_hits)
+	for h, i in _tp.find_hits { if h.line >= first { lo = i; break } }
+	hi = lo
+	for hi < len(_tp.find_hits) && _tp.find_hits[hi].line <= last { hi += 1 }
+	return
+}
+
+// 0 = not a match, 1 = a match, 2 = the current match; scans only the hits
+// in [lo, hi) (the visible ones).
+@(private="file")
+_tp_find_mark :: proc(lo, hi, line, col: int) -> int {
+	for i in lo ..< hi {
+		h := _tp.find_hits[i]
+		if h.line != line { if h.line > line { break }; continue }
+		if col >= h.col && col < h.col + h.len { return 2 if i == _tp.find_cur else 1 }
+	}
+	return 0
+}
+
+@(private="file")
+_tp_find_draw :: proc(font: rl.Font, tab: ^_Tp_Tab) {
+	W :: f32(420)
+	H :: f32(30)
+	g := _tp.grid
+	r := rl.Rectangle{g.x + g.width - W - 4, g.y + 2, W, H}
+	rl.DrawRectangleRec({r.x - 1, r.y - 1, r.width + 2, r.height + 2}, ACCENT_COL)
+	rl.DrawRectangleRec(r, STATUS_BG)
+	size := FONT_SIZE - 1
+	count := "no results" if len(_tp.find_query) > 0 else ""
+	if len(_tp.find_hits) > 0 { count = fmt.tprintf("%d/%d", _tp.find_cur + 1, len(_tp.find_hits)) }
+	cw := ui_text_w(font, count, size - 1) + 12
+	ui_text(font, count, r.x + r.width - cw, r.y, H, size - 1, LINENUM if len(_tp.find_hits) == 0 else ACCENT_COL, r.x + r.width)
+	label := "Find:"
+	lw := ui_text_w(font, label, size) + 14
+	ui_text(font, label, r.x + 8, r.y, H, size, LINENUM, r.x + lw)
+	q := string(_tp.find_query[:])
+	qx := r.x + lw
+	qw := ui_text_w(font, q, size)
+	if _tp.find_sel && q != "" { rl.DrawRectangleRec({qx - 1, r.y + 5, qw + 2, H - 10}, SEL_BG) }
+	ui_text(font, q, qx, r.y, H, size, TEXT, r.x + r.width - cw)
+	if !_tp.find_sel {
+		rl.DrawRectangleRec({min(qx + qw + 1, r.x + r.width - cw), r.y + 6, 2, H - 12}, CURSOR_COL)
+	}
+}
+
 @(private="file")
 _tp_sel_range :: proc() -> (a, b: [2]int) {
 	a, b = _tp.sel_a, _tp.sel_b
@@ -518,6 +687,13 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	cols := max(1, int(_tp.grid.width / _tp.cw))
 	term.resize(t, rows, cols)
 
+	if _tp.find_open {
+		if _tp.find_term != t { _tp.find_cur = -1; _tp_find_run(tab, true) } // tab switched
+		if term.bytes_received(t) != _tp.find_bytes && time.tick_since(_tp.find_at) >= TP_FIND_REFRESH {
+			_tp_find_run(tab, false)
+		}
+	}
+
 	s := &tab.snap
 	if !tab.fresh || term.is_dirty(t) || s.scroll != tab.scroll || s.rows != rows || s.cols != cols {
 		term.snapshot(t, s, tab.scroll)
@@ -528,8 +704,14 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	gx := _tp.grid.x
 	cw, ch := _tp.cw, _tp.ch
 	text_dy := (ch - FONT_SIZE) * 0.5
+	fl, fh := _tp_find_visible(-s.scroll, s.rows - 1 - s.scroll)
 	for r in 0 ..< s.rows {
 		y := _tp.grid.y + f32(r) * ch
+		// hits of this row only
+		rl_, rh_ := fl, fl
+		for rl_ < fh && _tp.find_hits[rl_].line < r - s.scroll { rl_ += 1 }
+		rh_ = rl_
+		for rh_ < fh && _tp.find_hits[rh_].line == r - s.scroll { rh_ += 1 }
 		// Backgrounds, merged into runs.
 		run_start, run_col := -1, rl.Color{}
 		for c in 0 ..= s.cols {
@@ -537,6 +719,10 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			has := false
 			if c < s.cols {
 				_, bg, def := _tp_colors(term.snapshot_cell(s, r, c))
+				switch _tp_find_mark(rl_, rh_, r - s.scroll, c) {
+				case 1: bg = ui_with_alpha(DIAG_WARN_COL, 90); def = false
+				case 2: bg = ACCENT_COL; def = false
+				}
 				if _tp_in_sel(r, c) { bg = SEL_BG; def = false }
 				col, has = bg, !def
 			}
@@ -551,6 +737,7 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 			cell := term.snapshot_cell(s, r, c)
 			if cell.width == 0 { continue }
 			fg, _, _ := _tp_colors(cell)
+			if rh_ > rl_ && _tp_find_mark(rl_, rh_, r - s.scroll, c) == 2 { fg = BG } // readable on the accent
 			x := gx + f32(c) * cw
 			if cell.ch >= 0x2500 && cell.ch <= 0x259F && _tp_draw_box(cell.ch, {x, y, cw, ch}, fg) {
 				// drawn as rectangles
@@ -579,6 +766,12 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		}
 	}
 
+	if _tp.find_open {
+		_tp_find_draw(font, tab)
+		if term.bytes_received(t) != _tp.find_bytes { frame_request_in(0.35) } // pick up new output
+		return
+	}
+
 	// Status hints (top-right of the grid).
 	hint := ""
 	if tab.scroll > 0 { hint = fmt.tprintf("scrollback -%d/%d", tab.scroll, s.sb_len) }
@@ -590,6 +783,11 @@ _tp_draw :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 		rl.DrawRectangleRec(hr, STATUS_BG)
 		ui_text(font, hint, hr.x + 8, hr.y, hr.height, size, ACCENT_COL, hr.x + hr.width)
 	}
+}
+
+// The terminal panel is open and has the keyboard.
+terminal_panel_focused :: proc() -> bool {
+	return ui_panel_is_open(TERMINAL_PANEL_ID) && _tp.focused && len(_tp.tabs) > 0
 }
 
 // Active terminal (nil when there is none) — for other screens that need to

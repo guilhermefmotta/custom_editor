@@ -123,7 +123,11 @@ handle_debug_shortcuts :: proc(e: ^Editor) -> bool {
 	// or another dialog open, so you can keep it visible while stepping ──
 	// F9 / Ctrl+B → toggle breakpoint at current line
 	// (Ctrl+B skipped in Emacs keymap — that's C-b/move-left there)
-	if rl.IsKeyPressed(.F9) || (ctrl() && !shift() && rl.IsKeyPressed(.B) && e.cfg.editor.keymap_mode != .Emacs) {
+	// Ctrl+B only while the editor has the keys: palette, screens and a
+	// focused terminal use it themselves (scope/branch pickers, readline)
+	ctrl_b := ctrl() && !shift() && rl.IsKeyPressed(.B) && e.cfg.editor.keymap_mode != .Emacs &&
+	          !e.palette.open && !ui_any_overlay_open(TERMINAL_PANEL_ID) && !terminal_panel_focused()
+	if rl.IsKeyPressed(.F9) || ctrl_b {
 		p := active_pane(e)
 		if p.filename != "" {
 			line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)

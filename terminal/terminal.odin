@@ -44,6 +44,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "core:unicode"
 import "../wake"
 
 SCROLLBACK_MAX :: 5000
@@ -464,6 +465,59 @@ snapshot_text :: proc(s: ^Snapshot, allocator := context.allocator) -> string {
 		strings.write_string(&b, snapshot_row_text(s, r, context.temp_allocator))
 	}
 	return strings.to_string(b)
+}
+
+// ---------------------------------------------------------------------------
+// Search (scrollback + screen)
+
+// A match of `search`: `line` counts from the top of the live screen
+// (0 .. rows-1); scrollback lines are negative (-1 = the newest one). The
+// same numbering as a snapshot row minus its scroll.
+Match :: struct {
+	line, col, len: int, // col/len in cells
+}
+
+// Every case-insensitive occurrence of `query`, oldest line first.
+search :: proc(t: ^Terminal, query: string, allocator := context.allocator) -> [dynamic]Match {
+	out := make([dynamic]Match, allocator)
+	if query == "" { return out }
+	q := make([dynamic]rune, context.temp_allocator)
+	for r in query { append(&q, unicode.to_lower(r)) }
+
+	sync.mutex_lock(&t.mu)
+	defer sync.mutex_unlock(&t.mu)
+
+	runes := make([dynamic]rune, context.temp_allocator)
+	cols  := make([dynamic]int, context.temp_allocator) // cell column of each rune
+	scan :: proc(out: ^[dynamic]Match, line: int, runes: []rune, cols: []int, q: []rune) {
+		if len(q) == 0 || len(runes) < len(q) { return }
+		for i := 0; i + len(q) <= len(runes); i += 1 {
+			hit := true
+			for j in 0 ..< len(q) { if runes[i + j] != q[j] { hit = false; break } }
+			if !hit { continue }
+			last := i + len(q) - 1
+			append(out, Match{line = line, col = cols[i], len = cols[last] - cols[i] + 1})
+			i = last // no overlapping matches
+		}
+	}
+	add :: proc(runes: ^[dynamic]rune, cols: ^[dynamic]int, cell: Cell, col: int) {
+		if cell.width == 0 { return } // right half of a wide glyph
+		append(runes, unicode.to_lower(cell.ch if cell.ch != 0 else ' '))
+		append(cols, col)
+	}
+
+	for k in 0 ..< t.sb_len {
+		line := t.sb[(t.sb_head + k) % len(t.sb)]
+		clear(&runes); clear(&cols)
+		for cell, col in line { add(&runes, &cols, cell, col) }
+		scan(&out, k - t.sb_len, runes[:], cols[:], q[:])
+	}
+	for row in 0 ..< t.rows {
+		clear(&runes); clear(&cols)
+		for col in 0 ..< t.cols { add(&runes, &cols, _screen_cell(t, row, col), col) }
+		scan(&out, row, runes[:], cols[:], q[:])
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

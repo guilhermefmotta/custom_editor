@@ -264,3 +264,30 @@ test_spawn_drops_claude_session_markers :: proc(tt: ^testing.T) {
 	testing.expect(tt, env_is_session_marker("CLAUDE_CODE_SESSION_ID=x"))
 	testing.expect(tt, !env_is_session_marker("CLAUDE_CODE_USE_BEDROCK=1"), "user config passes through")
 }
+
+// Search covers the scrollback and the screen, case-insensitively.
+@(test)
+test_search_scrollback_and_screen :: proc(tt: ^testing.T) {
+	t := create(5, 30)
+	defer destroy(t)
+	for i in 1 ..= 20 { feed(t, transmute([]u8)fmt.tprintf("line %d ERROR here\r\n", i)) }
+	feed(t, transmute([]u8)string("tail error error"))
+
+	ms := search(t, "error")
+	defer delete(ms)
+	testing.expect_value(tt, len(ms), 22)
+	// oldest first: line 1 sits in the scrollback (negative line numbers)
+	testing.expect(tt, ms[0].line < 0)
+	testing.expect_value(tt, ms[0].col, 7)
+	testing.expect_value(tt, ms[0].len, 5)
+	last := ms[len(ms) - 1]
+	testing.expect(tt, last.line >= 0 && last.line < 5) // on the live screen
+	testing.expect_value(tt, last.col, 11)
+
+	none := search(t, "nothing like this")
+	defer delete(none)
+	testing.expect_value(tt, len(none), 0)
+	empty := search(t, "")
+	defer delete(empty)
+	testing.expect_value(tt, len(empty), 0)
+}

@@ -183,6 +183,14 @@ ui_panel_is_open :: proc(id: string) -> bool {
 	return p != nil && p.open
 }
 
+// An open overlay panel other than `except` (a screen that takes the keys).
+ui_any_overlay_open :: proc(except := "") -> bool {
+	for &p in _ui_panels {
+		if p.open && p.layer == .Overlay && p.input != nil && p.id != except { return true }
+	}
+	return false
+}
+
 ui_panel_open :: proc(e: ^Editor, id: string) {
 	p := ui_panel_find(id)
 	if p == nil || p.open { return }
