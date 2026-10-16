@@ -111,9 +111,9 @@ palette_init :: proc() -> Palette {
 		Command{"Close File",               "Close the current file tab (asks if unsaved)",    cmd_close_file, nil},
 		Command{"Rename File",              "Rename the current file on disk",                  cmd_rename_file, nil},
 		Command{"Delete File",              "Delete the current file from disk",                cmd_delete_file, nil},
-		Command{"Split Vertical",           "Split editor into two side-by-side panes",         cmd_split_vertical, nil},
-		Command{"Split Horizontal",         "Split editor into two stacked panes",              cmd_split_horizontal, nil},
-		Command{"Close Split",              "Close active pane, return to single pane",         cmd_close_split, nil},
+		Command{"Split Vertical",           "Split editor into two side-by-side panes (Ctrl+3)", cmd_split_vertical, nil},
+		Command{"Split Horizontal",         "Split editor into two stacked panes (Ctrl+2)",      cmd_split_horizontal, nil},
+		Command{"Close Split",              "Close active pane, return to single pane (Ctrl+1)", cmd_close_split, nil},
 		Command{"Exit",                     "Quit the editor",                                  cmd_exit, nil},
 		Command{"LSP Control",              "Open LSP server control panel",                    cmd_lsp_control, nil},
 		Command{"Go to Definition",         "Jump to where the symbol under cursor is defined", cmd_lsp_goto_definition,     _avail_definition},
@@ -709,7 +709,7 @@ _search_read_line :: proc(path: string, line_no: int) -> (line: string, ok: bool
 
 // Search_Row is the flattened, collapse-aware row list for .Search mode:
 // one header row per file, plus (only for files the user has expanded via
-// Ctrl+Enter) one row per match in that file. Caller must hold
+// Tab) one row per match in that file. Caller must hold
 // p.search.mu for the duration of use — .file/.result_idx reference
 // p.search.results, which the search worker thread can append to.
 Search_Row :: struct {

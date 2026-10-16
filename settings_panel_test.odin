@@ -6,6 +6,7 @@ package editor
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 import "core:sync"
 import "core:testing"
@@ -176,4 +177,16 @@ test_settings_invalid_value_keeps_file :: proc(t: ^testing.T) {
 	testing.expect_value(t, settings_font_path, "")
 	data, _ := os.read_entire_file(path, context.temp_allocator)
 	testing.expect_value(t, string(data), ORIG)
+}
+
+@(test)
+test_dracula_theme_loads :: proc(t: ^testing.T) {
+	e := _test_editor()
+	defer _test_editor_destroy(&e)
+	testing.expect(t, slice.contains(settings_theme_names(&e), "dracula"))
+	th, ok := e.registry.theme.themes["dracula"]
+	testing.expect(t, ok)
+	if !ok { return }
+	testing.expect_value(t, th.ui.background, conf.Color{0x28, 0x2a, 0x36, 255})
+	testing.expect_value(t, th.syntax.keyword, conf.Color{0xff, 0x79, 0xc6, 255})
 }

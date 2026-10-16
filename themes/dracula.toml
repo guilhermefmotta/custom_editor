@@ -1,0 +1,58 @@
+# Dracula theme — palette from the official spec (https://draculatheme.com/spec)
+#   background #282a36  current line/selection #44475a  foreground #f8f8f2
+#   comment #6272a4  cyan #8be9fd  green #50fa7b  orange #ffb86c  pink #ff79c6
+#   purple #bd93f9  red #ff5555  yellow #f1fa8c
+# Darker backgrounds (#21222c, #191a21) are the ones the official VS Code
+# port uses for side bars and panels.
+name = "dracula"
+
+[ui]
+background        = "#282a36"
+foreground        = "#f8f8f2"
+cursor            = "#f8f8f2"
+cursor_inactive   = "#6272a4"
+selection         = "#44475a"
+line_highlight    = "#323443"
+line_number       = "#6272a4"
+line_number_cur   = "#f8f8f2"
+status_bar_bg     = "#191a21"
+status_bar_fg     = "#f8f8f2"
+status_bar_sel_bg = "#bd93f9"
+tab_bar_bg        = "#191a21"
+tab_active_bg     = "#282a36"
+tab_active_fg     = "#f8f8f2"
+tab_inactive_bg   = "#21222c"
+tab_inactive_fg   = "#6272a4"
+sidebar_bg        = "#21222c"
+sidebar_fg        = "#f8f8f2"
+sidebar_sel_bg    = "#44475a"
+panel_bg          = "#21222c"
+border            = "#44475a"
+scrollbar         = "#21222c"
+scrollbar_thumb   = "#44475a"
+diag_error        = "#ff5555"
+diag_warn         = "#ffb86c"
+diag_info         = "#8be9fd"
+diag_hint         = "#50fa7b"
+lsp_off           = "#6272a4"
+lsp_loading       = "#f1fa8c"
+lsp_ready         = "#50fa7b"
+lsp_error         = "#ff5555"
+accent            = "#bd93f9"
+accent_fg         = "#282a36"
+
+[syntax]
+keyword     = "#ff79c6"
+string      = "#f1fa8c"
+comment     = "#6272a4"
+number      = "#bd93f9"
+type        = "#8be9fd"
+function    = "#50fa7b"
+variable    = "#f8f8f2"
+operator    = "#ff79c6"
+preproc     = "#ff79c6"
+builtin     = "#8be9fd"
+constant    = "#bd93f9"
+label       = "#8be9fd"
+escape      = "#ff79c6"
+punctuation = "#f8f8f2"
