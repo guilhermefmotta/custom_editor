@@ -584,7 +584,8 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	cw  := ref.x
 	ch  := ref.y + LINE_SPACING
 
-	PANEL_W  :: f32(360)
+	// Half the window, so long paths and the footer fit (was a fixed 360)
+	PANEL_W  := clamp(sw * 0.5, min(f32(440), sw - 40), f32(860))
 	HEADER_H :: f32(36)
 	INPUT_H  :: f32(30)
 	ITEM_H   :: f32(24)
@@ -757,7 +758,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		col = WARN_COL
 	}
 	_ = ch
-	draw_text(font, to_cstring(footer), {panel_x + 10, fy + 7}, FONT_SIZE - 3, CHAR_SPACING, col)
+	dlg_text(font, footer, panel_x + 10, fy + 7, FONT_SIZE - 3, CHAR_SPACING, col, panel_x + PANEL_W, 10)
 	dlg_end()
 }
 

@@ -172,17 +172,20 @@ load_font :: proc(pixel_size: i32) -> (font: rl.Font, custom: bool) {
 	// ASCII 32-126 (95)
 	// Latin-1 Supplement 0xA0-0xFF (96) — covers most European accented chars
 	// Latin Extended-A 0x100-0x17F (128) — covers remaining common accents
-	// UI symbols (4)
-	NUM_CP :: 95 + 96 + 128 + 4
+	// UI symbols used in labels and footers
+	UI_SYMBOLS :: [?]rune{
+		0x2190, 0x2191, 0x2192, 0x2193, // ← ↑ → ↓
+		0x2261, 0x229E,                 // ≡ ⊞
+		0x2014, 0x2022, 0x2026,         // — • …
+		0x23CE, 0x2713, 0x2717,         // ⏎ ✓ ✗
+	}
+	NUM_CP :: 95 + 96 + 128 + len(UI_SYMBOLS)
 	cps: [NUM_CP]rune
 	i := 0
 	for c := rune(32); c <= 126; c += 1 { cps[i] = c; i += 1 }
 	for c := rune(0xA0); c <= 0xFF; c += 1 { cps[i] = c; i += 1 }
 	for c := rune(0x100); c <= 0x17F; c += 1 { cps[i] = c; i += 1 }
-	cps[i] = 0x2191; i += 1 // ↑
-	cps[i] = 0x2193; i += 1 // ↓
-	cps[i] = 0x2261; i += 1 // ≡
-	cps[i] = 0x229E; i += 1 // ⊞
+	for c in UI_SYMBOLS { cps[i] = c; i += 1 }
 
 	// settings_font_path (settings_panel.odin) first, then the built-in list
 	for path, i in FONT_PATHS {
