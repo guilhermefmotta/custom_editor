@@ -1,5 +1,6 @@
 package editor
 
+import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:os"
@@ -61,6 +62,12 @@ main :: proc() {
 	when ODIN_OS == .Darwin { flags += {.WINDOW_HIGHDPI} }
 	rl.SetConfigFlags(flags)
 	rl.InitWindow(1280, 720, "editor")
+	if !rl.IsWindowReady() {
+		// No display (locked/asleep screen, headless session): nothing can be
+		// drawn, and going on would crash on the first GPU upload
+		fmt.eprintln("editor: could not open a window (is a display available?)")
+		os.exit(1)
+	}
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60) // re-set from editor.toml [window] fps_target below
 	rl.SetExitKey(.KEY_NULL) // disable ESC closing window — handled by dialogs
