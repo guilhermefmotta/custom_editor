@@ -68,6 +68,7 @@ SETTINGS_ROWS := [conf.Setting]string{
 	.Auto_Save_Delay = "Auto save delay (s)",
 	.UI_Scale        = "UI scale",
 	.Smooth_Text     = "Smooth text",
+	.Markdown_Preview = "Open Markdown as preview",
 }
 
 // Values Left/Right step through for "UI scale" (percent, 0 = auto).
@@ -144,7 +145,7 @@ settings_apply :: proc(e: ^Editor, s: conf.Setting, raw: string, path: string) -
 	case .Word_Wrap:
 		conf.config_setting_set(&e.cfg, s, v)
 		for &p in e.panes { p.word_wrap = v.b }
-	case .Tab_Size, .Auto_Save, .Auto_Save_Delay:
+	case .Tab_Size, .Auto_Save, .Auto_Save_Delay, .Markdown_Preview:
 		conf.config_setting_set(&e.cfg, s, v) // read live from e.cfg
 	case .UI_Scale:
 		conf.config_setting_set(&e.cfg, s, v)
@@ -175,7 +176,7 @@ settings_cycle_value :: proc(e: ^Editor, s: conf.Setting, dir: int) -> string {
 	case .Keymap_Mode:
 		n := len(conf.Keymap_Mode)
 		return conf.keymap_mode_id(conf.Keymap_Mode((int(v.mode) + dir + n) % n))
-	case .Word_Wrap, .Auto_Save, .Smooth_Text:
+	case .Word_Wrap, .Auto_Save, .Smooth_Text, .Markdown_Preview:
 		return "off" if v.b else "on"
 	case .UI_Scale:
 		steps := SETTINGS_UI_SCALES
@@ -247,6 +248,19 @@ settings_panel_update :: proc(e: ^Editor, dt: f32) {
 		_st.n_panes = len(e.panes)
 	}
 	_settings_autosave(e, dt)
+	_settings_md_auto_preview(e)
+}
+
+// "Open Markdown as preview": a .md just opened in a pane (pane_open resets
+// md_preview) starts in the rendered view; toggling back to text sticks.
+@(private="file")
+_settings_md_auto_preview :: proc(e: ^Editor) {
+	if !e.cfg.editor.markdown_preview { return }
+	for &p in e.panes {
+		if p.md_preview.auto_done || !is_markdown_file(p.filename) { continue }
+		p.md_preview.auto_done = true
+		if !p.md_preview.visible { md_preview_toggle(&p) }
+	}
 }
 
 @(private="file")
@@ -325,7 +339,7 @@ _settings_begin_edit :: proc(e: ^Editor) {
 @(private="file")
 _settings_activate :: proc(e: ^Editor) {
 	switch _st.sel {
-	case .Theme, .Keymap_Mode, .Word_Wrap, .Auto_Save, .UI_Scale, .Smooth_Text:
+	case .Theme, .Keymap_Mode, .Word_Wrap, .Auto_Save, .UI_Scale, .Smooth_Text, .Markdown_Preview:
 		_settings_commit(e, _st.sel, settings_cycle_value(e, _st.sel, 1))
 	case .Font_Family, .Font_Size, .Tab_Size, .Auto_Save_Delay:
 		_settings_begin_edit(e)

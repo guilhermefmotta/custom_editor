@@ -317,6 +317,18 @@ render_pane :: proc(e: ^Editor, idx: int, font: rl.Font, ox, oy, ow, oh: f32) {
 		_render_tab_bar(p, font, ox, oy + PANE_TOP_PAD, ow, TAB_BAR_H, is_active)
 	}
 
+	// Image file: the picture replaces the text view (image_view.odin)
+	if p.image.active {
+		content_top := oy + PANE_TOP_PAD + tab_bar_h + (STATUS_H if status_top else 0)
+		content_h   := oh - PANE_TOP_PAD - tab_bar_h - STATUS_H
+		image_view_draw(p, font, ox, content_top, ow, content_h)
+
+		sy := (oy + PANE_TOP_PAD) if status_top else (oy + oh - STATUS_H)
+		rl.DrawRectangleV({ox, sy}, {ow, STATUS_H}, STATUS_BG)
+		dlg_text(font, image_view_status(p), ox + 4, sy + 3, FONT_SIZE, CHAR_SPACING, TEXT, ox + ow, 6)
+		return
+	}
+
 	// Markdown preview replaces the raw-text/gutter/status rendering below
 	// entirely — own minimal status bar, then bail before the per-line loop.
 	if p.md_preview.visible {

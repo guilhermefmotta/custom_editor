@@ -77,6 +77,7 @@ handle_input :: proc(e: ^Editor, font: rl.Font) {
 	// across Normal/Vim/Emacs — checked here, before the mode switch below,
 	// so it doesn't have to be special-cased into each mode's own dispatch.
 	if handle_md_preview(e, p) { return }
+	if handle_image_view(e, p) { return }
 
 	// Dialogs/palette/LSP-shortcuts/navigation/mouse above are shared across every
 	// keymap mode. Only "core buffer editing" (the rest of this proc, historically)
@@ -421,6 +422,18 @@ handle_mouse :: proc(e: ^Editor, font: rl.Font) {
 	sw := f32(screen_w())
 	sh := f32(screen_h()) - MSG_LINE_H
 	if e.debug_panel.visible { sh -= DEBUG_PANEL_H }
+
+	// Image panes: wheel zooms, drag pans (image_view.odin)
+	{
+		mp := rl.GetMousePosition()
+		wheel := rl.GetMouseWheelMove()
+		for i in 0 ..< len(e.panes) {
+			if image_view_mouse(&e.panes[i], mp, wheel) {
+				if rl.IsMouseButtonPressed(.LEFT) { e.active = i }
+				return
+			}
+		}
+	}
 
 	// Wheel over a pane in Markdown preview scrolls the rendered preview.
 	if wheel := rl.GetMouseWheelMove(); wheel != 0 {

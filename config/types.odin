@@ -65,6 +65,8 @@ Editor_Config :: struct {
 	status_bar_position:    string, // "top" | "bottom"
 	rulers:            []int, // vertical rulers at these columns
 	keymap_mode:       Keymap_Mode,
+	// Open .md files in the rendered preview (Ctrl/Cmd+Shift+V toggles).
+	markdown_preview:  bool,
 }
 
 // Which keybinding scheme the main text-editing input pipeline uses.

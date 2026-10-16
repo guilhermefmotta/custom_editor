@@ -47,6 +47,7 @@ Pane :: struct {
 	tabs:              [dynamic]Pane_Tab,
 	cur_tab:           int,
 	md_preview:        Md_Preview,
+	image:             Image_View, // image file: shown as a picture (image_view.odin)
 }
 
 MAX_UNDO :: 500
@@ -178,6 +179,7 @@ pane_tab_prev :: proc(p: ^Pane) {
 }
 
 pane_open :: proc(p: ^Pane, path: string) -> bool {
+	if is_image_file(path) { return _pane_open_image(p, path) }
 	data, err := os.read_entire_file(path, context.allocator)
 	if err != nil do return false
 	defer delete(data)
@@ -196,6 +198,7 @@ pane_open :: proc(p: ^Pane, path: string) -> bool {
 	p.lang     = detect_lang(path)
 	p.dirty    = false
 	md_preview_destroy(&p.md_preview) // stale preview from the previous file must not bleed through
+	p.image = {}
 	// Clear undo/redo history on file open
 	for &op in p.undo { delete(op.data) }
 	clear(&p.undo)
@@ -205,8 +208,32 @@ pane_open :: proc(p: ^Pane, path: string) -> bool {
 	return true
 }
 
+// Image files: the buffer stays empty (never written back — see pane_save)
+// and the pane shows the picture.
+@(private="file")
+_pane_open_image :: proc(p: ^Pane, path: string) -> bool {
+	if !os.exists(path) || os.is_dir(path) { return false }
+	buffer_destroy(&p.buf)
+	p.buf = buffer_init()
+	p.cursor, p.sel_anchor, p.scroll, p.scroll_anim = 0, 0, 0, 0
+	clear(&p.extras)
+	if p.filename != "" do delete(p.filename)
+	p.filename = _pane_abs(path)
+	p.lang     = detect_lang(path)
+	p.dirty    = false
+	md_preview_destroy(&p.md_preview)
+	for &op in p.undo { delete(op.data) }
+	clear(&p.undo)
+	for &op in p.redo { delete(op.data) }
+	clear(&p.redo)
+	p.u_merge = 0
+	image_view_open(p)
+	return true
+}
+
 pane_save :: proc(p: ^Pane) -> (ok: bool, msg: string) {
 	if p.filename == "" { return false, "No filename" }
+	if p.image.active { return false, "Images are read-only" } // the buffer is empty: never overwrite the file
 	text := buffer_to_string(&p.buf)
 	defer delete(text)
 	err := os.write_entire_file(p.filename, transmute([]byte)text)

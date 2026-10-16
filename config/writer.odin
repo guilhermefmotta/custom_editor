@@ -41,6 +41,7 @@ Setting :: enum u8 {
 	Auto_Save_Delay,
 	UI_Scale,
 	Smooth_Text,
+	Markdown_Preview,
 }
 
 // Location of each setting in editor.toml ("" section = top level).
@@ -57,6 +58,7 @@ SETTING_LOCATION := [Setting]Setting_Location{
 	.Auto_Save_Delay = {"editor", "auto_save_delay"},
 	.UI_Scale        = {"window", "ui_scale"},
 	.Smooth_Text     = {"font",   "smooth"},
+	.Markdown_Preview = {"editor", "markdown_preview"},
 }
 
 FONT_SIZE_MIN       :: 8   // same clamp as Ctrl+= / Ctrl+-
@@ -144,7 +146,7 @@ config_setting_parse :: proc(s: Setting, raw: string, themes: []string) -> (v: S
 		v.num = n
 		return v, ""
 
-	case .Word_Wrap, .Auto_Save, .Smooth_Text:
+	case .Word_Wrap, .Auto_Save, .Smooth_Text, .Markdown_Preview:
 		switch strings.to_lower(in_, context.temp_allocator) {
 		case "true", "on", "yes", "1":  v.b = true
 		case "false", "off", "no", "0": v.b = false
@@ -170,7 +172,7 @@ config_setting_literal :: proc(s: Setting, v: Setting_Value, allocator := contex
 	case .Theme, .Font_Family: return toml_quote(v.str, allocator)
 	case .Keymap_Mode:         return toml_quote(keymap_mode_id(v.mode), allocator)
 	case .Font_Size, .Tab_Size, .UI_Scale: return fmt.aprintf("%d", v.num, allocator = allocator)
-	case .Word_Wrap, .Auto_Save, .Smooth_Text: return strings.clone("true" if v.b else "false", allocator)
+	case .Word_Wrap, .Auto_Save, .Smooth_Text, .Markdown_Preview: return strings.clone("true" if v.b else "false", allocator)
 	case .Auto_Save_Delay:     return toml_float_literal(v.f, allocator)
 	}
 	return ""
@@ -182,7 +184,7 @@ config_setting_display :: proc(s: Setting, v: Setting_Value, allocator := contex
 	case .Theme, .Font_Family:   return strings.clone(v.str, allocator)
 	case .Keymap_Mode:           return strings.clone(keymap_mode_id(v.mode), allocator)
 	case .Font_Size, .Tab_Size:  return fmt.aprintf("%d", v.num, allocator = allocator)
-	case .Word_Wrap, .Auto_Save, .Smooth_Text: return strings.clone("on" if v.b else "off", allocator)
+	case .Word_Wrap, .Auto_Save, .Smooth_Text, .Markdown_Preview: return strings.clone("on" if v.b else "off", allocator)
 	case .UI_Scale:
 		if v.num == 0 { return strings.clone("auto", allocator) }
 		return fmt.aprintf("%d%%", v.num, allocator = allocator)
@@ -203,6 +205,7 @@ config_setting_get :: proc(c: ^Config, s: Setting) -> (v: Setting_Value) {
 	case .Auto_Save_Delay: v.f    = f64(c.editor.auto_save_delay)
 	case .UI_Scale:        v.num  = c.window.ui_scale
 	case .Smooth_Text:     v.b    = c.font.smooth
+	case .Markdown_Preview: v.b   = c.editor.markdown_preview
 	}
 	return
 }
@@ -220,6 +223,7 @@ config_setting_set :: proc(c: ^Config, s: Setting, v: Setting_Value) {
 	case .Auto_Save_Delay: c.editor.auto_save_delay = f32(v.f)
 	case .UI_Scale:        c.window.ui_scale        = v.num
 	case .Smooth_Text:     c.font.smooth            = v.b
+	case .Markdown_Preview: c.editor.markdown_preview = v.b
 	}
 }
 
