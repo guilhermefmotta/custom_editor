@@ -508,9 +508,12 @@ _vim_dispatch_motion :: proc(e: ^Editor, p: ^Pane, vs: ^Vim_State, ch: rune) -> 
 		line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)
 		_vim_finish_motion(e, p, vs, vim_line_first_nonblank(p, line), false, false)
 	case '$':
+		// Lands ON the last character (not past it); inclusive, so d$/c$/y$
+		// still reach the end of the line without taking the newline
 		line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)
 		tl := min(line+count-1, buffer_line_count(&p.buf)-1)
-		_vim_finish_motion(e, p, vs, buffer_line_start(&p.buf, tl)+buffer_line_length(&p.buf, tl), true, false)
+		last, ok := vim_line_last_char(p, tl)
+		_vim_finish_motion(e, p, vs, last, ok, false)
 	case 'G':
 		target_line := had ? count-1 : buffer_line_count(&p.buf)-1
 		_vim_finish_motion(e, p, vs, vim_goto_line(p, target_line), false, true)
@@ -541,7 +544,9 @@ _vim_finish_motion :: proc(e: ^Editor, p: ^Pane, vs: ^Vim_State, target: int, in
 		lo, hi := _vim_op_range(p, p.cursor, target, inclusive, linewise)
 		vim_do_operator(e, p, vs, lo, hi, linewise)
 	} else {
-		p.cursor = target
+		// Normal mode never rests past the last character (l, j/k onto a
+		// shorter line...), like Vim
+		p.cursor = vim_normal_clamp(p, target)
 		p.sel_anchor = p.cursor
 		_vim_clear_pending(vs)
 	}
@@ -1290,7 +1295,7 @@ vim_dispatch_visual_char :: proc(e: ^Editor, p: ^Pane, vs: ^Vim_State, ch: rune)
 	case '$':
 		line, _ := buffer_pos_to_line_col(&p.buf, p.cursor)
 		tl := min(line+count-1, buffer_line_count(&p.buf)-1)
-		p.cursor = buffer_line_start(&p.buf, tl) + buffer_line_length(&p.buf, tl)
+		p.cursor, _ = vim_line_last_char(p, tl)
 	case 'g':
 		vs.awaiting_g = true
 	case 'G':

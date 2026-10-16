@@ -160,3 +160,24 @@ vim_matching_bracket :: proc(p: ^Pane, from: int) -> (pos: int, ok: bool) {
 	}
 	return from, false
 }
+
+// Position of the last character of `line` (start of its last UTF-8
+// sequence). ok = false for an empty line (pos = the line start).
+vim_line_last_char :: proc(p: ^Pane, line: int) -> (pos: int, ok: bool) {
+	start := buffer_line_start(&p.buf, line)
+	n := buffer_line_length(&p.buf, line)
+	if n <= 0 { return start, false }
+	pos = start + n - 1
+	for pos > start && (buffer_get_byte(&p.buf, pos) & 0xC0) == 0x80 { pos -= 1 }
+	return pos, true
+}
+
+// Normal-mode cursor rule: a position at/after the end of a non-empty line
+// moves back onto its last character.
+vim_normal_clamp :: proc(p: ^Pane, pos: int) -> int {
+	pos := clamp(pos, 0, buffer_len(&p.buf))
+	line, col := buffer_pos_to_line_col(&p.buf, pos)
+	if col < buffer_line_length(&p.buf, line) { return pos }
+	last, _ := vim_line_last_char(p, line)
+	return last
+}
