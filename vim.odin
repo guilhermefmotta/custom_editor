@@ -293,6 +293,7 @@ vim_dispatch_normal_char :: proc(e: ^Editor, p: ^Pane, ch: rune) {
 		case 'v':      editor_split(e, .Vertical)
 		case 'w':      if len(e.panes) > 1 { e.active = (e.active + 1) % len(e.panes) }
 		case 'c', 'q': editor_close_split(e)
+		case 'o':      editor_close_other_panes(e)
 		}
 		_vim_clear_pending(vs)
 		return
@@ -1121,6 +1122,8 @@ vim_exec_command :: proc(e: ^Editor, p: ^Pane, cmd: string) {
 		editor_split(e, .Vertical)
 	case "clo", "close":
 		editor_close_split(e)
+	case "on", "only":
+		editor_close_other_panes(e)
 	case:
 		if strings.has_prefix(c, "tabnew ") || strings.has_prefix(c, "tabe ") {
 			path := strings.trim_space(c[strings.index(c, " ")+1:])

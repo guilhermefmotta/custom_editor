@@ -111,9 +111,10 @@ palette_init :: proc() -> Palette {
 		Command{"Close File",               "Close the current file tab (asks if unsaved)",    cmd_close_file, nil},
 		Command{"Rename File",              "Rename the current file on disk",                  cmd_rename_file, nil},
 		Command{"Delete File",              "Delete the current file from disk",                cmd_delete_file, nil},
-		Command{"Split Vertical",           "Split editor into two side-by-side panes (Ctrl+3)", cmd_split_vertical, nil},
-		Command{"Split Horizontal",         "Split editor into two stacked panes (Ctrl+2)",      cmd_split_horizontal, nil},
-		Command{"Close Split",              "Close active pane, return to single pane (Ctrl+1)", cmd_close_split, nil},
+		Command{"Split Vertical",           "Split the active pane side by side (Ctrl+3)",        cmd_split_vertical, nil},
+		Command{"Split Horizontal",         "Split the active pane top/bottom (Ctrl+2)",          cmd_split_horizontal, nil},
+		Command{"Close Split",              "Close the active pane (Ctrl+Shift+W)",             cmd_close_split, nil},
+		Command{"Close Other Panes",        "Keep only the active pane (Ctrl+1)",               cmd_close_other_panes, nil},
 		Command{"Exit",                     "Quit the editor",                                  cmd_exit, nil},
 		Command{"LSP Control",              "Open LSP server control panel",                    cmd_lsp_control, nil},
 		Command{"Go to Definition",         "Jump to where the symbol under cursor is defined", cmd_lsp_goto_definition,     _avail_definition},
@@ -1215,6 +1216,11 @@ cmd_split_vertical :: proc(e: ^Editor, p: ^Palette) {
 
 cmd_split_horizontal :: proc(e: ^Editor, p: ^Palette) {
 	editor_split(e, .Horizontal)
+	palette_close(p)
+}
+
+cmd_close_other_panes :: proc(e: ^Editor, p: ^Palette) {
+	editor_close_other_panes(e)
 	palette_close(p)
 }
 

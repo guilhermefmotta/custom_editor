@@ -185,24 +185,17 @@ render :: proc(e: ^Editor, font: rl.Font) {
 	}
 
 	// Divider(s) between panes
-	n_panes := len(e.panes)
-	if n_panes == 2 {
-		switch e.split {
-		case .Vertical:
-			mid := sw * e.split_ratio
-			rl.DrawRectangleV({mid - DIVIDER_W * 0.5, 0}, {DIVIDER_W, usable_h}, DIVIDER_COL)
-		case .Horizontal:
-			// below the repo tab strip (repos_bar_h), matching get_pane_rect
-			top := repos_bar_h(e)
-			mid := top + (usable_h - top) * e.split_ratio
-			rl.DrawRectangleV({0, mid - DIVIDER_W * 0.5}, {sw, DIVIDER_W}, DIVIDER_COL)
-		case .None:
-		}
-	} else if n_panes > 2 {
-		col_w := sw / f32(n_panes)
-		for i in 1 ..< n_panes {
-			dx := f32(i) * col_w - DIVIDER_W * 0.5
-			rl.DrawRectangleV({dx, 0}, {DIVIDER_W, usable_h}, DIVIDER_COL)
+	if len(e.panes) > 1 {
+		// below the repo tab strip (repos_bar_h), matching get_pane_rect
+		top := repos_bar_h(e)
+		lines := make([dynamic][4]f32, context.temp_allocator)
+		layout_dividers(&e.layout, 0, top, sw, usable_h - top, &lines)
+		for d in lines {
+			if d[0] == d[2] {
+				rl.DrawRectangleV({d[0] - DIVIDER_W * 0.5, d[1]}, {DIVIDER_W, d[3] - d[1]}, DIVIDER_COL)
+			} else {
+				rl.DrawRectangleV({d[0], d[1] - DIVIDER_W * 0.5}, {d[2] - d[0], DIVIDER_W}, DIVIDER_COL)
+			}
 		}
 	}
 

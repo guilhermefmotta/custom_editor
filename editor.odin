@@ -58,8 +58,9 @@ Find_Replace :: struct {
 Editor :: struct {
 	panes:           [dynamic]Pane,
 	active:          int,
-	split:           Split_Dir,
+	split:           Split_Dir, // legacy single split (old sessions); layout is the truth
 	split_ratio:     f32,
+	layout:          Pane_Layout, // pane_layout.odin
 	msg:             string,
 	palette:         Palette,
 	save_dlg:        Save_Dialog,
@@ -101,6 +102,7 @@ editor_init :: proc() -> Editor {
 	e: Editor
 	e.panes           = make([dynamic]Pane)
 	e.split_ratio     = 0.5
+	e.layout          = layout_single()
 	e.marks           = make([dynamic]Mark)
 	e.palette         = palette_init()
 	e.save_dlg.input  = make([dynamic]u8)
@@ -226,25 +228,53 @@ editor_save :: proc(e: ^Editor) -> bool {
 	return ok
 }
 
-MAX_PANES :: 4
+MAX_PANES :: 8
 
+// Splits the active pane (Emacs-style: splits nest). The new, empty pane
+// takes the right/bottom half and becomes active.
 editor_split :: proc(e: ^Editor, dir: Split_Dir) {
 	if len(e.panes) >= MAX_PANES { e.msg = fmt.tprintf("Max %d panes", MAX_PANES); return }
+	editor_layout_fix(e)
 	np := pane_init()
+	np.word_wrap = e.panes[e.active].word_wrap
 	append(&e.panes, np)
-	if len(e.panes) == 2 {
-		e.split       = dir
-		e.split_ratio = 0.5
+	if !layout_split(&e.layout, e.active, len(e.panes) - 1, dir) {
+		pane_destroy(&e.panes[len(e.panes) - 1])
+		pop(&e.panes)
+		return
 	}
 	e.active = len(e.panes) - 1
 }
 
+// Closes the active pane; its space goes to its neighbor.
 editor_close_split :: proc(e: ^Editor) {
 	if len(e.panes) <= 1 { e.msg = "Single pane"; return }
-	pane_destroy(&e.panes[e.active])
-	ordered_remove(&e.panes, e.active)
+	editor_layout_fix(e)
+	closed := e.active
+	pane_destroy(&e.panes[closed])
+	ordered_remove(&e.panes, closed)
+	layout_remove(&e.layout, closed)
 	if e.active >= len(e.panes) { e.active = len(e.panes) - 1 }
-	if len(e.panes) == 1 { e.split = .None }
+}
+
+// Keeps only the active pane (Emacs C-x 1).
+editor_close_other_panes :: proc(e: ^Editor) {
+	if len(e.panes) <= 1 { e.msg = "Single pane"; return }
+	keep := e.panes[e.active]
+	for &p, i in e.panes { if i != e.active { pane_destroy(&p) } }
+	clear(&e.panes)
+	append(&e.panes, keep)
+	e.active = 0
+	e.layout = layout_single()
+}
+
+// Repairs a layout that doesn't match the pane list (old sessions, views
+// restored with a different number of panes).
+editor_layout_fix :: proc(e: ^Editor) {
+	if !layout_valid(&e.layout, len(e.panes)) {
+		e.layout = layout_from_legacy(len(e.panes), e.split, e.split_ratio)
+	}
+	e.active = clamp(e.active, 0, max(0, len(e.panes) - 1))
 }
 
 // ---- Save As dialog ----
@@ -420,24 +450,7 @@ get_pane_rect :: proc(e: ^Editor, idx: int, sw, sh: f32) -> (x, y, w, h: f32) {
 _get_pane_rect :: proc(e: ^Editor, idx: int, sw, sh: f32) -> (x, y, w, h: f32) {
 	n := len(e.panes)
 	if n <= 1 { return 0, 0, sw, sh }
-	if n == 2 {
-		switch e.split {
-		case .Vertical:
-			mid := sw * e.split_ratio
-			if idx == 0 { return 0, 0, mid - DIVIDER_W * 0.5, sh }
-			return mid + DIVIDER_W * 0.5, 0, sw - mid - DIVIDER_W * 0.5, sh
-		case .Horizontal:
-			mid := sh * e.split_ratio
-			if idx == 0 { return 0, 0, sw, mid - DIVIDER_W * 0.5 }
-			return 0, mid + DIVIDER_W * 0.5, sw, sh - mid - DIVIDER_W * 0.5
-		case .None:
-		}
-	}
-	// 3+ panes: equal vertical columns
-	col_w := sw / f32(n)
-	cx    := f32(idx) * col_w
-	cw    := col_w
-	if idx > 0   { cx += DIVIDER_W * 0.5; cw -= DIVIDER_W * 0.5 }
-	if idx < n-1 { cw -= DIVIDER_W * 0.5 }
-	return cx, 0, cw, sh
+	editor_layout_fix(e)
+	if rx, ry, rw, rh, ok := layout_rect(&e.layout, idx, 0, 0, sw, sh, DIVIDER_W); ok { return rx, ry, rw, rh }
+	return 0, 0, sw, sh
 }

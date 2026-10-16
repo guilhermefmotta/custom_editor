@@ -50,14 +50,21 @@ _session_json_str :: proc(sb: ^strings.Builder, s: string) {
 }
 
 @(private="file")
-_session_write_view :: proc(sb: ^strings.Builder, panes: []Pane, active: int, split: Split_Dir, ratio: f32) {
+_session_write_view :: proc(sb: ^strings.Builder, panes: []Pane, active: int, split: Split_Dir, ratio: f32, layout: Pane_Layout) {
 	strings.write_string(sb, fmt.tprintf(`"active":%d,"split":"`, active))
 	switch split {
 	case .None:       strings.write_string(sb, "none")
 	case .Vertical:   strings.write_string(sb, "vertical")
 	case .Horizontal: strings.write_string(sb, "horizontal")
 	}
-	strings.write_string(sb, fmt.tprintf(`","split_ratio":%g,"panes":[`, ratio))
+	strings.write_string(sb, fmt.tprintf(`","split_ratio":%g,`, ratio))
+	l := layout
+	if len(panes) > 1 && layout_valid(&l, len(panes)) {
+		strings.write_string(sb, `"layout":`)
+		_session_json_str(sb, layout_encode(&l))
+		strings.write_string(sb, ",")
+	}
+	strings.write_string(sb, `"panes":[`)
 	for p, pi in panes {
 		if pi > 0 { strings.write_string(sb, ",") }
 		strings.write_string(sb, `{"filename":`)
@@ -85,9 +92,9 @@ session_build :: proc(e: ^Editor, allocator := context.temp_allocator) -> string
 	act := repos_active(e)
 	none := e.repos.none
 	if act == nil || none == nil {
-		_session_write_view(&sb, e.panes[:], e.active, e.split, e.split_ratio)
+		_session_write_view(&sb, e.panes[:], e.active, e.split, e.split_ratio, e.layout)
 	} else {
-		_session_write_view(&sb, none.panes[:], none.active, none.split, none.split_ratio)
+		_session_write_view(&sb, none.panes[:], none.active, none.split, none.split_ratio, none.layout)
 	}
 	strings.write_string(&sb, fmt.tprintf(`,"active_repo":%d,"repos":[`, e.repos.active))
 	for r, i in e.repos.list {
@@ -96,9 +103,9 @@ session_build :: proc(e: ^Editor, allocator := context.temp_allocator) -> string
 		_session_json_str(&sb, r.root)
 		strings.write_string(&sb, ",")
 		if r == act {
-			_session_write_view(&sb, e.panes[:], e.active, e.split, e.split_ratio)
+			_session_write_view(&sb, e.panes[:], e.active, e.split, e.split_ratio, e.layout)
 		} else {
-			_session_write_view(&sb, r.panes[:], r.active, r.split, r.split_ratio)
+			_session_write_view(&sb, r.panes[:], r.active, r.split, r.split_ratio, r.layout)
 		}
 		strings.write_string(&sb, "}")
 	}
@@ -160,7 +167,7 @@ session_apply_saved_view :: proc(e: ^Editor, r: ^Repo) {
 	ro, ok := val.(json.Object)
 	if !ok { return }
 	if v := _session_read_view(ro); v.ok && !r.has_view {
-		r.panes, r.active, r.split, r.split_ratio = v.panes, v.active, v.split, v.split_ratio
+		r.panes, r.active, r.split, r.split_ratio, r.layout = v.panes, v.active, v.split, v.split_ratio, v.layout
 		r.has_view = true
 	} else if v.ok {
 		for &p in v.panes { pane_destroy(&p) }
@@ -191,6 +198,7 @@ _View :: struct {
 	active:      int,
 	split:       Split_Dir,
 	split_ratio: f32,
+	layout:      Pane_Layout,
 	ok:          bool,
 }
 
@@ -204,6 +212,11 @@ _session_read_view :: proc(obj: json.Object) -> (v: _View) {
 			case "horizontal": v.split = .Horizontal
 			case:              v.split = .None
 			}
+		}
+	}
+	if lv, has := obj["layout"]; has {
+		if ls, ok := lv.(string); ok {
+			if l, lok := layout_decode(ls); lok { v.layout = l }
 		}
 	}
 	if rv, has := obj["split_ratio"]; has {
@@ -305,7 +318,7 @@ session_restore_from :: proc(e: ^Editor, data: string) -> bool {
 	if v := _session_read_view(obj); v.ok {
 		for &p in e.panes { pane_destroy(&p) }
 		delete(e.panes)
-		e.panes, e.active, e.split, e.split_ratio = v.panes, v.active, v.split, v.split_ratio
+		e.panes, e.active, e.split, e.split_ratio, e.layout = v.panes, v.active, v.split, v.split_ratio, v.layout
 		restored = true
 	}
 
@@ -327,7 +340,7 @@ session_restore_from :: proc(e: ^Editor, data: string) -> bool {
 		r, oerr := repos_open(e, root, activate = false)
 		if oerr != "" || r == nil { continue }
 		if v := _session_read_view(ro); v.ok && !r.has_view {
-			r.panes, r.active, r.split, r.split_ratio = v.panes, v.active, v.split, v.split_ratio
+			r.panes, r.active, r.split, r.split_ratio, r.layout = v.panes, v.active, v.split, v.split_ratio, v.layout
 			r.has_view = true
 		} else if v.ok {
 			for &p in v.panes { pane_destroy(&p) }

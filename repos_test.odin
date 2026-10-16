@@ -292,6 +292,22 @@ test_session_restores_repos :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(e2.repos.list), 0)
 }
 
+// Nested splits survive a restart (session "layout")
+@(test)
+test_session_keeps_split_layout :: proc(t: ^testing.T) {
+	e := _rt_editor(); repos_init(&e); defer _rt_editor_destroy(&e)
+	e.layout = layout_single()
+	editor_split(&e, .Horizontal)
+	editor_split(&e, .Vertical)
+	doc := strings.clone(session_build(&e), context.temp_allocator)
+	testing.expect(t, strings.contains(doc, `"layout":"H(0.500,0,V(0.500,1,2))"`))
+
+	e2 := _rt_editor(); repos_init(&e2); defer _rt_editor_destroy(&e2)
+	testing.expect(t, session_restore_from(&e2, doc))
+	testing.expect_value(t, len(e2.panes), 3)
+	testing.expect_value(t, layout_encode(&e2.layout), "H(0.500,0,V(0.500,1,2))")
+}
+
 // teste: test_repos_find_git_root_and_norm
 @(test)
 test_repos_find_git_root_and_norm :: proc(t: ^testing.T) {

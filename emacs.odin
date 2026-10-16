@@ -243,7 +243,9 @@ emacs_handle_prefix_x :: proc(e: ^Editor, p: ^Pane, es: ^Emacs_State) {
 		editor_split(e, .Horizontal)
 	case rl.IsKeyPressed(.THREE):
 		editor_split(e, .Vertical)
-	case rl.IsKeyPressed(.ONE), rl.IsKeyPressed(.ZERO):
+	case rl.IsKeyPressed(.ONE):
+		editor_close_other_panes(e)
+	case rl.IsKeyPressed(.ZERO):
 		editor_close_split(e)
 	}
 }

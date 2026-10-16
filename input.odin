@@ -339,12 +339,13 @@ handle_navigation :: proc(e: ^Editor) -> bool {
 		if !shift() && (rl.IsKeyPressed(.ZERO) || rl.IsKeyPressed(.KP_0)) { font_zoom_reset(e); return true }
 	}
 
-	// Splits like Emacs's C-x 2 / C-x 3 / C-x 1, in every keymap mode
+	// Splits like Emacs's C-x 2 / C-x 3 / C-x 1 (splits nest; 1 keeps only
+	// the active pane), in every keymap mode
 	// (Ctrl+Alt+digit stays "Repo: Switch to N")
 	if ctrl() && !alt() && !shift() {
 		if rl.IsKeyPressed(.TWO)   || rl.IsKeyPressed(.KP_2) { editor_split(e, .Horizontal); return true }
 		if rl.IsKeyPressed(.THREE) || rl.IsKeyPressed(.KP_3) { editor_split(e, .Vertical);   return true }
-		if rl.IsKeyPressed(.ONE)   || rl.IsKeyPressed(.KP_1) { editor_close_split(e);        return true }
+		if rl.IsKeyPressed(.ONE)   || rl.IsKeyPressed(.KP_1) { editor_close_other_panes(e);  return true }
 	}
 
 	// Close the current file tab (asks if unsaved). macOS: the physical Cmd+W —

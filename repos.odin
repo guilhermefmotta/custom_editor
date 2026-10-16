@@ -59,6 +59,7 @@ Repo :: struct {
 	active:      int,
 	split:       Split_Dir,
 	split_ratio: f32,
+	layout:      Pane_Layout,
 	tree_open:   bool,
 	panels:      [dynamic]string, // registered panel ids (literals) to reopen
 }
@@ -237,6 +238,7 @@ repos_open :: proc(e: ^Editor, path: string, activate := true) -> (r: ^Repo, err
 	r.root = strings.clone(root)
 	r.name = strings.clone(filepath.base(root))
 	r.split_ratio = 0.5
+	r.layout = layout_single()
 	if groot := repos_find_git_root(root); groot != "" {
 		git.git_manager_init(&r.git, groot)
 	}
@@ -439,7 +441,7 @@ _repos_finish_switch :: proc(e: ^Editor) {
 	// any repo, e.g. from the command line) to a repo opened for the first time.
 	adopt := from == set.none && to != nil && !to.has_view && repos_view_has_files(e)
 	if adopt {
-		to.panes, to.active, to.split, to.split_ratio = e.panes, e.active, e.split, e.split_ratio
+		to.panes, to.active, to.split, to.split_ratio, to.layout = e.panes, e.active, e.split, e.split_ratio, e.layout
 		to.has_view = true
 		e.panes = nil
 	} else {
@@ -493,7 +495,7 @@ repos_view_has_files :: proc(e: ^Editor) -> bool {
 @(private="file")
 _repo_take_view :: proc(r: ^Repo, e: ^Editor) {
 	if r.has_view { _repo_free_view(r, nil) }
-	r.panes, r.active, r.split, r.split_ratio = e.panes, e.active, e.split, e.split_ratio
+	r.panes, r.active, r.split, r.split_ratio, r.layout = e.panes, e.active, e.split, e.split_ratio, e.layout
 	r.has_view = true
 	e.panes = nil
 }
@@ -506,18 +508,19 @@ _repo_give_view :: proc(r: ^Repo, e: ^Editor) {
 		delete(e.panes)
 	}
 	if r.has_view && len(r.panes) > 0 {
-		e.panes, e.active, e.split, e.split_ratio = r.panes, r.active, r.split, r.split_ratio
+		e.panes, e.active, e.split, e.split_ratio, e.layout = r.panes, r.active, r.split, r.split_ratio, r.layout
 		r.panes = nil
 		r.has_view = false
 	} else {
 		if r.has_view { delete(r.panes); r.panes = nil; r.has_view = false }
 		e.panes = make([dynamic]Pane)
 		append(&e.panes, pane_init())
-		e.active, e.split, e.split_ratio = 0, .None, 0.5
+		e.active, e.split, e.split_ratio, e.layout = 0, .None, 0.5, layout_single()
 	}
 	e.active = clamp(e.active, 0, len(e.panes) - 1)
 	if len(e.panes) < 2 { e.split = .None }
 	if e.split_ratio <= 0 { e.split_ratio = 0.5 }
+	editor_layout_fix(e)
 }
 
 // ---------------------------------------------------------------------------
