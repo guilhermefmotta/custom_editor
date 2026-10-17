@@ -124,6 +124,15 @@ pty_spawn :: proc(p: ^Pty, argv: []string, cwd: string, env: []string, rows, col
 	si: STARTUPINFOEXW
 	si.StartupInfo.cb = size_of(STARTUPINFOEXW)
 	si.lpAttributeList = raw_data(p.attrs)
+	// Without explicit (invalid) std handles the child inherits the editor's
+	// own stdin/stdout when they are valid (started from a terminal, or with
+	// redirected output) instead of the pseudo console's, so it sees no TTY:
+	// `claude` then switches to --print mode and fails with "Input must be
+	// provided either through stdin or as a prompt argument".
+	si.StartupInfo.dwFlags = win.STARTF_USESTDHANDLES
+	si.StartupInfo.hStdInput = win.INVALID_HANDLE_VALUE
+	si.StartupInfo.hStdOutput = win.INVALID_HANDLE_VALUE
+	si.StartupInfo.hStdError = win.INVALID_HANDLE_VALUE
 
 	b := strings.builder_make()
 	for a, i in argv {
