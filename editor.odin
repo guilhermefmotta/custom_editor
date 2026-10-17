@@ -223,9 +223,45 @@ editor_save :: proc(e: ^Editor) -> bool {
 		save_dialog_open(e)
 		return false
 	}
+	return editor_save_pane(e, p)
+}
+
+// :wa / "Save All": every pane and every tab with unsaved changes. Buffers
+// without a file name are skipped (they need Save As).
+editor_save_all :: proc(e: ^Editor) {
+	saved, failed, unnamed := 0, 0, 0
+	for &p in e.panes {
+		s, f := pane_save_kept_tabs(&p)
+		saved += s; failed += f
+		if !p.dirty || p.image.active { continue }
+		if p.filename == "" { unnamed += 1; continue }
+		if editor_save_pane(e, &p) { saved += 1 } else { failed += 1 }
+	}
+	switch {
+	case failed > 0:  e.msg = fmt.tprintf("Saved %d, %d failed", saved, failed)
+	case unnamed > 0: e.msg = fmt.tprintf("Saved %d, %d without a name (use Save As)", saved, unnamed)
+	case saved == 0:  e.msg = "Nothing to save"
+	case:             e.msg = fmt.tprintf("Saved %d file%s", saved, "" if saved == 1 else "s")
+	}
+}
+
+// Unsaved changes left in any pane or kept tab?
+editor_any_dirty :: proc(e: ^Editor) -> bool {
+	for &p in e.panes {
+		if p.dirty && !p.image.active { return true }
+		for t, i in p.tabs { if i != p.cur_tab && t.kept && t.dirty { return true } }
+	}
+	return false
+}
+
+editor_save_pane :: proc(e: ^Editor, p: ^Pane) -> bool {
 	ok, msg := pane_save(p)
 	e.msg = msg
-	if ok { git.git_blame_invalidate(e.git_mgr, p.filename) }
+	if ok {
+		git.git_blame_invalidate(e.git_mgr, p.filename)
+		lsp_on_save(e, p)
+		lsp_format_on_save(e, p) // saves again when the reply arrives
+	}
 	return ok
 }
 

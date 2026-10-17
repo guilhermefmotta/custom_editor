@@ -1091,7 +1091,11 @@ vim_exec_command :: proc(e: ^Editor, p: ^Pane, cmd: string) {
 	switch c {
 	case "w":
 		editor_save(e)
-		lsp_on_save(e, p)
+	case "wa", "wall", "wa!", "wall!":
+		editor_save_all(e)
+	case "wqa", "wqall", "xa", "xall":
+		editor_save_all(e)
+		if !editor_any_dirty(e) { e.should_quit = true }
 	// :q closes the tab — on the last one it leaves an empty pane instead of
 	// quitting the editor (quit with :qa or Cmd/Ctrl+Q)
 	case "q":
@@ -1105,7 +1109,6 @@ vim_exec_command :: proc(e: ^Editor, p: ^Pane, cmd: string) {
 		editor_close_tab_now(e)
 	case "wq", "x", "wq!", "x!":
 		if editor_save(e) { // keep the tab if it couldn't be saved (e.g. no name yet)
-			lsp_on_save(e, p)
 			editor_close_tab_now(e)
 		}
 	case "qa", "qa!", "quitall", "quitall!":

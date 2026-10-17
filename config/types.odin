@@ -466,7 +466,7 @@ config_defaults :: proc() -> Config {
 		word_wrap        = false,
 		auto_save        = false,
 		auto_save_delay  = 1.0,
-		format_on_save   = false,
+		format_on_save   = true,
 		trim_trailing_ws = false,
 		insert_final_nl  = true,
 		bracket_matching = true,

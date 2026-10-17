@@ -69,6 +69,7 @@ SETTINGS_ROWS := [conf.Setting]string{
 	.UI_Scale        = "UI scale",
 	.Smooth_Text     = "Smooth text",
 	.Markdown_Preview = "Open Markdown as preview",
+	.Format_On_Save   = "Format on save",
 }
 
 // Values Left/Right step through for "UI scale" (percent, 0 = auto).
@@ -145,7 +146,7 @@ settings_apply :: proc(e: ^Editor, s: conf.Setting, raw: string, path: string) -
 	case .Word_Wrap:
 		conf.config_setting_set(&e.cfg, s, v)
 		for &p in e.panes { p.word_wrap = v.b }
-	case .Tab_Size, .Auto_Save, .Auto_Save_Delay, .Markdown_Preview:
+	case .Tab_Size, .Auto_Save, .Auto_Save_Delay, .Markdown_Preview, .Format_On_Save:
 		conf.config_setting_set(&e.cfg, s, v) // read live from e.cfg
 	case .UI_Scale:
 		conf.config_setting_set(&e.cfg, s, v)
@@ -176,7 +177,7 @@ settings_cycle_value :: proc(e: ^Editor, s: conf.Setting, dir: int) -> string {
 	case .Keymap_Mode:
 		n := len(conf.Keymap_Mode)
 		return conf.keymap_mode_id(conf.Keymap_Mode((int(v.mode) + dir + n) % n))
-	case .Word_Wrap, .Auto_Save, .Smooth_Text, .Markdown_Preview:
+	case .Word_Wrap, .Auto_Save, .Smooth_Text, .Markdown_Preview, .Format_On_Save:
 		return "off" if v.b else "on"
 	case .UI_Scale:
 		steps := SETTINGS_UI_SCALES
@@ -339,7 +340,7 @@ _settings_begin_edit :: proc(e: ^Editor) {
 @(private="file")
 _settings_activate :: proc(e: ^Editor) {
 	switch _st.sel {
-	case .Theme, .Keymap_Mode, .Word_Wrap, .Auto_Save, .UI_Scale, .Smooth_Text, .Markdown_Preview:
+	case .Theme, .Keymap_Mode, .Word_Wrap, .Auto_Save, .UI_Scale, .Smooth_Text, .Markdown_Preview, .Format_On_Save:
 		_settings_commit(e, _st.sel, settings_cycle_value(e, _st.sel, 1))
 	case .Font_Family, .Font_Size, .Tab_Size, .Auto_Save_Delay:
 		_settings_begin_edit(e)

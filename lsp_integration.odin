@@ -3,6 +3,7 @@ package editor
 import "core:encoding/base64"
 import "core:encoding/json"
 import "core:fmt"
+import "core:hash"
 import "core:os"
 import "core:strings"
 import "core:unicode/utf16"
@@ -1366,21 +1367,78 @@ lsp_format_document :: proc(e: ^Editor) {
 	p := active_pane(e)
 	c := _get_client(e, p)
 	if c == nil || !c.caps.has_formatting { e.msg = "LSP: format not supported"; return }
+	_lsp_format(e, p, false)
+}
+
+// After a successful save: format through the language server (setting
+// [editor] format_on_save) and save again with the result. Files without a
+// server that formats are left as they are.
+lsp_format_on_save :: proc(e: ^Editor, p: ^Pane) {
+	if !e.cfg.editor.format_on_save { return }
+	c := _get_client(e, p)
+	if c == nil || !c.caps.has_formatting { return }
+	_lsp_format(e, p, true)
+}
+
+// The reply is matched back to the pane by path and the buffer contents at
+// request time: edits made meanwhile would shift the server's ranges, so a
+// changed buffer drops the reply instead of corrupting the text.
+Format_Req :: struct {
+	e:    ^Editor,
+	path: string, // owned
+	hash: u64,
+	save: bool,
+}
+
+_buf_hash :: proc(p: ^Pane) -> u64 {
+	content := buffer_to_string(&p.buf)
+	defer delete(content)
+	return hash.fnv64a(transmute([]u8)content)
+}
+
+@(private="file")
+_lsp_format :: proc(e: ^Editor, p: ^Pane, save: bool) {
+	// The server formats its own copy: bring it up to date first
+	_flush_change(e, p)
+	p.lsp.change_pending = false
+	req := new(Format_Req)
+	req^ = {e = e, path = strings.clone(p.filename), hash = _buf_hash(p), save = save}
 	lsp.manager_format(&e.lsp_mgr, p.filename, e.cfg.editor.tab_size, true, lsp.Response_Callback{
-		proc_ = _on_format_response, user = e,
+		proc_ = _on_format_response, user = req,
 	})
 }
 
 _on_format_response :: proc(c: ^lsp.Language_Client, result: json.Value, error: json.Value, user: rawptr) {
 	defer json.destroy_value(result)
 	defer json.destroy_value(error)
-	if error != nil { return }
-	e := cast(^Editor)user
+	req := cast(^Format_Req)user
+	defer { delete(req.path); free(req) }
+	e := req.e
+	if error != nil {
+		if !req.save { e.msg = "Format failed" }
+		return
+	}
+	p: ^Pane
+	for &q in e.panes { if q.filename == req.path { p = &q; break } }
+	if p == nil { return }
+	if _buf_hash(p) != req.hash {
+		if !req.save { e.msg = "Format skipped: file changed meanwhile" }
+		return
+	}
 	arr, is_arr := result.(json.Array)
-	if !is_arr { return }
-	p := active_pane(e)
+	if !is_arr || len(arr) == 0 {
+		if !req.save { e.msg = "Already formatted" }
+		return
+	}
 	apply_text_edits_to_pane(p, arr)
-	e.msg = "Formatted"
+	_flush_change(e, p)
+	if req.save {
+		ok, msg := pane_save(p)
+		e.msg = "Saved and formatted" if ok else msg
+		if ok { lsp_on_save(e, p) }
+	} else {
+		e.msg = "Formatted"
+	}
 }
 
 // ---------------------------------------------------------------------------

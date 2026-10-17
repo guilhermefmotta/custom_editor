@@ -540,7 +540,7 @@ handle_edit_shortcuts :: proc(e: ^Editor, p: ^Pane) -> bool {
 	if rl.IsKeyPressed(.ESCAPE) && mc_has_extras(p) { mc_clear(p); return true }
 
 	if ctrl() {
-		if rl.IsKeyPressed(.S) { editor_save(e); lsp_on_save(e, active_pane(e)); return true }
+		if rl.IsKeyPressed(.S) { editor_save(e); return true }
 		if rl.IsKeyPressed(.Z) { pane_undo(p); lsp_on_text_changed(e, p); return true }
 		if rl.IsKeyPressed(.Y) { pane_redo(p); lsp_on_text_changed(e, p); return true }
 		if rl.IsKeyPressed(.D) { do_kill_line(p); lsp_on_text_changed(e, p); return true }

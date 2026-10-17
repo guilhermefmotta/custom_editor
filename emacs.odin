@@ -228,7 +228,6 @@ emacs_handle_prefix_x :: proc(e: ^Editor, p: ^Pane, es: ^Emacs_State) {
 	switch {
 	case ctrl() && rl.IsKeyPressed(.S):
 		editor_save(e)
-		lsp_on_save(e, p)
 	case ctrl() && rl.IsKeyPressed(.C):
 		e.should_quit = true
 	case ctrl() && rl.IsKeyPressed(.F):

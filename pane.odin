@@ -24,6 +24,24 @@ Pane_Tab :: struct {
 	cursor:   int,
 	scroll:   int,
 	dirty:    bool,
+	// A tab left with unsaved changes keeps its buffer and undo history here
+	// (switching back used to reload the file and lose the edits).
+	kept:     bool,
+	buf:      Gap_Buffer,
+	undo:     [dynamic]Undo_Op,
+	redo:     [dynamic]Undo_Op,
+}
+
+// Frees what a tab kept in memory (not its filename).
+pane_tab_drop_kept :: proc(t: ^Pane_Tab) {
+	if !t.kept { return }
+	buffer_destroy(&t.buf)
+	for &op in t.undo { delete(op.data) }
+	delete(t.undo)
+	for &op in t.redo { delete(op.data) }
+	delete(t.redo)
+	t.kept = false
+	t.buf, t.undo, t.redo = {}, nil, nil
 }
 
 Pane :: struct {
@@ -71,7 +89,7 @@ pane_destroy :: proc(p: ^Pane) {
 	for &op in p.redo { delete(op.data) }
 	delete(p.redo)
 	delete(p.extras)
-	for &t in p.tabs { if t.filename != "" { delete(t.filename) } }
+	for &t in p.tabs { pane_tab_drop_kept(&t); if t.filename != "" { delete(t.filename) } }
 	delete(p.tabs)
 	pane_lsp_destroy(&p.lsp)
 	md_preview_destroy(&p.md_preview)
@@ -87,6 +105,17 @@ _pane_save_tab_state :: proc(p: ^Pane) {
 	t.cursor   = p.cursor
 	t.scroll   = p.scroll
 	t.dirty    = p.dirty
+	// Unsaved edits move into the tab; the pane gets a fresh buffer (the
+	// caller loads another tab into it next)
+	pane_tab_drop_kept(t)
+	if p.dirty && !p.image.active {
+		t.kept = true
+		t.buf, t.undo, t.redo = p.buf, p.undo, p.redo
+		p.buf  = buffer_init()
+		p.undo = make([dynamic]Undo_Op)
+		p.redo = make([dynamic]Undo_Op)
+		p.u_merge = 0
+	}
 }
 
 // Open a file as a new tab (or switch to existing tab for that file).
@@ -108,7 +137,10 @@ pane_open_tab :: proc(p: ^Pane, path: string) -> bool {
 	if len(p.tabs) > 0 { _pane_save_tab_state(p) }
 
 	// Open file into buffer
-	if !pane_open(p, path) { return false }
+	if !pane_open(p, path) {
+		_pane_load_tab(p, p.cur_tab) // bring back the tab that was showing
+		return false
+	}
 
 	// Add new tab
 	new_tab := Pane_Tab{
@@ -131,12 +163,48 @@ _pane_load_tab :: proc(p: ^Pane, i: int) {
 	if i < 0 || i >= len(p.tabs) { return }
 	t := &p.tabs[i]
 	if t.filename == "" { return }
-	if !pane_open(p, t.filename) { return }
+	if t.kept {
+		_pane_restore_kept(p, t)
+	} else if !pane_open(p, t.filename) { return }
 	blen := buffer_len(&p.buf)
 	p.cursor     = clamp(t.cursor, 0, blen)
 	p.sel_anchor = p.cursor
 	p.scroll     = t.scroll
 	p.scroll_anim = f32(p.scroll)
+}
+
+// Puts a kept (unsaved) tab buffer back into the pane.
+@(private="file")
+_pane_restore_kept :: proc(p: ^Pane, t: ^Pane_Tab) {
+	buffer_destroy(&p.buf)
+	for &op in p.undo { delete(op.data) }
+	delete(p.undo)
+	for &op in p.redo { delete(op.data) }
+	delete(p.redo)
+	p.buf, p.undo, p.redo = t.buf, t.undo, t.redo
+	t.buf, t.undo, t.redo = {}, nil, nil
+	t.kept = false
+	p.u_merge = 0
+	clear(&p.extras)
+	if p.filename != "" do delete(p.filename)
+	p.filename = strings.clone(t.filename)
+	p.lang     = detect_lang(t.filename)
+	p.dirty    = true
+	md_preview_destroy(&p.md_preview)
+	p.image = {}
+}
+
+// Writes every tab with unsaved changes kept in memory (not the one
+// showing: the caller saves that through the normal path).
+pane_save_kept_tabs :: proc(p: ^Pane) -> (saved, failed: int) {
+	for &t, i in p.tabs {
+		if i == p.cur_tab || !t.kept || !t.dirty { continue }
+		text := buffer_to_string(&t.buf)
+		err := os.write_entire_file(t.filename, transmute([]byte)text)
+		delete(text)
+		if err == nil { t.dirty = false; saved += 1 } else { failed += 1 }
+	}
+	return
 }
 
 // Close current tab; switch to adjacent tab. Returns false if no more tabs.
@@ -145,6 +213,7 @@ pane_close_tab :: proc(p: ^Pane) -> bool {
 	if n <= 1 {
 		// Last tab: clear pane
 		if n == 1 {
+			pane_tab_drop_kept(&p.tabs[0])
 			if p.tabs[0].filename != "" { delete(p.tabs[0].filename) }
 			ordered_remove(&p.tabs, 0)
 		}
@@ -156,6 +225,7 @@ pane_close_tab :: proc(p: ^Pane) -> bool {
 		p.cur_tab = 0
 		return false
 	}
+	pane_tab_drop_kept(&p.tabs[p.cur_tab])
 	if p.tabs[p.cur_tab].filename != "" { delete(p.tabs[p.cur_tab].filename) }
 	ordered_remove(&p.tabs, p.cur_tab)
 	if p.cur_tab >= len(p.tabs) { p.cur_tab = len(p.tabs) - 1 }

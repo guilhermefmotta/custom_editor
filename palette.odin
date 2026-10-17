@@ -109,6 +109,7 @@ palette_init :: proc() -> Palette {
 		Command{"New Untitled Buffer",      "Empty buffer, named when first saved",              cmd_new_file, nil},
 		Command{"New Directory",            "Create a new directory in the workspace",           cmd_new_directory, nil},
 		Command{"Save File",                "Save current file to disk",                        cmd_save_file, nil},
+		Command{"Save All",                 "Save every file with unsaved changes (:wa)",       cmd_save_all, nil},
 		Command{"Close File",               "Close the current file tab (asks if unsaved)",    cmd_close_file, nil},
 		Command{"Rename File",              "Rename the current file on disk",                  cmd_rename_file, nil},
 		Command{"Delete File",              "Delete the current file from disk",                cmd_delete_file, nil},
@@ -1186,6 +1187,11 @@ cmd_new_file :: proc(e: ^Editor, p: ^Palette) {
 	ap.lang  = .None
 	ap.dirty = false
 	e.msg    = "New file"
+	palette_close(p)
+}
+
+cmd_save_all :: proc(e: ^Editor, p: ^Palette) {
+	editor_save_all(e)
 	palette_close(p)
 }
 

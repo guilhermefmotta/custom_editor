@@ -252,6 +252,7 @@ git_blame_refresh :: proc(m: ^Git_Manager, abs_path: string) -> [dynamic]Blame_L
 }
 
 git_blame_invalidate :: proc(m: ^Git_Manager, abs_path: string) {
+	if m == nil { return }
 	found_key := ""
 	for k, v in m.blame_cache {
 		if k == abs_path {
