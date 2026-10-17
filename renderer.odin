@@ -731,7 +731,7 @@ render_save_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	ty  := dy + (DIALOG_H - ref.y) * 0.5
 
 	// Label
-	label  := to_cstring("Rename: " if e.save_dlg.rename else "Save As: ")
+	label  := to_cstring("New File: " if e.save_dlg.new_file else "Rename: " if e.save_dlg.rename else "Save As: ")
 	label_w := rl.MeasureTextEx(font, label, FONT_SIZE, CHAR_SPACING).x
 	draw_text(font, label, {8, ty}, FONT_SIZE, CHAR_SPACING, LINENUM_CUR)
 
@@ -743,7 +743,7 @@ render_save_dialog :: proc(e: ^Editor, font: rl.Font, sw, sh: f32) {
 	rl.DrawRectangleV({inp_x + inp_w, ty}, {2, ref.y}, CURSOR_COL)
 
 	// Hint right-aligned
-	hint   := to_cstring("Enter to rename · Esc to cancel" if e.save_dlg.rename else "Enter to save · Esc to cancel")
+	hint   := to_cstring("Enter to create · end with / for a folder · Esc to cancel" if e.save_dlg.new_file else "Enter to rename · Esc to cancel" if e.save_dlg.rename else "Enter to save · Esc to cancel")
 	hint_w := rl.MeasureTextEx(font, hint, FONT_SIZE - 2, CHAR_SPACING).x
 	draw_text(font, hint, {sw - hint_w - 8, ty + 2}, FONT_SIZE - 2, CHAR_SPACING, SUBDUED)
 }

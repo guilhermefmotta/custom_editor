@@ -15,6 +15,7 @@ DIVIDER_W :: f32(1)
 Save_Dialog :: struct {
 	open:    bool,
 	rename:  bool,
+	new_file: bool, // New File prompt: create the path, then open it
 	input:   [dynamic]u8,
 	sel_all: bool,
 }
@@ -288,9 +289,23 @@ save_dialog_open :: proc(e: ^Editor) {
 	for i in 0 ..< len(s) { append(&e.save_dlg.input, s[i]) }
 }
 
+// Ctrl/Cmd+N: asks for the new file's path (prefilled with the current
+// file's folder) and creates it on Enter.
+new_file_dialog_open :: proc(e: ^Editor) {
+	e.save_dlg.open     = true
+	e.save_dlg.rename   = false
+	e.save_dlg.new_file = true
+	e.save_dlg.sel_all  = false
+	clear(&e.save_dlg.input)
+	cwd, _ := os.get_working_directory(context.temp_allocator)
+	s := new_file_prefill(active_pane(e).filename, cwd)
+	for i in 0 ..< len(s) { append(&e.save_dlg.input, s[i]) }
+}
+
 save_dialog_close :: proc(e: ^Editor) {
 	e.save_dlg.open    = false
 	e.save_dlg.rename  = false
+	e.save_dlg.new_file = false
 	e.save_dlg.sel_all = false
 	clear(&e.save_dlg.input)
 }
@@ -299,6 +314,23 @@ save_dialog_confirm :: proc(e: ^Editor) {
 	name := string(e.save_dlg.input[:])
 	if len(name) == 0 { save_dialog_close(e); return }
 	p := active_pane(e)
+	if e.save_dlg.new_file {
+		path := strings.trim_space(name)
+		r := create_new_path(path)
+		switch r {
+		case .Created_Dir:  e.msg = fmt.tprintf("Folder %s created", strings.trim_right(path, "/\\"))
+		case .Invalid:      e.msg = "Not a valid new file name"
+		case .Failed:       e.msg = fmt.tprintf("Could not create %s", path)
+		case .Created_File, .Exists:
+			save_dialog_close(e)
+			if editor_open(e, path) {
+				e.msg = fmt.tprintf("%s already exists — opened", path) if r == .Exists else fmt.tprintf("Created %s", path)
+			}
+			return
+		}
+		save_dialog_close(e)
+		return
+	}
 	if e.save_dlg.rename {
 		old := p.filename
 		err := os.rename(old, name)

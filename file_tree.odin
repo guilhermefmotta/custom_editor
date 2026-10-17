@@ -9,7 +9,7 @@ import "core:strings"
 import git "./git"
 import rl "vendor:raylib"
 
-File_Tree_Mode :: enum { Browse, Rename, Confirm_Delete, Make_Dir }
+File_Tree_Mode :: enum { Browse, Rename, Confirm_Delete, Make_Dir, Make_File }
 
 File_Tree_Node :: struct {
 	name:     string, // display name (heap) — may be a compacted chain like "java/com/example/demo"
@@ -368,6 +368,7 @@ file_tree_handle_input :: proc(ft: ^File_Tree, e: ^Editor) {
 	case .Browse:          file_tree_browse_input(ft, e)
 	case .Rename:          file_tree_text_input(ft, e, .Rename)
 	case .Make_Dir:        file_tree_text_input(ft, e, .Make_Dir)
+	case .Make_File:       file_tree_text_input(ft, e, .Make_File)
 	case .Confirm_Delete:  file_tree_delete_input(ft, e)
 	}
 }
@@ -493,9 +494,11 @@ file_tree_browse_input :: proc(ft: ^File_Tree, e: ^Editor) {
 			return
 		}
 
+		// Ctrl+N new file, Ctrl+Shift+N new folder (in the selected folder,
+		// or next to the selected file)
 		if ctrl() && rl.IsKeyPressed(.N) {
 			clear(&ft.input_buf)
-			ft.mode       = .Make_Dir
+			ft.mode       = .Make_Dir if shift() else .Make_File
 			ft.status_msg = ""
 			return
 		}
@@ -542,6 +545,26 @@ file_tree_text_input :: proc(ft: ^File_Tree, e: ^Editor, mode: File_Tree_Mode) {
 				return
 			} else {
 				ft.status_msg = "Failed to create directory"
+			}
+		case .Make_File:
+			parent := "."
+			if ft.selected < len(ft.nodes) {
+				nd := &ft.nodes[ft.selected]
+				parent = nd.path if nd.is_dir else filepath.dir(nd.path)
+			}
+			newp, _ := filepath.join({parent, name}, context.temp_allocator)
+			if new_path_is_dir(name) { newp = strings.concatenate({newp, "/"}, context.temp_allocator) }
+			switch create_new_path(newp) {
+			case .Created_File, .Exists:
+				file_tree_close(ft)
+				editor_open(e, newp)
+				return
+			case .Created_Dir:
+				ft.status_msg = "Directory created"
+				file_tree_open(ft)
+				return
+			case .Invalid: ft.status_msg = "Not a valid new file name"
+			case .Failed:  ft.status_msg = "Failed to create file"
 			}
 		case .Browse, .Confirm_Delete:
 		}
@@ -623,6 +646,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	case .Browse:         title = "File Tree — only changed" if ft.changed_only else "File Tree"
 	case .Rename:         title = fmt.tprintf("Rename: %s", string(ft.input_buf[:]))
 	case .Make_Dir:       title = fmt.tprintf("New Dir: %s", string(ft.input_buf[:]))
+	case .Make_File:      title = fmt.tprintf("New File: %s", string(ft.input_buf[:]))
 	case .Confirm_Delete:
 		if ft.selected < len(ft.nodes) {
 			title = fmt.tprintf("Delete %s? [Y/N]", ft.nodes[ft.selected].name)
@@ -630,7 +654,7 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 	}
 	dlg_text(font, title, panel_x + 10, panel_y + 9, FONT_SIZE, CHAR_SPACING, ACCENT, panel_x + PANEL_W, 10)
 
-	if ft.mode == .Rename || ft.mode == .Make_Dir {
+	if ft.mode == .Rename || ft.mode == .Make_Dir || ft.mode == .Make_File {
 		tx := panel_x + 10 + rl.MeasureTextEx(font, to_cstring(title), FONT_SIZE, CHAR_SPACING).x
 		rl.DrawRectangleV({tx, panel_y + 9}, {2, ref.y}, ACCENT)
 	}
@@ -749,10 +773,11 @@ render_file_tree :: proc(ft: ^File_Tree, font: rl.Font) {
 		} else if searching {
 			footer = fmt.tprintf("Searching... %d found", total) if ft.search_active else "↑↓ navigate  Enter open  Esc clear filter"
 		} else {
-			footer = "Enter open  ←→ expand  Ctrl+G changed  Ctrl+H history  Ctrl+R ren  Ctrl+D del  Ctrl+N dir"
+			footer = "Enter open  ←→ expand  Ctrl+G changed  Ctrl+H history  Ctrl+R ren  Ctrl+D del  Ctrl+N file  Ctrl+Shift+N dir"
 		}
 	case .Rename:   footer = "Type new name · Enter confirm · Esc cancel"
 	case .Make_Dir: footer = "Type directory name · Enter confirm · Esc cancel"
+	case .Make_File: footer = "Type file name (end with / for a folder) · Enter confirm · Esc cancel"
 	case .Confirm_Delete:
 		footer = ft.status_msg if ft.status_msg != "" else "Press Y to confirm delete, N or Esc to cancel"
 		col = WARN_COL

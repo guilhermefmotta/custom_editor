@@ -551,7 +551,7 @@ handle_edit_shortcuts :: proc(e: ^Editor, p: ^Pane) -> bool {
 		if rl.IsKeyPressed(.V) { paste(p); lsp_on_text_changed(e, p); return true }
 		if rl.IsKeyPressed(.F) { find_replace_open(e); return true }
 		if rl.IsKeyPressed(.G) { goto_dialog_open(e); return true }
-		if rl.IsKeyPressed(.N) { cmd_new_file(e, &e.palette); return true }
+		if rl.IsKeyPressed(.N) { new_file_dialog_open(e); return true }
 		if rl.IsKeyPressed(.P) { palette_open_files(&e.palette, e); return true }
 		if rl.IsKeyPressed(.TAB) { recents_open(&e.recents); return true }
 		if rl.IsKeyPressed(.Q)   { e.should_quit = true; return true }

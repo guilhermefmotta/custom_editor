@@ -105,7 +105,8 @@ palette_init :: proc() -> Palette {
 		Command{"List Marks",               "Browse and jump to all bookmarked lines",            cmd_list_marks, nil},
 		Command{"Outline",                  "Browse symbols in current file",                    cmd_outline, nil},
 		Command{"Go to Line",               "Jump to a specific line number",                    cmd_goto_line, nil},
-		Command{"New File",                 "Create an empty buffer",                            cmd_new_file, nil},
+		Command{"New File",                 "Create a file by name (end with / for a folder)",   cmd_new_file_named, nil},
+		Command{"New Untitled Buffer",      "Empty buffer, named when first saved",              cmd_new_file, nil},
 		Command{"New Directory",            "Create a new directory in the workspace",           cmd_new_directory, nil},
 		Command{"Save File",                "Save current file to disk",                        cmd_save_file, nil},
 		Command{"Close File",               "Close the current file tab (asks if unsaved)",    cmd_close_file, nil},
@@ -1167,6 +1168,11 @@ cmd_new_directory :: proc(e: ^Editor, p: ^Palette) {
 	file_tree_open(&e.file_tree)
 	e.file_tree.mode = .Make_Dir
 	clear(&e.file_tree.input_buf)
+}
+
+cmd_new_file_named :: proc(e: ^Editor, p: ^Palette) {
+	palette_close(p)
+	new_file_dialog_open(e)
 }
 
 cmd_new_file :: proc(e: ^Editor, p: ^Palette) {
