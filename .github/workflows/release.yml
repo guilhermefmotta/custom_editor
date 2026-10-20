@@ -43,13 +43,18 @@ jobs:
       - name: Build libvterm (vendored, static)
         run: bash terminal/libvterm/build.sh
 
+      - name: Fetch ripgrep (embedded in the binary)
+        shell: bash
+        run: bash scripts/fetch-ripgrep.sh x86_64-unknown-linux-musl
+
       - name: Build
         run: odin build . -out:editor -o:speed
 
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/editor-linux-amd64.tar.gz editor font/ themes/ editor.toml
+          mkdir -p licenses && cp bundled/ripgrep-* licenses/
+          tar -czf dist/editor-linux-amd64.tar.gz editor font/ themes/ editor.toml licenses/
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -67,6 +72,7 @@ jobs:
             | Windows (x86_64) | `editor-windows-amd64.zip` |
 
             Extract and run. The `font/` directory must stay next to the binary.
+            Text search uses a ripgrep built into the editor (licenses in `licenses/`).
           draft: false
           prerelease: false
           files: dist/editor-linux-amd64.tar.gz
@@ -93,13 +99,18 @@ jobs:
       - name: Build libvterm (vendored, static)
         run: bash terminal/libvterm/build.sh
 
+      - name: Fetch ripgrep (embedded in the binary)
+        shell: bash
+        run: bash scripts/fetch-ripgrep.sh aarch64-apple-darwin
+
       - name: Build
         run: odin build . -out:editor -o:speed
 
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/editor-macos-arm64.tar.gz editor font/ themes/ editor.toml
+          mkdir -p licenses && cp bundled/ripgrep-* licenses/
+          tar -czf dist/editor-macos-arm64.tar.gz editor font/ themes/ editor.toml licenses/
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -126,13 +137,18 @@ jobs:
       - name: Build libvterm (vendored, static)
         run: bash terminal/libvterm/build.sh
 
+      - name: Fetch ripgrep (embedded in the binary)
+        shell: bash
+        run: bash scripts/fetch-ripgrep.sh x86_64-apple-darwin
+
       - name: Build
         run: odin build . -out:editor -o:speed
 
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/editor-macos-amd64.tar.gz editor font/ themes/ editor.toml
+          mkdir -p licenses && cp bundled/ripgrep-* licenses/
+          tar -czf dist/editor-macos-amd64.tar.gz editor font/ themes/ editor.toml licenses/
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -163,6 +179,10 @@ jobs:
         shell: cmd
         run: terminal\libvterm\build.bat
 
+      - name: Fetch ripgrep (embedded in the binary)
+        shell: bash
+        run: bash scripts/fetch-ripgrep.sh x86_64-pc-windows-msvc
+
       - name: Build
         # See build.yml for why /FORCE:MULTIPLE is needed.
         run: odin build . -out:editor.exe -o:speed -extra-linker-flags:"/FORCE:MULTIPLE"
@@ -171,7 +191,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Compress-Archive -Path editor.exe, font, themes, editor.toml -DestinationPath dist\editor-windows-amd64.zip
+          New-Item -ItemType Directory -Path licenses -Force | Out-Null
+          Copy-Item bundled\ripgrep-* licenses\
+          Compress-Archive -Path editor.exe, font, themes, editor.toml, licenses -DestinationPath dist\editor-windows-amd64.zip
 
       - name: Release
         uses: softprops/action-gh-release@v2

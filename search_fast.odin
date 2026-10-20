@@ -42,13 +42,16 @@ _rg_fini :: proc "contextless" () {
 	delete(_rg_path)
 }
 
-// Absolute path of `rg`, or "" when not installed. Looks in PATH and in the
-// usual install folders a GUI app's PATH tends to miss (Homebrew, cargo).
+// Absolute path of `rg`, or "" when there is none: the one embedded in this
+// build (ripgrep_bundled.odin), else PATH and the usual install folders a
+// GUI app's PATH tends to miss (Homebrew, cargo, scoop).
 ripgrep_path :: proc() -> string {
 	sync.mutex_lock(&_rg_mu)
 	defer sync.mutex_unlock(&_rg_mu)
 	if _rg_looked { return _rg_path }
 	_rg_looked = true
+	// The copy built into the editor first (known version), then an installed one
+	if p := ripgrep_extract_embedded(); p != "" { _rg_path = p; return _rg_path }
 	if p := find_executable(SEARCH_RG_EXE); p != "" { _rg_path = p }
 	return _rg_path
 }
@@ -147,41 +150,37 @@ _search_ripgrep :: proc(s: ^Search_State, rg, query: string, include_ignored: bo
 	}
 	append(&args, "-e", query, ".")
 
-	r, w, perr := os.pipe()
-	if perr != nil { return false }
-	pr, serr := os.process_start({command = args[:], stdout = w})
-	os.close(w)
-	if serr != nil { os.close(r); return false }
+	rp, ok := rg_spawn(args[:])
+	if !ok { return false }
 
 	sync.mutex_lock(&s.mu)
 	if s.cancel {
 		sync.mutex_unlock(&s.mu)
-		_ = os.process_kill(pr)
+		rg_kill(&rp)
 	} else {
-		s.rg_proc, s.rg_running = pr, true
+		s.rg_proc, s.rg_running = rp, true
 		sync.mutex_unlock(&s.mu)
-		_rg_read_output(s, r, len(query))
+		_rg_read_output(s, &rp, len(query))
 	}
-	os.close(r)
 
 	sync.mutex_lock(&s.mu)
 	running := s.rg_running
 	s.rg_running = false
 	sync.mutex_unlock(&s.mu)
-	if running { _ = os.process_kill(pr) } // stopped early (limit reached): nothing more to read
-	_, _ = os.process_wait(pr)
+	if running { rg_kill(&rp) } // stopped early (limit reached): nothing more to read
+	rg_close(&rp)
 	return true
 }
 
 @(private="file")
-_rg_read_output :: proc(s: ^Search_State, r: ^os.File, qlen: int) {
+_rg_read_output :: proc(s: ^Search_State, rp: ^Rg_Process, qlen: int) {
 	pending := make([dynamic]u8)
 	defer delete(pending)
 	chunk: [64 * 1024]u8
 	files_seen := ""
 	for {
-		n, err := os.read(r, chunk[:])
-		if n <= 0 || err != nil { break }
+		n := rg_read(rp, chunk[:])
+		if n <= 0 { break }
 		append(&pending, ..chunk[:n])
 		start := 0
 		for i in 0 ..< len(pending) {

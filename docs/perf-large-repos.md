@@ -41,9 +41,10 @@ nova (`FindFirstFileExW` com `FindExInfoBasic`) não abre arquivo nenhum.
 
 ## Dicas para monorepos
 
-- **Instale o ripgrep** (`brew install ripgrep`, `winget install
-  BurntSushi.ripgrep.MSVC`, `scoop install ripgrep`): a busca usa ele quando
-  encontra.
+- A busca de texto usa o ripgrep que vem dentro do editor (builds de
+  release); não precisa instalar nada. Num build local sem
+  `scripts/fetch-ripgrep.sh <alvo>`, ela usa um `rg` instalado ou a busca
+  interna.
 - **Ligue o fsmonitor do git** no repo: `git config core.fsmonitor true &&
   git config core.untrackedCache true`. O `git status` passa a responder do
   monitor em vez de varrer o disco; o editor sugere isso quando o status

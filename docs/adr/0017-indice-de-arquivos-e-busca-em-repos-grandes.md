@@ -51,9 +51,15 @@ arquivos (`docs/perf-large-repos.md`) e lido no código:
    continuando no quadro seguinte (`frame_collect` mantém o loop acordado
    enquanto há trabalho). Sem teto de arquivos. No Ctrl+P, ao terminar,
    arquivos cujo **nome** contém a busca vêm primeiro, caminhos curtos antes.
-4. **Busca de texto: ripgrep quando instalado, pool de threads senão**
-   (`search_fast.odin`). O `rg` é procurado no PATH e nas pastas comuns que o
-   PATH de app gráfico não tem (Homebrew, cargo, scoop). Saída lida em
+4. **Busca de texto: ripgrep embutido no editor, pool de threads senão**
+   (`search_fast.odin`, `ripgrep_bundled.odin`). O build de release baixa um
+   ripgrep fixo (14.1.1, SHA-256 conferido, `scripts/fetch-ripgrep.sh`) para
+   `bundled/` e o `#load` o embute no executável (+4 MB); na primeira busca
+   ele é gravado uma vez na pasta de cache do usuário, com o hash no nome, e
+   roda de lá — o editor não depende de nada instalado. Build local sem
+   `bundled/` cai num `rg` instalado (PATH, Homebrew, cargo, scoop). No
+   Windows o processo é criado com `CREATE_NO_WINDOW` (o editor não tem
+   console; sem isso piscaria uma janela a cada busca). Saída lida em
    streaming; cancelar uma busca (nova tecla) **mata o processo** em vez de
    esperar. Sem `rg`: N threads sobre o snapshot, um buffer reaproveitado por
    thread, arquivos acima de 8 MB e binários pulados. Os dois devolvem o mesmo

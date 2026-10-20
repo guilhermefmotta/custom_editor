@@ -151,3 +151,17 @@ test_pal_files_rank :: proc(t: ^testing.T) {
 	testing.expect_value(t, files[hits[2]], "pkg/main/y.go")
 	testing.expect_value(t, files[hits[3]], "src/main/long/path/x.go")
 }
+
+@(test)
+test_ripgrep_embedded_extracts_and_runs :: proc(t: ^testing.T) {
+	if len(RG_EMBEDDED) == 0 { return } // dev build without bundled/rg
+	path := ripgrep_extract_embedded()
+	defer delete(path)
+	testing.expect(t, path != "")
+	again := ripgrep_extract_embedded() // second call reuses the extracted file
+	defer delete(again)
+	testing.expect_value(t, again, path)
+	state, out, _, err := os.process_exec({command = {path, "--version"}}, context.temp_allocator)
+	testing.expect(t, err == nil && state.exit_code == 0)
+	testing.expect(t, strings.has_prefix(string(out), "ripgrep "))
+}

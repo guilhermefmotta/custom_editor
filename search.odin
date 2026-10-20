@@ -72,7 +72,7 @@ Search_State :: struct {
 	// Workspace scope (search_fast.odin): which engine ran, and the running
 	// ripgrep process so search_stop can kill it instead of waiting.
 	engine:          Search_Engine,
-	rg_proc:         os.Process,
+	rg_proc:         Rg_Process,
 	rg_running:      bool,
 	include_ignored: bool, // [editor] search_ignored_files; main thread sets it
 }
@@ -106,7 +106,7 @@ _search_stop :: proc(s: ^Search_State) {
 		sync.mutex_lock(&s.mu)
 		s.cancel = true
 		if s.rg_running {
-			_ = os.process_kill(s.rg_proc) // the worker is blocked reading its output
+			rg_kill(&s.rg_proc) // the worker is blocked reading its output
 			s.rg_running = false
 		}
 		sync.mutex_unlock(&s.mu)
