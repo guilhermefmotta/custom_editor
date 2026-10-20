@@ -23,7 +23,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 curl -fsSL "$url" -o "$tmp/$name.$ext"
 curl -fsSL "$url.sha256" -o "$tmp/sum"
-expected=$(awk '{print $1}' "$tmp/sum")
+# "<hash>  <file>" — or CertUtil's multi-line output for the Windows asset
+expected=$(grep -oE '[0-9a-fA-F]{64}' "$tmp/sum" | head -1 | tr 'A-F' 'a-f')
 if command -v sha256sum >/dev/null; then
   actual=$(sha256sum "$tmp/$name.$ext" | awk '{print $1}')
 else
