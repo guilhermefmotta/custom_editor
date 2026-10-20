@@ -6,6 +6,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:slice"
 import "core:strings"
+import "core:time"
 import git "./git"
 import rl "vendor:raylib"
 
@@ -34,22 +35,23 @@ File_Tree :: struct {
 	filter_sel_all: bool,
 	results: [dynamic]File_Tree_Node, // flat recursive matches; populated when len(filter) > 0
 
-	search_walker:  os.Walker, // incremental recursive-filter scan, see _ft_search_step
 	search_active:  bool,
-	search_needle:  string,    // heap — lowercased, owned by the walker's lifetime
-	search_visited: int,
+	search_needle:  string,          // heap
+	search_snap:    ^Ws_Snapshot,    // workspace index being filtered (retained)
+	search_pos:     int,             // next file of search_snap to test
+	search_dirs:    map[string]bool, // folders already listed (keys slice search_snap)
+	search_ignored: bool,            // [editor] search_ignored_files, set by the input handler
 
 	// Git badges (#11). Index rebuilt from e.git_mgr.current by file_tree_git_sync.
 	git_idx:       Tree_Git_Index,
 	git_hash:      u64,  // content hash of the indexed status
 	git_has_index: bool, // false → rebuild on next sync (e.g. tree reopened)
 	git_stale:     bool, // status changed while rows could not be rebuilt
+	git_mgr:       ^git.Git_Manager, // manager/generation last indexed
+	git_gen:       int,
 	changed_only:  bool, // "only changed" filter: rows built from the status, all folders expanded
 	collapsed:     map[string]bool, // folders collapsed by hand in changed_only (keys heap)
 }
-
-FT_SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
-                      ".cache", "build", "dist", ".next", "vendor"}
 
 // ---- Icons ----
 // Small rounded glyphs instead of hard-edged rects — reads less like a
@@ -84,7 +86,8 @@ file_tree_destroy :: proc(ft: ^File_Tree) {
 	delete(ft.filter)
 	for r in ft.results { delete(r.name); delete(r.path) }
 	delete(ft.results)
-	if ft.search_active { _ft_search_walker_stop(ft) }
+	_ft_search_stop(ft)
+	delete(ft.search_dirs)
 	delete(ft.search_needle)
 	tree_git_index_destroy(&ft.git_idx)
 	_ft_clear_collapsed(ft)
@@ -103,7 +106,7 @@ file_tree_open :: proc(ft: ^File_Tree) {
 	clear(&ft.filter)
 	for r in ft.results { delete(r.name); delete(r.path) }
 	clear(&ft.results)
-	if ft.search_active { _ft_search_walker_stop(ft) }
+	_ft_search_stop(ft)
 	ft.search_active = false
 	delete(ft.search_needle)
 	ft.search_needle = ""
@@ -141,33 +144,24 @@ FT_MAX_CHILDREN :: 500  // max entries per directory expansion
 
 // True when `name` should be hidden from both the tree and the recursive search.
 _ft_is_skipped :: proc(name: string) -> bool {
-	if len(name) > 0 && name[0] == '.' { return true }
-	for s in FT_SKIP { if name == s { return true } }
-	return false
+	return ws_is_skipped_dir(name)
 }
 
 // If `path` contains exactly one visible entry and that entry is itself a
 // directory, return its name. Used to collapse single-child folder chains
 // into one display row (e.g. "src/main/java/com/example/demo").
 _ft_single_subdir :: proc(path: string) -> (child_name: string, ok: bool) {
-	f, ferr := os.open(path)
-	if ferr != nil { return "", false }
-	defer os.close(f)
-
-	it := os.read_directory_iterator_create(f)
-	defer os.read_directory_iterator_destroy(&it)
-
+	entries := make([dynamic]Dir_Entry, context.temp_allocator)
+	if !fast_list_dir(path, &entries, context.temp_allocator) { return "", false }
 	count: int
 	name: string
 	only_dir := true
-	for {
-		fi, _, more := os.read_directory_iterator(&it)
-		if !more { break }
-		if _ft_is_skipped(fi.name) { continue }
+	for en in entries {
+		if _ft_is_skipped(en.name) { continue }
 		count += 1
 		if count > 1 { return "", false }
-		if fi.type != .Directory { only_dir = false }
-		name = strings.clone(fi.name, context.temp_allocator)
+		if !en.is_dir { only_dir = false }
+		name = en.name
 	}
 	if count == 1 && only_dir { return name, true }
 	return "", false
@@ -177,24 +171,14 @@ _ft_load_children :: proc(ft: ^File_Tree, dir_path: string, depth: int, insert_i
 	dirs  := make([dynamic]File_Tree_Node, context.temp_allocator)
 	files := make([dynamic]File_Tree_Node, context.temp_allocator)
 
-	// A folder that only holds deleted files does not exist on disk any more.
-	f, ferr := os.open(dir_path)
-	on_disk := ferr == nil
-	defer if on_disk { os.close(f) }
+	// A folder that only holds deleted files does not exist on disk any more
+	// (the listing then fails and only the git ghosts below are shown).
+	listing := make([dynamic]Dir_Entry, context.temp_allocator)
+	_ = fast_list_dir(dir_path, &listing, context.temp_allocator)
 
-	it: os.Read_Directory_Iterator
-	if on_disk { it = os.read_directory_iterator_create(f) }
-	defer if on_disk { os.read_directory_iterator_destroy(&it) }
-
-	for on_disk {
-		fi, _, ok := os.read_directory_iterator(&it)
-		if !ok { break }
-		// NOTE: on Linux the iterator owns fi memory — it auto-frees prev fi on
-		// next call and on destroy. Do NOT call file_info_delete manually.
-		// Clone the data we need immediately before the next iteration.
-
-		name   := fi.name
-		is_dir := fi.type == .Directory
+	for en in listing {
+		name   := en.name
+		is_dir := en.is_dir
 		if _ft_is_skipped(name) { continue }
 
 		full, _ := filepath.join({dir_path, name}, context.temp_allocator)
@@ -274,72 +258,68 @@ _ft_toggle_dir :: proc(ft: ^File_Tree, idx: int) {
 
 // ---- Recursive fuzzy filter ----
 //
-// Walking a huge workspace synchronously on every keystroke used to freeze
-// the editor while typing in the filter box. The walker is now kept alive
-// across frames and stepped a bounded number of entries per frame from
-// _ft_search_step (called every frame the tree is open and searching), so
-// the cost is spread out instead of landing in one blocking call.
+// Matches file and folder names over the workspace index (ws_index.odin,
+// built on a worker thread). The UI thread only compares strings, under a
+// time budget per frame, so even a monorepo-sized list never blocks a frame.
 
 FT_SEARCH_MAX_RESULTS :: 300
-FT_SEARCH_MAX_VISITED :: 20000
-FT_SEARCH_BUDGET      :: 3000 // entries inspected per frame
+FT_SEARCH_BUDGET      :: 4 * time.Millisecond
 
 _ft_search_step :: proc(ft: ^File_Tree) {
 	if !ft.search_active { return }
-
-	for n := 0; n < FT_SEARCH_BUDGET; n += 1 {
-		if len(ft.results) >= FT_SEARCH_MAX_RESULTS || ft.search_visited >= FT_SEARCH_MAX_VISITED {
-			_ft_search_finish(ft)
-			return
-		}
-
-		info, ok := os.walker_walk(&ft.search_walker)
-		if !ok {
-			_ft_search_finish(ft)
-			return
-		}
-		ft.search_visited += 1
-
-		name   := info.name
-		is_dir := info.type == .Directory
-		if _ft_is_skipped(name) {
-			if is_dir { os.walker_skip_dir(&ft.search_walker) }
-			continue
-		}
-
-		name_low := strings.to_lower(name, context.temp_allocator)
-		if strings.contains(name_low, ft.search_needle) {
-			append(&ft.results, File_Tree_Node{
-				name   = strings.clone(name),
-				path   = strings.clone(info.fullpath),
-				is_dir = is_dir,
-			})
-		}
+	if ft.search_snap == nil {
+		ws_index_refresh(ft.search_ignored)
+		ft.search_snap, _ = ws_index_get()
+		if ft.search_snap == nil { return } // first index still building
 	}
+	files := ft.search_snap.files
+	t0 := time.tick_now()
+	for ft.search_pos < len(files) {
+		if len(ft.results) >= FT_SEARCH_MAX_RESULTS { break }
+		if ft.search_pos & 1023 == 0 && time.tick_since(t0) > FT_SEARCH_BUDGET { return }
+		f := files[ft.search_pos]
+		ft.search_pos += 1
+		_ft_match_index_path(ft, f)
+	}
+	_ft_search_finish(ft)
 }
 
-// Destroys the search walker and zeroes it: os.walker_destroy leaves the
-// iterator's closed DIR pointer set, so reusing the struct would closedir() it
-// again on the next search (same use-after-free as the file palette).
-_ft_search_walker_stop :: proc(ft: ^File_Tree) {
-	os.walker_destroy(&ft.search_walker)
-	ft.search_walker = {}
+// Adds `path` (a file of the index) and the folders on its way whose name
+// contains the needle. Each folder is listed once.
+@(private="file")
+_ft_match_index_path :: proc(ft: ^File_Tree, path: string) {
+	start := 0
+	for i in 0 ..< len(path) {
+		if path[i] != '/' { continue }
+		dir := path[:i]
+		if pal_match(path[start:i], ft.search_needle) && !(dir in ft.search_dirs) {
+			ft.search_dirs[dir] = true
+			append(&ft.results, File_Tree_Node{name = strings.clone(path[start:i]), path = strings.clone(dir), is_dir = true})
+		}
+		start = i + 1
+	}
+	name := path[start:]
+	if !pal_match(name, ft.search_needle) { return }
+	append(&ft.results, File_Tree_Node{name = strings.clone(name), path = strings.clone(path)})
+}
+
+// Ends the filter pass and lets go of the index snapshot.
+_ft_search_stop :: proc(ft: ^File_Tree) {
+	ws_snapshot_release(ft.search_snap)
+	ft.search_snap = nil
+	ft.search_pos  = 0
+	clear(&ft.search_dirs)
 }
 
 @(private="file")
 _ft_search_finish :: proc(ft: ^File_Tree) {
 	ft.search_active = false
-	_ft_search_walker_stop(ft)
+	_ft_search_stop(ft)
 	_ft_sort_results(ft)
 }
 
 _ft_sort_results :: proc(ft: ^File_Tree) {
-	arr := &ft.results
-	for i in 1..<len(arr) {
-		key := arr[i]; j := i - 1
-		for j >= 0 && arr[j].path > key.path { arr[j+1] = arr[j]; j -= 1 }
-		arr[j+1] = key
-	}
+	slice.sort_by(ft.results[:], proc(a, b: File_Tree_Node) -> bool { return a.path < b.path })
 }
 
 _ft_rebuild_search :: proc(ft: ^File_Tree) {
@@ -347,15 +327,13 @@ _ft_rebuild_search :: proc(ft: ^File_Tree) {
 	clear(&ft.results)
 	ft.selected = 0
 	ft.scroll   = 0
-	if ft.search_active { _ft_search_walker_stop(ft) }
+	_ft_search_stop(ft)
 	ft.search_active = false
 	delete(ft.search_needle)
 	ft.search_needle = ""
 	if len(ft.filter) == 0 { return }
 
-	ft.search_needle  = strings.clone(strings.to_lower(string(ft.filter[:]), context.temp_allocator))
-	ft.search_visited = 0
-	os.walker_init(&ft.search_walker, ".")
+	ft.search_needle = strings.clone(string(ft.filter[:]))
 	ft.search_active = true
 }
 
@@ -364,6 +342,7 @@ _ft_rebuild_search :: proc(ft: ^File_Tree) {
 FILE_TREE_MAX_VIS :: 24
 
 file_tree_handle_input :: proc(ft: ^File_Tree, e: ^Editor) {
+	ft.search_ignored = e.cfg.editor.search_ignored_files
 	switch ft.mode {
 	case .Browse:          file_tree_browse_input(ft, e)
 	case .Rename:          file_tree_text_input(ft, e, .Rename)
@@ -523,6 +502,7 @@ file_tree_text_input :: proc(ft: ^File_Tree, e: ^Editor, mode: File_Tree_Mode) {
 				dir   := filepath.dir(nd.path)
 				newp, _ := filepath.join({dir, name}, context.temp_allocator)
 				err   := os.rename(nd.path, newp)
+				ws_index_invalidate()
 				if err == nil {
 					delete(nd.name); nd.name = strings.clone(name)
 					delete(nd.path); nd.path = strings.clone(newp)
@@ -580,6 +560,7 @@ file_tree_delete_input :: proc(ft: ^File_Tree, e: ^Editor) {
 			nd  := &ft.nodes[ft.selected]
 			err : os.Error
 			if nd.is_dir { err = os.remove_all(nd.path) } else { err = os.remove(nd.path) }
+			ws_index_invalidate()
 			if err == nil {
 				delete(nd.name); delete(nd.path)
 				ordered_remove(&ft.nodes, ft.selected)
@@ -955,15 +936,20 @@ file_tree_git_sync :: proc(e: ^Editor) {
 		if len(ft.git_idx.files) > 0 { tree_git_index_clear(&ft.git_idx) }
 		return
 	}
-	entries := e.git_mgr.current.entries[:]
-	h := tree_git_status_hash(entries)
-	if !ft.git_has_index || h != ft.git_hash {
-		cwd, err := os.get_working_directory(context.temp_allocator)
-		if err != nil { cwd = "." }
-		tree_git_index_build(&ft.git_idx, entries, e.git_mgr.root, cwd)
-		ft.git_hash      = h
-		ft.git_has_index = true
-		ft.git_stale     = true
+	// The status only changes when the manager swaps in a new one: hash it
+	// then, not every frame (a monorepo can have thousands of entries)
+	if !ft.git_has_index || ft.git_mgr != e.git_mgr || ft.git_gen != e.git_mgr.status_gen {
+		ft.git_mgr, ft.git_gen = e.git_mgr, e.git_mgr.status_gen
+		entries := e.git_mgr.current.entries[:]
+		h := tree_git_status_hash(entries)
+		if !ft.git_has_index || h != ft.git_hash {
+			cwd, err := os.get_working_directory(context.temp_allocator)
+			if err != nil { cwd = "." }
+			tree_git_index_build(&ft.git_idx, entries, e.git_mgr.root, cwd)
+			ft.git_hash      = h
+			ft.git_has_index = true
+			ft.git_stale     = true
+		}
 	}
 	// Rebuild rows only while browsing (never under a rename/delete prompt
 	// or the recursive filter, whose rows come from the disk walker).

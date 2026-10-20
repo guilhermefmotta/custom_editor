@@ -24,6 +24,7 @@ new_path_is_dir :: proc(name: string) -> bool {
 // Creates `path` (a file, or a folder when it ends in a separator), with its
 // parent folders. An existing file is left untouched.
 create_new_path :: proc(path: string) -> New_Path_Result {
+	ws_index_invalidate() // searches pick the new entry up
 	name := strings.trim_space(path)
 	if name == "" { return .Invalid }
 	if new_path_is_dir(name) {

@@ -67,6 +67,7 @@ Editor_Config :: struct {
 	keymap_mode:       Keymap_Mode,
 	// Open .md files in the rendered preview (Ctrl/Cmd+Shift+V toggles).
 	markdown_preview:  bool,
+	search_ignored_files: bool, // searches also list git-ignored files
 }
 
 // Which keybinding scheme the main text-editing input pipeline uses.

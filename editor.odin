@@ -259,6 +259,7 @@ editor_save_pane :: proc(e: ^Editor, p: ^Pane) -> bool {
 	e.msg = msg
 	if ok {
 		git.git_blame_invalidate(e.git_mgr, p.filename)
+		git.git_manager_refresh_now(e.git_mgr) // gutter marks / badges follow the save
 		lsp_on_save(e, p)
 		lsp_format_on_save(e, p) // saves again when the reply arrives
 	}
@@ -349,6 +350,7 @@ save_dialog_close :: proc(e: ^Editor) {
 save_dialog_confirm :: proc(e: ^Editor) {
 	name := string(e.save_dlg.input[:])
 	if len(name) == 0 { save_dialog_close(e); return }
+	ws_index_invalidate() // new / renamed file
 	p := active_pane(e)
 	if e.save_dlg.new_file {
 		path := strings.trim_space(name)

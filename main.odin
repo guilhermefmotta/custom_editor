@@ -80,6 +80,7 @@ main :: proc() {
 	e := editor_init()
 	e.palette.marks = &e.marks  // fix up pointer: editor_init returns by value, so &e.marks inside it was dangling
 	defer editor_destroy(&e)
+	defer ws_index_shutdown() // runs first: stops a build still in flight
 
 	e.repos.live = true
 	recent_repos_load(&e.recent_repos, recent_repos_default_path())

@@ -135,6 +135,7 @@ _apply_editor :: proc(cfg: ^Config, t: ^TOML_Table) {
 	if b, ok := toml_bool(t, "word_wrap");        ok { e.word_wrap        = b }
 	if b, ok := toml_bool(t, "auto_save");        ok { e.auto_save        = b }
 	if b, ok := toml_bool(t, "markdown_preview"); ok { e.markdown_preview = b }
+	if b, ok := toml_bool(t, "search_ignored_files"); ok { e.search_ignored_files = b }
 	if f, ok := toml_float(t, "auto_save_delay"); ok { e.auto_save_delay  = f32(f) }
 	if b, ok := toml_bool(t, "format_on_save");   ok { e.format_on_save   = b }
 	if b, ok := toml_bool(t, "trim_trailing_ws"); ok { e.trim_trailing_ws = b }

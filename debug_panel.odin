@@ -188,19 +188,11 @@ _debug_resolve_frame_file :: proc(e: ^Editor, source: string) -> (string, bool) 
 		if path_basename(p.filename) == source { return p.filename, true }
 	}
 
-	w: os.Walker
-	os.walker_init(&w, ".")
-	defer os.walker_destroy(&w)
-	for {
-		info, ok := os.walker_walk(&w)
-		if !ok { break }
-		if info.type == .Directory {
-			skip := len(info.name) > 0 && info.name[0] == '.'
-			if !skip { for d in _DEF_SKIP { if info.name == d { skip = true; break } } }
-			if skip { os.walker_skip_dir(&w) }
-			continue
-		}
-		if info.name == source { return str.clone(info.fullpath), true }
+	snap := ws_index_files_now()
+	defer ws_snapshot_release(snap)
+	if snap == nil { return "", false }
+	for f in snap.files {
+		if ws_basename(f) == source { return str.clone(f), true }
 	}
 	return "", false
 }

@@ -67,7 +67,7 @@ Palette :: struct {
 	selected:     int,
 	scroll:       int,
 	cmds:         [dynamic]Command,
-	files:        [dynamic]string,
+	files:        Pal_Files, // .Files (palette_files.odin)
 	themes:       [dynamic]string, // theme names for .Themes mode
 	cwd:          string,
 	search:       Search_State,
@@ -75,9 +75,6 @@ Palette :: struct {
 	marks:        ^[dynamic]Mark, // pointer into Editor.marks
 	locations:    [dynamic]Location_Item, // .Locations and .Workspace_Symbols results
 	loc_title:    string,                 // heap — e.g. "12 references"
-
-	scan_walker: os.Walker, // incremental file-list scan, see palette_scan_step
-	scan_active: bool,
 
 	// .Search only — which files are expanded (Tab toggles), showing
 	// their full match lines inline accordion-style instead of collapsed
@@ -90,7 +87,7 @@ Palette :: struct {
 palette_init :: proc() -> Palette {
 	p: Palette
 	p.query  = make([dynamic]u8)
-	p.files  = make([dynamic]string)
+	p.files.gen = -1
 	p.themes = make([dynamic]string)
 	p.cmds      = make([dynamic]Command)
 	p.locations = make([dynamic]Location_Item)
@@ -149,11 +146,10 @@ palette_init :: proc() -> Palette {
 
 palette_destroy :: proc(p: ^Palette) {
 	search_state_destroy(&p.search)
-	if p.scan_active { _palette_scan_stop(p) }
 	delete(p.search_expanded)
 	delete(p.query)
 	delete(p.cmds)
-	for f in p.files  { delete(f) }; delete(p.files)
+	pal_files_destroy(&p.files)
 	for t in p.themes { delete(t) }; delete(p.themes)
 	for &li in p.locations { location_item_destroy(&li) }; delete(p.locations)
 	if p.loc_title != "" { delete(p.loc_title) }
@@ -406,15 +402,10 @@ palette_execute :: proc(p: ^Palette, e: ^Editor) {
 		}
 
 	case .Files:
-		vis := 0
-		for f in p.files {
-			if !pal_match(f, q) { continue }
-			if vis == p.selected {
-				editor_open(e, f)
-				palette_close(p)
-				return
-			}
-			vis += 1
+		if f := pal_files_at(&p.files, p.selected); f != "" {
+			editor_open(e, f)
+			palette_close(p)
+			return
 		}
 
 	case .Search:
@@ -528,75 +519,6 @@ search_jump :: proc(e: ^Editor, r: ^Search_Result) {
 	search_place_cursor(p, r.line, r.col, r.match_len)
 }
 
-// ---- File scanner ----
-//
-// Walking a huge workspace (tens of GB / hundreds of thousands of files) in
-// one shot blocks the main thread for as long as the walk takes — that was
-// the "Find File freezes the editor" bug. Instead the walker is kept alive
-// across frames and stepped a bounded number of entries per frame from
-// palette_scan_step (called every frame the palette is open), so the cost
-// is spread out and the UI stays responsive while results stream in.
-
-// Hard cap on total files collected — "Find File" isn't usable with more
-// than this many results anyway, and it bounds worst-case scan time.
-PALETTE_SCAN_MAX_FILES :: 50_000
-
-// Entries inspected per frame. Cheap (stat/readdir, no file content), so
-// this is comfortably under a millisecond even on a slow disk.
-PALETTE_SCAN_BUDGET :: 3000
-
-@(private="file")
-_palette_scan_skip := [?]string{".git", "node_modules", "target", "__pycache__",
-                                 ".cache", "build", "dist", ".next", "vendor"}
-
-// Destroys the scan walker and zeroes it. os.walker_destroy closes the
-// iterator's DIR but leaves the pointer set; reusing that struct makes the next
-// walker_init/walk closedir() it again (use-after-free -> segfault on macOS,
-// e.g. opening the file palette twice).
-_palette_scan_stop :: proc(p: ^Palette) {
-	os.walker_destroy(&p.scan_walker)
-	p.scan_walker = {}
-	p.scan_active = false
-}
-
-palette_scan_files :: proc(p: ^Palette) {
-	for f in p.files { delete(f) }
-	clear(&p.files)
-	if p.scan_active { _palette_scan_stop(p) }
-
-	os.walker_init(&p.scan_walker, ".")
-	p.scan_active = true
-}
-
-palette_scan_step :: proc(p: ^Palette) {
-	if !p.scan_active { return }
-
-	for n := 0; n < PALETTE_SCAN_BUDGET; n += 1 {
-		if len(p.files) >= PALETTE_SCAN_MAX_FILES {
-			p.scan_active = false
-			_palette_scan_stop(p)
-			return
-		}
-
-		info, ok := os.walker_walk(&p.scan_walker)
-		if !ok {
-			p.scan_active = false
-			_palette_scan_stop(p)
-			return
-		}
-
-		if info.type == .Directory {
-			skip := len(info.name) > 0 && info.name[0] == '.'
-			if !skip {
-				for s in _palette_scan_skip { if info.name == s { skip = true; break } }
-			}
-			if skip { os.walker_skip_dir(&p.scan_walker) }
-		} else {
-			append(&p.files, strings.clone(info.fullpath))
-		}
-	}
-}
-
 // ---- Count filtered items ----
 
 palette_count :: proc(p: ^Palette, e: ^Editor, q: string) -> int {
@@ -616,9 +538,7 @@ palette_count :: proc(p: ^Palette, e: ^Editor, q: string) -> int {
 	case .Workspace_Symbols:
 		return len(p.locations) // already server-filtered by query
 	case .Files:
-		n := 0
-		for f in p.files { if pal_match(f, q) { n += 1 } }
-		return n
+		return pal_files_count(&p.files)
 	case .Search:
 		if search_scope_picker_is_open() { return search_scope_picker_count() }
 		sync.mutex_lock(&p.search.mu)
@@ -746,7 +666,8 @@ _search_build_rows :: proc(p: ^Palette, allocator := context.temp_allocator) -> 
 palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	if !p.open { return }
 
-	if p.mode == .Files { palette_scan_step(p) }
+	if p.mode == .Files { pal_files_step(&p.files, string(p.query[:]), e.cfg.editor.search_ignored_files) }
+	p.search.include_ignored = e.cfg.editor.search_ignored_files
 
 	sw := f32(screen_w())
 	sh := f32(screen_h())
@@ -881,13 +802,12 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		}
 
 	case .Files:
-		for f in p.files {
-			if !pal_match(f, q) { continue }
-			if data_i < p.scroll { data_i += 1; continue }
+		for data_i = p.scroll; data_i < pal_files_count(&p.files); {
 			if draw_i >= max_vis { break }
+			f     := pal_files_at(&p.files, data_i)
 			iy    := item_y + f32(draw_i) * ITEM_H
-			bname := path_basename(f)
-			rel   := path_rel(f, p.cwd)
+			bname := ws_basename(f)
+			rel   := f
 			if data_i == p.selected {
 				rl.DrawRectangleV({panel_x, iy}, {PANEL_W, ITEM_H}, SEL_BG_P)
 				rl.DrawRectangleV({panel_x, iy}, {3, ITEM_H}, ACCENT)
@@ -1053,8 +973,12 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 	footer_text: string
 	switch p.mode {
 	case .Commands, .Files:
-		if p.mode == .Files && p.scan_active {
-			footer_text = fmt.tprintf("Scanning... %d files found so far", len(p.files))
+		if p.mode == .Files && p.files.snap == nil {
+			footer_text = "Indexing workspace files..."
+		} else if p.mode == .Files && !p.files.done {
+			footer_text = fmt.tprintf("Filtering %d files... %d matches so far", len(p.files.snap.files), pal_files_count(&p.files))
+		} else if p.mode == .Files {
+			footer_text = fmt.tprintf("%d of %d files    up/down navigate    enter open    Esc close", pal_files_count(&p.files), len(p.files.snap.files))
 		} else {
 			footer_text = "up/down navigate    enter select    Esc close"
 		}
@@ -1064,6 +988,9 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		n_res   := len(p.search.results)
 		n_files := p.search.n_files
 		ms      := p.search.elapsed_ms
+		engine  := p.search.engine
+		n_hit_files := 0
+		for r, i in p.search.results { if i == 0 || r.file != p.search.results[i - 1].file { n_hit_files += 1 } }
 		serr    := strings.clone(p.search.err, context.temp_allocator)
 		sync.mutex_unlock(&p.search.mu)
 		scope_lbl := search_scope_label(p.search.scope)
@@ -1074,8 +1001,13 @@ palette_render :: proc(p: ^Palette, e: ^Editor, font: rl.Font) {
 		case serr != "":
 			footer_text = fmt.tprintf("[%s] %s", scope_lbl, serr)
 		case phase == .Idle:    footer_text = "Type query and press Enter to search  |  Ctrl+B scope"
-		case phase == .Running: footer_text = fmt.tprintf("[%s] Searching... %d files  |  %d results so far", scope_lbl, n_files, n_res)
-		case phase == .Done:    footer_text = fmt.tprintf("[%s] %d results in %d files (%.0f ms)  |  Enter open  |  Tab expand  |  Ctrl+B scope", scope_lbl, n_res, n_files, ms)
+		case phase == .Running && engine == .Builtin:
+			footer_text = fmt.tprintf("[%s] Searching... %d files read  |  %d results so far", scope_lbl, n_files, n_res)
+		case phase == .Running: footer_text = fmt.tprintf("[%s] Searching...  |  %d results so far", scope_lbl, n_res)
+		case phase == .Done:
+			cap_note := " (limit reached)" if n_res >= MAX_SEARCH_RESULTS else ""
+			eng := "  ·  ripgrep" if engine == .Ripgrep else ""
+			footer_text = fmt.tprintf("[%s] %d results%s in %d files (%.0f ms%s)  |  Enter open  |  Tab expand  |  Ctrl+B scope", scope_lbl, n_res, cap_note, n_hit_files, ms, eng)
 		}
 	case .Marks:
 		n_m := 0
@@ -1122,7 +1054,7 @@ cmd_find_file :: proc(e: ^Editor, p: ^Palette) {
 	p.sel_all  = false
 	clear(&p.query)
 	_prefill_from_selection(p, e)
-	palette_scan_files(p)
+	ws_index_invalidate() // fresh list each time Find File opens (built in the background)
 }
 
 cmd_search_workspace :: proc(e: ^Editor, p: ^Palette) {

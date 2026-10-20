@@ -3,6 +3,7 @@ package editor
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:time"
 import rl "vendor:raylib"
 
 // ---- Navigation History --------------------------------------------------
@@ -289,9 +290,6 @@ _def_scan_pane :: proc(p: ^Pane, target: string, results: ^[dynamic]Goto_Def_Res
 	}
 }
 
-_DEF_SKIP :: [?]string{".git", "node_modules", "target", "__pycache__",
-                        ".cache", "build", "dist", ".next", "vendor"}
-
 // Scan raw bytes (file contents) for definitions matching target.
 _def_scan_bytes :: proc(data: []u8, lang: Lang, target, file: string, results: ^[dynamic]Goto_Def_Result) {
 	i, lnum, n := 0, 0, len(data)
@@ -314,32 +312,45 @@ _def_scan_bytes :: proc(data: []u8, lang: Lang, target, file: string, results: ^
 	}
 }
 
-// Walk workspace looking for definitions; skip current_file (already scanned).
-_def_scan_workspace :: proc(target, current_file: string, results: ^[dynamic]Goto_Def_Result) {
-	w: os.Walker
-	os.walker_init(&w, ".")
-	defer os.walker_destroy(&w)
+// Fallback scans (no language server) read files on the UI thread: they
+// go through the workspace index and stop after DEF_SCAN_DEADLINE, so a
+// monorepo gives partial results instead of a frozen editor.
+DEF_SCAN_DEADLINE :: 1500 * time.Millisecond
+DEF_SCAN_MAX_SIZE :: 2 << 20
 
-	for {
-		info, ok := os.walker_walk(&w)
-		if !ok || len(results^) >= 50 { break }
-
-		if info.type == .Directory {
-			skip := len(info.name) > 0 && info.name[0] == '.'
-			if !skip { for d in _DEF_SKIP { if info.name == d { skip = true; break } } }
-			if skip { os.walker_skip_dir(&w) }
-			continue
-		}
-
-		lang := detect_lang(info.name)
-		if lang == .None { continue }
-		if info.fullpath == current_file { continue }
-
-		data, err := os.read_entire_file_from_path(info.fullpath, context.allocator)
+// Calls `scan` with the contents of each workspace file (but `current_file`)
+// until it returns false or the deadline passes. true = stopped by the deadline.
+_def_for_each_file :: proc(current_file: string, scan: proc(path: string, data: []u8, user: rawptr) -> bool, user: rawptr) -> (timed_out: bool) {
+	snap := ws_index_files_now()
+	defer ws_snapshot_release(snap)
+	if snap == nil { return false }
+	t0 := time.tick_now()
+	for f in snap.files {
+		if time.tick_since(t0) > DEF_SCAN_DEADLINE { return true }
+		if ws_same_file(f, current_file) { continue }
+		if fi, err := os.stat(f, context.temp_allocator); err != nil || fi.size > DEF_SCAN_MAX_SIZE { continue }
+		data, err := os.read_entire_file_from_path(f, context.allocator)
 		if err != nil { continue }
-		_def_scan_bytes(data, lang, target, info.fullpath, results)
+		more := scan(f, data, user)
 		delete(data)
+		if !more { break }
 	}
+	return false
+}
+
+@(private="file")
+_Def_Scan :: struct { target: string, results: ^[dynamic]Goto_Def_Result }
+
+// Walk workspace looking for definitions; skip current_file (already scanned).
+_def_scan_workspace :: proc(target, current_file: string, results: ^[dynamic]Goto_Def_Result) -> (timed_out: bool) {
+	ds := _Def_Scan{target, results}
+	return _def_for_each_file(current_file, proc(path: string, data: []u8, user: rawptr) -> bool {
+		ds := cast(^_Def_Scan)user
+		lang := detect_lang(path)
+		if lang == .None { return true }
+		_def_scan_bytes(data, lang, ds.target, path, ds.results)
+		return len(ds.results^) < 50
+	}, &ds)
 }
 
 // ---- Reference Scanning (all occurrences, whole-word) --------------------
@@ -411,29 +422,13 @@ _refs_scan_bytes :: proc(data: []u8, target, file: string, results: ^[dynamic]Go
 	}
 }
 
-_refs_scan_workspace :: proc(target, current_file: string, results: ^[dynamic]Goto_Def_Result) {
-	w: os.Walker
-	os.walker_init(&w, ".")
-	defer os.walker_destroy(&w)
-
-	for {
-		info, ok := os.walker_walk(&w)
-		if !ok || len(results^) >= 300 { break }
-
-		if info.type == .Directory {
-			skip := len(info.name) > 0 && info.name[0] == '.'
-			if !skip { for d in _DEF_SKIP { if info.name == d { skip = true; break } } }
-			if skip { os.walker_skip_dir(&w) }
-			continue
-		}
-
-		if info.fullpath == current_file { continue }
-
-		data, err := os.read_entire_file_from_path(info.fullpath, context.allocator)
-		if err != nil { continue }
-		_refs_scan_bytes(data, target, info.fullpath, results)
-		delete(data)
-	}
+_refs_scan_workspace :: proc(target, current_file: string, results: ^[dynamic]Goto_Def_Result) -> (timed_out: bool) {
+	ds := _Def_Scan{target, results}
+	return _def_for_each_file(current_file, proc(path: string, data: []u8, user: rawptr) -> bool {
+		ds := cast(^_Def_Scan)user
+		_refs_scan_bytes(data, ds.target, path, ds.results)
+		return len(ds.results^) < 300
+	}, &ds)
 }
 
 goto_refs_do :: proc(e: ^Editor) {
@@ -449,13 +444,14 @@ goto_refs_do :: proc(e: ^Editor) {
 	// Current file first (preserves order: current file refs appear at top)
 	_refs_scan_pane(p, word, &dp.results)
 	// Then workspace
-	_refs_scan_workspace(word, p.filename, &dp.results)
+	partial := _refs_scan_workspace(word, p.filename, &dp.results)
 
 	n := len(dp.results)
 	if n == 0 {
-		e.msg = fmt.tprintf("No references to '%s' found", word)
+		e.msg = fmt.tprintf("No references to '%s' found%s", word, " (workspace too big: search stopped after 1.5 s)" if partial else "")
 		return
 	}
+	if partial { e.msg = "Workspace too big: references search stopped after 1.5 s (partial list)" }
 
 	nav_push(&e.nav_hist, e)
 
@@ -504,14 +500,15 @@ goto_def_do :: proc(e: ^Editor) {
 	// 1. Current file
 	_def_scan_pane(p, word, &dp.results)
 
-	// 2. Workspace (synchronous; fine for typical project sizes)
+	// 2. Workspace (bounded: see DEF_SCAN_DEADLINE)
+	partial := false
 	if len(dp.results) == 0 {
-		_def_scan_workspace(word, p.filename, &dp.results)
+		partial = _def_scan_workspace(word, p.filename, &dp.results)
 	}
 
 	n := len(dp.results)
 	if n == 0 {
-		e.msg = fmt.tprintf("Definition of '%s' not found", word)
+		e.msg = fmt.tprintf("Definition of '%s' not found%s", word, " (workspace too big: search stopped after 1.5 s)" if partial else "")
 		return
 	}
 

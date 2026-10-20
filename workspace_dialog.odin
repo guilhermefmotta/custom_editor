@@ -369,16 +369,12 @@ _ws_refresh :: proc(d: ^Workspace_Dialog) {
 	// Free old entries
 	_ws_free_entries(d)
 
-	// Try to open the directory
-	f, ferr := os.open(dir)
-	if ferr != nil {
+	// List the directory (names and types only: no per-entry stat/open)
+	listing := make([dynamic]Dir_Entry, context.temp_allocator)
+	if !fast_list_dir(dir, &listing, context.temp_allocator) {
 		d.error_msg = "Cannot open directory"
 		return
 	}
-	defer os.close(f)
-
-	it := os.read_directory_iterator_create(f)
-	defer os.read_directory_iterator_destroy(&it)
 
 	// Update tracked current_dir
 	if d.current_dir != "" { delete(d.current_dir) }
@@ -390,15 +386,11 @@ _ws_refresh :: proc(d: ^Workspace_Dialog) {
 	files := make([dynamic]WS_Entry, context.temp_allocator)
 
 	capped := false
-	for {
-		fi, _, ok := os.read_directory_iterator(&it)
-		if !ok { break }
+	for en in listing {
 		if len(dirs) + len(files) >= WS_MAX_ENTRIES { capped = true; break }
 
-		name   := fi.name
-		is_dir := fi.type == .Directory
-		// A link to a folder is navigable like a folder
-		if fi.type == .Symlink && os.is_dir(fi.fullpath) { is_dir = true }
+		name   := en.name
+		is_dir := en.is_dir // a link to a folder is navigable like a folder
 
 		// Filter by prefix (case-sensitive, matches shell autocomplete behaviour)
 		if len(prefix) > 0 && !strings.has_prefix(name, prefix) { continue }

@@ -192,6 +192,9 @@ frame_collect :: proc(e: ^Editor) -> Frame_Wait_Inputs {
 		busy = git.git_queue_busy(&e.git_mgr.queue) > 0
 	}
 	if !busy { busy = git.git_queue_busy(&e.repos.ops) > 0 || remote_ops_busy() || e.repos.pending }
+	// Find File and the tree filter work through the index a slice per frame
+	if !busy && e.palette.open && e.palette.mode == .Files && !e.palette.files.done { busy = true }
+	if !busy && e.file_tree.open && e.file_tree.search_active { busy = true }
 	if !busy {
 		s := &e.palette.search
 		sync.mutex_lock(&s.mu)

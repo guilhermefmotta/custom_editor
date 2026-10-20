@@ -58,9 +58,28 @@ _git_find_root :: proc(e: ^Editor) -> string {
 // Active repo: full update (status + queue callbacks). Background repos:
 // status only (repos_git_update). Also drives a pending repo switch.
 git_update :: proc(e: ^Editor, dt: f32) {
+	if e.git_mgr.root != "" {
+		// Gutter marks are only computed for the files shown in the panes
+		paths: [MAX_PANES]string
+		n := 0
+		for &p in e.panes {
+			if n < len(paths) && p.filename != "" && !p.image.active { paths[n] = p.filename; n += 1 }
+		}
+		git.git_manager_set_diff_paths(e.git_mgr, paths[:n])
+		// Coming back to the window: files may have changed outside
+		focused := rl.IsWindowFocused()
+		if focused && !_git_was_focused { git.git_manager_refresh_now(e.git_mgr) }
+		_git_was_focused = focused
+		if hint := git.git_manager_take_hint(e.git_mgr); hint != "" {
+			e.msg = fmt.tprintf("%s", hint)
+			delete(hint)
+		}
+	}
 	git.git_manager_update(e.git_mgr, dt) // no-op without a repository
 	repos_git_update(e, dt)
 }
+
+@(private="file") _git_was_focused := true
 
 // ---------------------------------------------------------------------------
 // Draw gutter mark for one line (called from renderer)

@@ -409,9 +409,7 @@ _repos_leave :: proc(e: ^Editor) {
 	if pal.open { palette_close(pal) }
 	search_start(&pal.search, "") // cancels + joins a running search
 	search_set_scope(&pal.search, {}, "")
-	if pal.scan_active { _palette_scan_stop(pal) }
-	for f in pal.files { delete(f) }
-	clear(&pal.files)
+	pal_files_reset(&pal.files)
 }
 
 // Panels that are not about one repository stay open across switches.

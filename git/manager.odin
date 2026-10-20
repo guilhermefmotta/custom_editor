@@ -56,6 +56,21 @@ Git_Manager :: struct {
 
 	refresh_thread: ^thread.Thread,
 	timer:          f32,
+	status_gen:     int, // bumps every time `current` is swapped (main thread)
+
+	// Large repositories (ADR 0017). The refresh measures itself and the next
+	// one waits at least REFRESH_SLOW_FACTOR times as long; hunks (gutter
+	// marks) are only diffed for the files open in the editor; a slow status
+	// reports once whether core.fsmonitor could help.
+	last_refresh_ms: f64,      // guarded by mu
+	diff_paths:      [dynamic]string, // guarded by mu (heap, absolute)
+	slow_hint:       string,   // guarded by mu; heap, taken by git_manager_take_hint
+	hint_checked:    bool,     // refresh thread only
+
+	// Blame runs on its own thread; finished results wait here (guarded by mu).
+	blame_pending: map[string]bool,  // main thread; keys heap
+	blame_done:    [dynamic]Blame_Result,
+	blame_running: int, // atomic: blame threads still running
 
 	blame_cache: map[string][dynamic]Blame_Line, // abs path → per-line blame (main thread, lazy)
 
@@ -67,6 +82,15 @@ Git_Manager :: struct {
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
+
+REFRESH_SLOW_FACTOR :: 5
+REFRESH_MAX_INTERVAL :: f32(60)
+SLOW_STATUS_MS      :: 1500
+
+Blame_Result :: struct {
+	path:  string, // heap
+	lines: [dynamic]Blame_Line,
+}
 
 git_manager_init :: proc(m: ^Git_Manager, root: string) {
 	m.root            = strings.clone(root)
@@ -84,11 +108,21 @@ git_manager_destroy :: proc(m: ^Git_Manager) {
 		m.refresh_thread = nil
 	}
 	git_queue_destroy(&m.queue)
+	for sync.atomic_load(&m.blame_running) > 0 { time.sleep(time.Millisecond) }
 	delete(m.root)
 	_free_state(&m.current)
 	_free_state(&m.pending)
 	for k, &v in m.blame_cache { delete(k); _free_blame_lines(&v) }
 	delete(m.blame_cache)
+	sync.mutex_lock(&m.mu) // blame threads may still deliver (they are detached)
+	for &r in m.blame_done { delete(r.path); _free_blame_lines(&r.lines); delete(r.lines) }
+	delete(m.blame_done)
+	for p in m.diff_paths { delete(p) }
+	delete(m.diff_paths)
+	delete(m.slow_hint)
+	sync.mutex_unlock(&m.mu)
+	for k in m.blame_pending { delete(k) }
+	delete(m.blame_pending)
 }
 
 // git_manager_update: call once per frame from main thread.
@@ -125,14 +159,22 @@ git_manager_update_status :: proc(m: ^Git_Manager, dt: f32, interval: f32 = 4.0)
 		m.pending       = {}
 		m.pending_ready = false
 		m.refreshing    = false
+		last := m.last_refresh_ms
 		sync.mutex_unlock(&m.mu)
+		m.status_gen += 1
+		// A slow repository is not refreshed again right away
+		if m.timer > 0 { m.timer = max(m.timer, min(REFRESH_MAX_INTERVAL, f32(last / 1000) * REFRESH_SLOW_FACTOR)) }
 	}
+	_blame_collect(m)
 
 	// Timer-based refresh kick
 	if m.refresh_thread == nil {
 		m.timer -= dt
 		if m.timer <= 0 {
-			m.timer = interval
+			sync.mutex_lock(&m.mu)
+			last := m.last_refresh_ms
+			sync.mutex_unlock(&m.mu)
+			m.timer = max(interval, min(REFRESH_MAX_INTERVAL, f32(last / 1000) * REFRESH_SLOW_FACTOR))
 			_start_refresh(m)
 		}
 	}
@@ -140,7 +182,33 @@ git_manager_update_status :: proc(m: ^Git_Manager, dt: f32, interval: f32 = 4.0)
 
 // Force an immediate refresh (e.g. after stage/unstage/commit).
 git_manager_refresh_now :: proc(m: ^Git_Manager) {
+	if m == nil { return }
 	m.timer = 0
+}
+
+// Files whose hunks (gutter marks) the refresh diffs — the ones open in the
+// editor. Absolute paths. A changed set triggers a refresh. Main thread.
+git_manager_set_diff_paths :: proc(m: ^Git_Manager, paths: []string) {
+	if m.root == "" { return }
+	sync.mutex_lock(&m.mu)
+	same := len(paths) == len(m.diff_paths)
+	if same { for p, i in paths { if p != m.diff_paths[i] { same = false; break } } }
+	if !same {
+		for p in m.diff_paths { delete(p) }
+		clear(&m.diff_paths)
+		for p in paths { append(&m.diff_paths, strings.clone(p)) }
+	}
+	sync.mutex_unlock(&m.mu)
+	if !same { m.timer = 0 }
+}
+
+// One-time advice when `git status` is slow (heap string, "" if none). Main thread.
+git_manager_take_hint :: proc(m: ^Git_Manager) -> string {
+	sync.mutex_lock(&m.mu)
+	defer sync.mutex_unlock(&m.mu)
+	h := m.slow_hint
+	m.slow_hint = ""
+	return h
 }
 
 // ---------------------------------------------------------------------------
@@ -223,33 +291,65 @@ git_list_branches :: proc(m: ^Git_Manager, allocator := context.allocator) -> [d
 
 // git_blame_get returns per-line blame for abs_path, computing and caching it
 // on first request. Cache is invalidated by git_blame_invalidate (call after
-// save) or git_blame_refresh (force recompute regardless of cache).
+// save).
+//
+// Never blocks: a missing entry starts `git blame` on its own thread and
+// returns nothing until the result is collected by git_manager_update.
 git_blame_get :: proc(m: ^Git_Manager, abs_path: string) -> [dynamic]Blame_Line {
 	if cached, ok := m.blame_cache[abs_path]; ok { return cached }
-	return git_blame_refresh(m, abs_path)
+	if m.root == "" || abs_path in m.blame_pending { return nil }
+	m.blame_pending[strings.clone(abs_path)] = true
+	Job :: struct { m: ^Git_Manager, path: string }
+	job := new(Job)
+	job^ = {m, strings.clone(abs_path)}
+	sync.atomic_add(&m.blame_running, 1)
+	t := thread.create_and_start_with_poly_data(job, proc(job: ^Job) {
+		lines := git_blame_compute(job.m.root, job.path)
+		sync.mutex_lock(&job.m.mu)
+		append(&job.m.blame_done, Blame_Result{path = job.path, lines = lines})
+		sync.mutex_unlock(&job.m.mu)
+		sync.atomic_sub(&job.m.blame_running, 1)
+		free(job)
+		wake.request()
+	}, context, self_cleanup = true)
+	_ = t
+	return nil
 }
 
-// git_blame_refresh recomputes blame for abs_path and replaces the cache entry.
-git_blame_refresh :: proc(m: ^Git_Manager, abs_path: string) -> [dynamic]Blame_Line {
+// Moves finished blames into the cache. Main thread.
+@(private="file")
+_blame_collect :: proc(m: ^Git_Manager) {
+	sync.mutex_lock(&m.mu)
+	done := m.blame_done[:]
+	defer { clear(&m.blame_done); sync.mutex_unlock(&m.mu) }
+	for r in done {
+		if r.path in m.blame_pending { k, _ := delete_key(&m.blame_pending, r.path); delete(k) }
+		if old, has := m.blame_cache[r.path]; has {
+			o := old
+			_free_blame_lines(&o)
+			delete(o)
+			m.blame_cache[r.path] = r.lines
+			delete(r.path)
+		} else {
+			m.blame_cache[r.path] = r.lines
+		}
+	}
+}
+
+// `git blame` of one file (any thread).
+git_blame_compute :: proc(root, abs_path: string) -> [dynamic]Blame_Line {
 	rel := abs_path
-	if strings.has_prefix(abs_path, m.root) {
-		rel = strings.trim_prefix(abs_path[len(m.root):], "/")
+	if strings.has_prefix(abs_path, root) {
+		rel = strings.trim_prefix(abs_path[len(root):], "/")
 	}
 	lines := make([dynamic]Blame_Line)
-	out, ok := git_run(m.root, {"blame", "--porcelain", "--", rel})
-	if ok {
+	if out, ok := git_run(root, {"blame", "--porcelain", "--", rel}); ok {
 		_parse_blame(out, &lines)
 		delete(out)
 	}
-	if old, has := m.blame_cache[abs_path]; has {
-		_free_blame_lines(&old)
-		delete(old)
-		m.blame_cache[abs_path] = lines
-	} else {
-		m.blame_cache[strings.clone(abs_path)] = lines
-	}
 	return lines
 }
+
 
 git_blame_invalidate :: proc(m: ^Git_Manager, abs_path: string) {
 	if m == nil { return }
@@ -288,6 +388,7 @@ _start_refresh :: proc(m: ^Git_Manager) {
 _refresh_proc :: proc(t: ^thread.Thread) {
 	m := cast(^Git_Manager)t.data
 	root := m.root // immutable — safe without lock
+	t0 := time.tick_now()
 
 	// 1. Branch
 	branch_out, branch_ok := git_run(root, {"rev-parse", "--abbrev-ref", "HEAD"})
@@ -305,16 +406,40 @@ _refresh_proc :: proc(t: ^thread.Thread) {
 		delete(status_out)
 	}
 
-	// 3. Hunks (working tree + staged vs HEAD)
+	// 3. Hunks (working tree + staged vs HEAD) — only for the open files:
+	// diffing a whole monorepo every refresh was the expensive part
 	hunks := make(map[string][dynamic]Hunk)
-	diff_out, diff_ok := git_run(root, {"diff", "HEAD", "--unified=0", "--no-color"})
-	if diff_ok { _parse_hunks(diff_out, root, &hunks); delete(diff_out) }
+	diff_args := make([dynamic]string, context.temp_allocator)
+	append(&diff_args, "diff", "HEAD", "--unified=0", "--no-color", "--")
+	sync.mutex_lock(&m.mu)
+	for p in m.diff_paths {
+		if strings.has_prefix(p, root) { append(&diff_args, strings.clone(p, context.temp_allocator)) }
+	}
+	sync.mutex_unlock(&m.mu)
+	if len(diff_args) > 5 {
+		diff_out, diff_ok := git_run(root, diff_args[:])
+		if diff_ok { _parse_hunks(diff_out, root, &hunks); delete(diff_out) }
+	}
+
+	took := time.duration_milliseconds(time.tick_since(t0))
+	hint := ""
+	if took > SLOW_STATUS_MS && !m.hint_checked {
+		m.hint_checked = true
+		if out, ok := git_run(root, {"config", "--get", "core.fsmonitor"}); !ok || strings.trim_space(out) != "true" {
+			hint = fmt.aprintf("git status took %.1fs here. For big repositories run: git config core.fsmonitor true && git config core.untrackedCache true", took / 1000)
+			if ok { delete(out) }
+		} else {
+			delete(out)
+		}
+	}
 
 	// Store under lock
 	sync.mutex_lock(&m.mu)
 	_free_state(&m.pending)
 	m.pending = Git_State{branch = branch, entries = entries, hunks = hunks}
 	m.pending_ready = true
+	m.last_refresh_ms = took
+	if hint != "" { delete(m.slow_hint); m.slow_hint = hint }
 	sync.mutex_unlock(&m.mu)
 	wake.request() // ADR 0016: new status → wake the UI loop
 }
